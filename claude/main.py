@@ -5,7 +5,7 @@ import os
 import matplotlib.pyplot as plt
 
 from config import Config
-from model import FNO_EBM
+from model import FNO2d, EBMPotential, FNO_EBM
 from trainer import Trainer
 from customs import compute_pde_residual
 from inference import inference_deterministic, inference_probabilistic
@@ -26,11 +26,24 @@ def main():
 
     # 2. Instantiate Model
     print("--- Initializing Model ---")
-    model = FNO_EBM(
-        modes=config.fno_modes,
+
+    # Create FNO model
+    fno_model = FNO2d(
+        modes1=config.fno_modes,
+        modes2=config.fno_modes,
         width=config.fno_width,
-        hidden_dim=config.ebm_hidden_dim
-    ).to(config.device)
+        num_layers=4
+    )
+
+    # Create EBM model (input_dim=4 because we concatenate u(1) + x(3))
+    ebm_model = EBMPotential(
+        input_dim=4,
+        hidden_dims=[config.ebm_hidden_dim, config.ebm_hidden_dim * 2,
+                     config.ebm_hidden_dim * 2, config.ebm_hidden_dim]
+    )
+
+    # Combine into FNO_EBM
+    model = FNO_EBM(fno_model, ebm_model).to(config.device)
 
     # 3. Create DataLoaders
     train_loader, val_loader = dummy_dataloaders(config)

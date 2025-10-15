@@ -110,7 +110,7 @@ class EBMPotential(nn.Module):
     """
     Energy-Based Model potential V(u, X) for uncertainty modeling
     """
-    def __init__(self, input_dim=3, hidden_dims=[128, 256, 256, 128]):
+    def __init__(self, input_dim=4, hidden_dims=[128, 256, 256, 128]):
         super().__init__()
         
         layers = []

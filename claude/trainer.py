@@ -4,7 +4,7 @@ import torch.optim as optim
 import os
 from tqdm import tqdm
 import logging
-from config import Config
+from config import Config, Factory
 from model import FNO_EBM
 from customs import EarlyStopping, PhysicsLossFn, CosineAnnealingWarmRestartsWithDecay
 import numpy as np
@@ -22,30 +22,46 @@ class Trainer:
         self.val_loader = val_loader
         self.config = config
         self.accumulation_steps = getattr(config, 'accumulation_steps', 1)
-        
-        # Setup optimizers, change assigning mechanism to factory based
-        self.fno_optimizer = optim.Adam(
-            self.fno_model.parameters(), 
-            lr=config.fno_learning_rate
-        )
-        self.ebm_optimizer = optim.Adam(
-            self.ebm_model.parameters(),
-            lr=config.ebm_learning_rate
-        )
 
-        # setup schedulers, change assigning mechanisme to factory based
+        # Setup optimizers using Factory pattern
+        # Check if optimizer configs exist, otherwise fall back to legacy learning rate configs
+        if hasattr(config, 'fno_optimizer_config') and config.fno_optimizer_config:
+            self.fno_optimizer = Factory.create_optimizer(
+                config.fno_optimizer_config,
+                self.fno_model.parameters()
+            )
+        else:
+            # Backward compatibility: use legacy fno_learning_rate
+            self.fno_optimizer = optim.Adam(
+                self.fno_model.parameters(),
+                lr=config.fno_learning_rate
+            )
+
+        if hasattr(config, 'ebm_optimizer_config') and config.ebm_optimizer_config:
+            self.ebm_optimizer = Factory.create_optimizer(
+                config.ebm_optimizer_config,
+                self.ebm_model.parameters()
+            )
+        else:
+            # Backward compatibility: use legacy ebm_learning_rate
+            self.ebm_optimizer = optim.Adam(
+                self.ebm_model.parameters(),
+                lr=config.ebm_learning_rate
+            )
+
+        # Setup schedulers using Factory pattern
         self.fno_scheduler = None
         if hasattr(config, 'fno_scheduler_config') and config.fno_scheduler_config:
-            self.fno_scheduler = CosineAnnealingWarmRestartsWithDecay(
-                self.fno_optimizer,
-                **config.fno_scheduler_config
+            self.fno_scheduler = Factory.create_scheduler(
+                config.fno_scheduler_config,
+                self.fno_optimizer
             )
 
         self.ebm_scheduler = None
         if hasattr(config, 'ebm_scheduler_config') and config.ebm_scheduler_config:
-            self.ebm_scheduler = CosineAnnealingWarmRestartsWithDecay(
-                self.ebm_optimizer,
-                **config.ebm_scheduler_config
+            self.ebm_scheduler = Factory.create_scheduler(
+                config.ebm_scheduler_config,
+                self.ebm_optimizer
             )
         
         # Setup loss functions
@@ -55,7 +71,7 @@ class Trainer:
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
-        self.lambda_phys = 1.0 #config.lambda_phys  # Weight for physics loss
+        self.lambda_phys = config.lambda_phys  # Weight for physics loss
         
         self.early_stopper = EarlyStopping(
             patience=config.patience, 
@@ -128,7 +144,7 @@ class Trainer:
         #residual = compute_pde_residual(fno_output, x_coords, y_coords)
         physics_loss = torch.mean(residual**2)
 
-        total_loss = data_loss + self.config.lambda_phys * physics_loss
+        total_loss = data_loss + self.lambda_phys * physics_loss
         total_loss.backward()
         self.fno_optimizer.step()
         
@@ -354,11 +370,10 @@ class Trainer:
         
         neg_energy = self.ebm_model(x, y_neg)
         ebm_loss = pos_energy.mean() - neg_energy.mean()
-        ebm_loss.backward()
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
         #self.ebm_optimizer.step()
-        
+
         return ebm_loss.item()
 
     def train_fno(self, num_epochs):

@@ -8,42 +8,60 @@ from traitlets import Callable
 PhysicsLossFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 
 
-def compute_pde_residual(u, x_coords, y_coords, pde_type='poisson'): #Ini masuk customs.py
+def compute_pde_residual(u, x_coords, y_coords, pde_type='poisson'):
     """
-    Compute PDE residual for physics loss
-    
+    Compute PDE residual for physics loss using finite differences.
+
+    This implementation uses finite difference approximations instead of autograd
+    because the coordinates are input features, not differentiable variables.
+
     Args:
         u: solution field (batch, n_x, n_y, 1)
-        x_coords: x coordinates (batch, n_x, n_y)
-        y_coords: y coordinates (batch, n_x, n_y)
+        x_coords: x coordinates (batch, n_x, n_y) - not used, assumes uniform grid
+        y_coords: y coordinates (batch, n_x, n_y) - not used, assumes uniform grid
         pde_type: type of PDE to enforce
-    
+
     Returns:
-        residual: PDE residual (batch, n_x, n_y)
+        residual: PDE residual (batch, n_x-2, n_y-2) - smaller due to boundary removal
     """
     u = u.squeeze(-1)  # (batch, n_x, n_y)
-    u.requires_grad_(True)
-    
-    # Compute gradients
-    u_x = torch.autograd.grad(u.sum(), x_coords, create_graph=True)[0]
-    u_y = torch.autograd.grad(u.sum(), y_coords, create_graph=True)[0]
-    
-    # Second derivatives
-    u_xx = torch.autograd.grad(u_x.sum(), x_coords, create_graph=True)[0]
-    u_yy = torch.autograd.grad(u_y.sum(), y_coords, create_graph=True)[0]
-    
+
+    # Compute grid spacing (assumes uniform grid from 0 to 1)
+    n_x = u.shape[1]
+    n_y = u.shape[2]
+    dx = 1.0 / (n_x - 1)
+    dy = 1.0 / (n_y - 1)
+
+    # Compute second derivatives using central finite differences
+    # u_xx = (u[i-1,j] - 2*u[i,j] + u[i+1,j]) / dx^2
+    # u_yy = (u[i,j-1] - 2*u[i,j] + u[i,j+1]) / dy^2
+
+    # Second derivative in x direction (batch, n_x-2, n_y)
+    u_xx = (u[:, 2:, :] - 2*u[:, 1:-1, :] + u[:, :-2, :]) / (dx**2)
+
+    # Second derivative in y direction (batch, n_x, n_y-2)
+    u_yy = (u[:, :, 2:] - 2*u[:, :, 1:-1] + u[:, :, :-2]) / (dy**2)
+
+    # Align dimensions by removing boundaries
+    # u_xx has shape (batch, n_x-2, n_y), take middle n_y-2 in y
+    u_xx = u_xx[:, :, 1:-1]  # (batch, n_x-2, n_y-2)
+
+    # u_yy has shape (batch, n_x, n_y-2), take middle n_x-2 in x
+    u_yy = u_yy[:, 1:-1, :]  # (batch, n_x-2, n_y-2)
+
     if pde_type == 'poisson':
         # Poisson equation: Δu = f
-        # Assuming f is encoded in the input
+        # For now, we assume f=0 (Laplace equation) or minimize |Δu|
         laplacian = u_xx + u_yy
-        residual = laplacian  # Should match forcing term
+        residual = laplacian
     elif pde_type == 'heat':
         # Heat equation: u_t - Δu = 0
+        # For steady state: -Δu = 0
         laplacian = u_xx + u_yy
         residual = laplacian
     else:
         raise ValueError(f"Unknown PDE type: {pde_type}")
-    
+
     return residual
 
 class CosineAnnealingWarmRestartsWithDecay(torch.optim.lr_scheduler._LRScheduler):
