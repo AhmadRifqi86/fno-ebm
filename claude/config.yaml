@@ -1,0 +1,39 @@
+# Training Hyperparameters
+epochs: 200
+fno_epochs: 100
+ebm_epochs: 100
+patience: 15
+accumulation_steps: 4
+
+# Optimizer and Scheduler
+fno_learning_rate: 0.001
+ebm_learning_rate: 0.0001
+fno_scheduler_config:
+  T_0: 10
+  T_mult: 2
+  eta_min: 0.00001
+  decay: 0.95
+ebm_scheduler_config:
+  T_0: 15
+  T_mult: 2
+  eta_min: 0.000001
+  decay: 0.9
+
+# Model Parameters
+fno_modes: 16
+fno_width: 64
+ebm_hidden_dim: 128
+
+# Physics and MCMC
+pde_type: 'poisson' # Can be 'poisson', 'heat', etc.
+lambda_phys: 1.0
+mcmc_steps: 60
+mcmc_step_size: 0.005
+
+# Data and Paths
+data_path: './data/poisson.mat'
+checkpoint_dir: './checkpoints'
+batch_size: 16
+grid_size: 64
+n_train: 1000
+n_test: 200
