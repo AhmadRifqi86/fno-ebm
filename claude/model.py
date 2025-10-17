@@ -262,6 +262,447 @@ class TransformerFNO2d(nn.Module):
         return x
 
 
+class FourierTransformerBlock(nn.Module):
+    """
+    Hybrid block that combines Fourier filtering with transformer attention
+    """
+    def __init__(self, channels, modes1, modes2, num_heads=4, dropout=0.0):
+        super().__init__()
+        self.channels = channels
+        self.modes1 = modes1
+        self.modes2 = modes2
+
+        # Fourier weights for spectral filtering
+        self.scale = 1 / (channels * channels)
+        self.weights1 = nn.Parameter(
+            self.scale * torch.rand(channels, channels, modes1, modes2, 2)
+        )
+        self.weights2 = nn.Parameter(
+            self.scale * torch.rand(channels, channels, modes1, modes2, 2)
+        )
+
+        # Transformer attention in Fourier space
+        self.norm = nn.LayerNorm(channels * 2)  # *2 for real and imag parts
+        self.attn = nn.MultiheadAttention(
+            channels * 2, num_heads, dropout=dropout, batch_first=True
+        )
+        self.mlp = nn.Sequential(
+            nn.Linear(channels * 2, channels * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(channels * 4, channels * 2),
+            nn.Dropout(dropout)
+        )
+        self.norm2 = nn.LayerNorm(channels * 2)
+
+    def compl_mul2d(self, input, weights):
+        """Complex multiplication in Fourier space"""
+        return torch.einsum("bixy,ioxy->boxy", input, weights)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, channels, height, width) - spatial domain
+        Returns:
+            (batch, channels, height, width) - spatial domain
+        """
+        batch_size = x.shape[0]
+
+        # Transform to Fourier domain
+        x_ft = torch.fft.rfft2(x, norm='ortho')
+        x_ft = torch.stack([x_ft.real, x_ft.imag], dim=-1)
+
+        # Spectral filtering (similar to SpectralConv2d)
+        out_ft = torch.zeros_like(x_ft)
+        out_ft[:, :, :self.modes1, :self.modes2] = \
+            self.compl_mul2d(x_ft[:, :, :self.modes1, :self.modes2], self.weights1)
+        out_ft[:, :, -self.modes1:, :self.modes2] = \
+            self.compl_mul2d(x_ft[:, :, -self.modes1:, :self.modes2], self.weights2)
+
+        # Flatten Fourier coefficients for transformer attention
+        # (batch, channels, freq_h, freq_w, 2) -> (batch, freq_h*freq_w, channels*2)
+        freq_h, freq_w = out_ft.shape[2], out_ft.shape[3]
+        out_ft_flat = out_ft.permute(0, 2, 3, 1, 4).reshape(
+            batch_size, freq_h * freq_w, self.channels * 2
+        )
+
+        # Apply transformer attention in Fourier space
+        out_ft_norm = self.norm(out_ft_flat)
+        attn_out, _ = self.attn(out_ft_norm, out_ft_norm, out_ft_norm)
+        out_ft_flat = out_ft_flat + attn_out
+        out_ft_flat = out_ft_flat + self.mlp(self.norm2(out_ft_flat))
+
+        # Reshape back to Fourier space
+        out_ft = out_ft_flat.reshape(batch_size, freq_h, freq_w, self.channels, 2)
+        out_ft = out_ft.permute(0, 3, 1, 2, 4)
+
+        # Transform back to spatial domain
+        out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
+        x_out = torch.fft.irfft2(out_ft_complex, s=(x.size(-2), x.size(-1)), norm='ortho')
+
+        return x_out
+
+
+class FourierTransformerFNO2d(nn.Module):
+    """
+    Fourier Neural Operator with Transformer attention in Fourier space.
+    Combines spectral filtering with self-attention on Fourier coefficients.
+    """
+    def __init__(self, modes1, modes2, width=64, num_layers=4, num_heads=4, dropout=0.0):
+        super().__init__()
+
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.width = width
+        self.num_layers = num_layers
+
+        # Input projection
+        self.fc0 = nn.Linear(3, self.width)
+
+        # Fourier-Transformer hybrid layers
+        self.fourier_transformer_layers = nn.ModuleList([
+            FourierTransformerBlock(
+                self.width, self.modes1, self.modes2,
+                num_heads=num_heads, dropout=dropout
+            )
+            for _ in range(self.num_layers)
+        ])
+
+        # Local (non-spectral) connection
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(self.width, self.width, 1)
+            for _ in range(self.num_layers)
+        ])
+
+        # Output projection
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, 1)
+
+    def forward(self, x):
+        """
+        x: (batch, n_x, n_y, 3) where last dim is (x_coord, y_coord, input_field)
+        returns: (batch, n_x, n_y, 1) - the solution field
+        """
+        # Lift to higher dimension
+        x = self.fc0(x)  # (batch, n_x, n_y, width)
+        x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+
+        # Fourier-Transformer layers
+        for i in range(self.num_layers):
+            x1 = self.fourier_transformer_layers[i](x)
+            x2 = self.w_layers[i](x)
+            x = x1 + x2
+            if i < self.num_layers - 1:
+                x = F.gelu(x)
+
+        # Project to output
+        x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)  # (batch, n_x, n_y, 1)
+
+        return x
+
+
+class MambaBlock2D(nn.Module):
+    """
+    Mamba-based block for 2D spatial processing
+    Applies Mamba along both spatial dimensions
+    """
+    def __init__(self, d_model, d_state=16, d_conv=4, expand=2):
+        super().__init__()
+        self.d_model = d_model
+
+        if MAMBA_AVAILABLE:
+            # Use official Mamba implementation
+            self.mamba_h = Mamba(
+                d_model=d_model,
+                d_state=d_state,
+                d_conv=d_conv,
+                expand=expand
+            )
+            self.mamba_w = Mamba(
+                d_model=d_model,
+                d_state=d_state,
+                d_conv=d_conv,
+                expand=expand
+            )
+        else:
+            # Fallback to simple convolution if Mamba not available
+            print("Warning: Using Conv2d fallback instead of Mamba")
+            self.mamba_h = nn.Conv2d(d_model, d_model, kernel_size=3, padding=1)
+            self.mamba_w = nn.Conv2d(d_model, d_model, kernel_size=3, padding=1)
+
+        self.norm = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, channels, height, width)
+        Returns:
+            (batch, channels, height, width)
+        """
+        batch, channels, height, width = x.shape
+
+        if MAMBA_AVAILABLE:
+            # Process along height dimension
+            x_h = x.permute(0, 2, 3, 1)  # (batch, height, width, channels)
+            x_h = x_h.reshape(batch * height, width, channels)
+            x_h = self.mamba_h(x_h)
+            x_h = x_h.reshape(batch, height, width, channels)
+            x_h = x_h.permute(0, 3, 1, 2)  # (batch, channels, height, width)
+
+            # Process along width dimension
+            x_w = x.permute(0, 3, 2, 1)  # (batch, width, height, channels)
+            x_w = x_w.reshape(batch * width, height, channels)
+            x_w = self.mamba_w(x_w)
+            x_w = x_w.reshape(batch, width, height, channels)
+            x_w = x_w.permute(0, 3, 2, 1)  # (batch, channels, height, width)
+
+            # Combine both directions
+            return x_h + x_w
+        else:
+            # Fallback: simple convolution
+            return self.mamba_h(x) + self.mamba_w(x)
+
+
+class MambaFNO2d(nn.Module):   #Operate on Spatial Domain
+    """
+    Mamba-based Fourier Neural Operator for 2D problems.
+    Uses Mamba state space models for efficient spatial processing.
+    """
+    def __init__(self, modes1, modes2, width=64, num_layers=4, d_state=16):
+        super().__init__()
+
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.width = width
+        self.num_layers = num_layers
+
+        # Input projection
+        self.fc0 = nn.Linear(3, self.width)
+
+        # Spectral convolution layers (for Fourier processing)
+        self.spectral_layers = nn.ModuleList([
+            SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+            for _ in range(self.num_layers)
+        ])
+
+        # Mamba layers (for spatial processing)
+        self.mamba_layers = nn.ModuleList([
+            MambaBlock2D(self.width, d_state=d_state)
+            for _ in range(self.num_layers)
+        ])
+
+        # Local connection
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(self.width, self.width, 1)
+            for _ in range(self.num_layers)
+        ])
+
+        # Output projection
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, 1)
+
+    def forward(self, x):
+        """
+        x: (batch, n_x, n_y, 3) where last dim is (x_coord, y_coord, input_field)
+        returns: (batch, n_x, n_y, 1) - the solution field
+        """
+        # Lift to higher dimension
+        x = self.fc0(x)  # (batch, n_x, n_y, width)
+        x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+
+        # Hybrid Fourier-Mamba layers
+        for i in range(self.num_layers):
+            # Spectral path (global Fourier)
+            x1 = self.spectral_layers[i](x)
+
+            # Mamba path (sequential spatial processing)
+            x2 = self.mamba_layers[i](x)
+
+            # Local path (pointwise)
+            x3 = self.w_layers[i](x)
+
+            # Combine all paths
+            x = x1 + x2 + x3
+
+            if i < self.num_layers - 1:
+                x = F.gelu(x)
+
+        # Project to output
+        x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)  # (batch, n_x, n_y, 1)
+
+        return x
+
+
+class FourierMambaBlock(nn.Module): #Operate on Frequency Domain
+    """
+    Hybrid block that combines Fourier filtering with Mamba in frequency domain
+    """
+    def __init__(self, channels, modes1, modes2, d_state=16, d_conv=4):
+        super().__init__()
+        self.channels = channels
+        self.modes1 = modes1
+        self.modes2 = modes2
+
+        # Fourier weights for spectral filtering
+        self.scale = 1 / (channels * channels)
+        self.weights1 = nn.Parameter(
+            self.scale * torch.rand(channels, channels, modes1, modes2, 2)
+        )
+        self.weights2 = nn.Parameter(
+            self.scale * torch.rand(channels, channels, modes1, modes2, 2)
+        )
+
+        # Mamba for processing in Fourier space
+        if MAMBA_AVAILABLE:
+            # Process Fourier coefficients as sequences
+            # Input will be flattened frequency domain (real + imag)
+            self.mamba_freq = Mamba(
+                d_model=channels * 2,  # *2 for real and imag
+                d_state=d_state,
+                d_conv=d_conv,
+                expand=2
+            )
+        else:
+            # Fallback: 1D convolution over frequency sequence
+            print("Warning: Using Conv1d fallback for frequency domain Mamba")
+            self.mamba_freq = nn.Conv1d(channels * 2, channels * 2, kernel_size=3, padding=1)
+
+        self.norm = nn.LayerNorm(channels * 2)
+
+    def compl_mul2d(self, input, weights):
+        """Complex multiplication in Fourier space"""
+        return torch.einsum("bixy,ioxy->boxy", input, weights)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, channels, height, width) - spatial domain
+        Returns:
+            (batch, channels, height, width) - spatial domain
+        """
+        batch_size = x.shape[0]
+
+        # Transform to Fourier domain
+        x_ft = torch.fft.rfft2(x, norm='ortho')
+        x_ft = torch.stack([x_ft.real, x_ft.imag], dim=-1)  # (batch, channels, freq_h, freq_w, 2)
+
+        # Spectral filtering (similar to SpectralConv2d)
+        out_ft = torch.zeros_like(x_ft)
+        out_ft[:, :, :self.modes1, :self.modes2] = \
+            self.compl_mul2d(x_ft[:, :, :self.modes1, :self.modes2], self.weights1)
+        out_ft[:, :, -self.modes1:, :self.modes2] = \
+            self.compl_mul2d(x_ft[:, :, -self.modes1:, :self.modes2], self.weights2)
+
+        # Flatten Fourier coefficients for Mamba processing
+        # (batch, channels, freq_h, freq_w, 2) -> (batch, freq_h*freq_w, channels*2)
+        freq_h, freq_w = out_ft.shape[2], out_ft.shape[3]
+        out_ft_flat = out_ft.permute(0, 2, 3, 1, 4).reshape(
+            batch_size, freq_h * freq_w, self.channels * 2
+        )
+
+        # Apply Mamba in Fourier space
+        if MAMBA_AVAILABLE:
+            out_ft_norm = self.norm(out_ft_flat)
+            out_ft_mamba = self.mamba_freq(out_ft_norm)
+            out_ft_flat = out_ft_flat + out_ft_mamba  # Residual connection
+        else:
+            # Fallback: Conv1d
+            out_ft_norm = self.norm(out_ft_flat)
+            out_ft_conv = out_ft_norm.permute(0, 2, 1)  # (batch, channels*2, freq_h*freq_w)
+            out_ft_conv = self.mamba_freq(out_ft_conv)
+            out_ft_flat = out_ft_flat + out_ft_conv.permute(0, 2, 1)
+
+        # Reshape back to Fourier space
+        # (batch, freq_h*freq_w, channels*2) -> (batch, channels, freq_h, freq_w, 2)
+        out_ft = out_ft_flat.reshape(batch_size, freq_h, freq_w, self.channels, 2)
+        out_ft = out_ft.permute(0, 3, 1, 2, 4)
+
+        # Transform back to spatial domain
+        out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
+        x_out = torch.fft.irfft2(out_ft_complex, s=(x.size(-2), x.size(-1)), norm='ortho')
+
+        return x_out
+
+
+class FourierMambaFNO2d(nn.Module):  # Operate on Frequency Domain
+    """
+    Fourier Neural Operator with Mamba processing in frequency domain.
+    Combines FFT spectral filtering with Mamba state space models on Fourier coefficients.
+
+    This architecture:
+    1. Transforms input to Fourier space (FFT)
+    2. Applies spectral filtering on selected modes
+    3. Uses Mamba to process Fourier coefficients as sequences
+    4. Transforms back to spatial domain (IFFT)
+    """
+    def __init__(self, modes1, modes2, width=64, num_layers=4, d_state=16):
+        super().__init__()
+
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.width = width
+        self.num_layers = num_layers
+
+        # Input projection
+        self.fc0 = nn.Linear(3, self.width)
+
+        # Fourier-Mamba hybrid layers
+        self.fourier_mamba_layers = nn.ModuleList([
+            FourierMambaBlock(
+                self.width, self.modes1, self.modes2,
+                d_state=d_state
+            )
+            for _ in range(self.num_layers)
+        ])
+
+        # Local (non-spectral) connection
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(self.width, self.width, 1)
+            for _ in range(self.num_layers)
+        ])
+
+        # Output projection
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, 1)
+
+    def forward(self, x):
+        """
+        x: (batch, n_x, n_y, 3) where last dim is (x_coord, y_coord, input_field)
+        returns: (batch, n_x, n_y, 1) - the solution field
+        """
+        # Lift to higher dimension
+        x = self.fc0(x)  # (batch, n_x, n_y, width)
+        x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+
+        # Fourier-Mamba layers
+        for i in range(self.num_layers):
+            # Fourier-Mamba path (frequency domain processing)
+            x1 = self.fourier_mamba_layers[i](x)
+
+            # Local path (spatial domain)
+            x2 = self.w_layers[i](x)
+
+            # Combine paths
+            x = x1 + x2
+
+            if i < self.num_layers - 1:
+                x = F.gelu(x)
+
+        # Project to output
+        x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)  # (batch, n_x, n_y, 1)
+
+        return x
+
+
 class EBMPotential(nn.Module):
     """
     Energy-Based Model potential V(u, X) for uncertainty modeling
