@@ -378,7 +378,7 @@ class FourierTransformerFNO2d(nn.Module):
         self.fc1 = nn.Linear(self.width, 128)
         self.fc2 = nn.Linear(128, 1)
 
-    def forward(self, x):
+    def forward(self, x):  
         """
         x: (batch, n_x, n_y, 3) where last dim is (x_coord, y_coord, input_field)
         returns: (batch, n_x, n_y, 1) - the solution field
@@ -747,7 +747,7 @@ class EBMPotential(nn.Module):
         
         return V
 
-
+# Class that called by trainer
 class FNO_EBM(nn.Module):
     """
     Combined FNO-EBM model
@@ -757,11 +757,11 @@ class FNO_EBM(nn.Module):
         super().__init__()
         self.u_fno = fno_model
         self.V_ebm = ebm_model
-        
+
     def energy(self, u, x, u_fno=None):
         """
         Compute total energy E(u, X)
-        
+
         Args:
             u: candidate solution (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
@@ -772,15 +772,479 @@ class FNO_EBM(nn.Module):
         if u_fno is None:
             with torch.no_grad():
                 u_fno = self.u_fno(x)
-        
+
         # Quadratic term: anchors to FNO solution
         quadratic_term = 0.5 * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
-        
+
         # Potential term: captures uncertainty structure
         potential_term = self.V_ebm(u, x)
-        
+
         return quadratic_term + potential_term
-    
+
     def forward(self, x):
         """Direct FNO prediction"""
         return self.u_fno(x)
+
+
+# ============================================================================
+# KAN-based EBM Architectures
+# ============================================================================
+
+class KANLayer(nn.Module):  #KAN from scratch, consider to use pykan library
+    """
+    Kolmogorov-Arnold Network Layer
+    Uses learnable spline-based activation functions on edges instead of nodes.
+
+    Based on the KAN paper: https://arxiv.org/abs/2404.19756
+    This is a simplified implementation using B-splines.
+    """
+    def __init__(self, in_features, out_features, grid_size=5, spline_order=3):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.grid_size = grid_size
+        self.spline_order = spline_order
+
+        # Learnable spline coefficients for each input-output pair
+        # Shape: (out_features, in_features, grid_size + spline_order)
+        self.spline_weight = nn.Parameter(
+            torch.randn(out_features, in_features, grid_size + spline_order) * 0.1
+        )
+
+        # Base weights (linear transformation as residual)
+        self.base_weight = nn.Parameter(torch.randn(out_features, in_features) * 0.1)
+
+        # Grid points for spline basis (fixed, not learned)
+        grid = torch.linspace(-1, 1, grid_size + 1)
+        # Extend grid for spline order
+        grid = torch.cat([
+            grid[0].repeat(spline_order),
+            grid,
+            grid[-1].repeat(spline_order)
+        ])
+        self.register_buffer('grid', grid)
+
+    def b_splines(self, x):
+        """
+        Compute B-spline basis functions
+        Args:
+            x: input tensor (..., in_features)
+        Returns:
+            basis: B-spline basis (..., in_features, grid_size + spline_order)
+        """
+        # Clamp x to grid range
+        x = torch.clamp(x, -1.0, 1.0)
+
+        # Compute B-spline basis using Cox-de Boor recursion
+        # Simplified version: using linear interpolation for efficiency
+        grid_size = self.grid_size
+        spline_order = self.spline_order
+
+        # Find the interval
+        # x: (..., in_features) -> (..., in_features, 1)
+        x_expanded = x.unsqueeze(-1)
+
+        # grid: (grid_size + 2*spline_order + 1)
+        # Create basis functions
+        basis = torch.relu(1 - torch.abs(
+            (x_expanded - self.grid) * grid_size / 2
+        ))
+
+        return basis
+
+    def forward(self, x):
+        """
+        Args:
+            x: (..., in_features)
+        Returns:
+            (..., out_features)
+        """
+        # Base linear transformation
+        base_output = F.linear(x, self.base_weight)  # (..., out_features)
+
+        # Spline transformation
+        # Compute B-spline basis
+        basis = self.b_splines(x)  # (..., in_features, grid_size + spline_order)
+
+        # Apply spline weights
+        # spline_weight: (out_features, in_features, grid_size + spline_order)
+        # basis: (..., in_features, grid_size + spline_order)
+        # We want: (..., out_features)
+
+        spline_output = torch.einsum(
+            '...ik,oik->...o',
+            basis,
+            self.spline_weight
+        )
+
+        return base_output + spline_output
+
+
+class KAN_EBM(nn.Module):
+    """
+    Pure KAN-based Energy Model
+    Uses Kolmogorov-Arnold Networks with learnable spline activations
+    for modeling energy landscapes.
+
+    Architecture:
+        Input field → Flatten → KAN layers → Scalar energy
+
+    Advantages:
+    - Learnable activation functions (splines) for flexible energy surfaces
+    - Potentially more interpretable than black-box MLPs
+    - Efficient parameterization with fewer parameters
+    """
+    def __init__(
+        self,
+        input_dim=4,
+        hidden_dims=[64, 128, 64],
+        grid_size=5,
+        spline_order=3
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.hidden_dims = hidden_dims
+
+        # Build KAN layers
+        layers = []
+        prev_dim = input_dim
+
+        for hidden_dim in hidden_dims:
+            layers.append(KANLayer(
+                prev_dim,
+                hidden_dim,
+                grid_size=grid_size,
+                spline_order=spline_order
+            ))
+            layers.append(nn.LayerNorm(hidden_dim))
+            prev_dim = hidden_dim
+
+        # Final layer to scalar energy
+        layers.append(KANLayer(
+            prev_dim,
+            1,
+            grid_size=grid_size,
+            spline_order=spline_order
+        ))
+
+        self.kan_network = nn.Sequential(*layers)
+
+    def forward(self, u, x):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            V: potential energy (batch,)
+        """
+        # Concatenate solution with coordinates
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # Flatten spatial dimensions
+        batch_size = combined.shape[0]
+        combined_flat = combined.reshape(batch_size, -1, self.input_dim)
+
+        # Compute energy for each spatial point
+        V_spatial = self.kan_network(combined_flat)  # (batch, n_x*n_y, 1)
+
+        # Aggregate over spatial dimensions (mean pooling)
+        V = V_spatial.mean(dim=1).squeeze(-1)  # (batch,)
+
+        return V
+
+
+class FNO_KAN_EBM(nn.Module):
+    """
+    Hybrid FNO Encoder + KAN Energy Head
+
+    Uses FNO's strength for learning spatial field features,
+    then feeds compressed features to KAN for energy prediction.
+
+    Architecture:
+        Input field → FNO encoder → Adaptive pooling → KAN → Scalar energy
+
+    This is the recommended approach combining:
+    - FNO's ability to capture spatial/spectral structure
+    - KAN's flexible learnable activations for energy modeling
+    """
+    def __init__(
+        self,
+        fno_modes1=12,
+        fno_modes2=12,
+        fno_width=64,
+        fno_layers=3,
+        pool_size=4,
+        kan_hidden_dims=[128, 64],
+        grid_size=5,
+        spline_order=3
+    ):
+        super().__init__()
+
+        self.fno_width = fno_width
+        self.pool_size = pool_size
+
+        # FNO encoder (feature extraction)
+        self.fc0 = nn.Linear(4, fno_width)  # (u, x, y, input_field) = 4
+
+        self.spectral_layers = nn.ModuleList([
+            SpectralConv2d(fno_width, fno_width, fno_modes1, fno_modes2)
+            for _ in range(fno_layers)
+        ])
+
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(fno_width, fno_width, 1)
+            for _ in range(fno_layers)
+        ])
+
+        # Adaptive pooling to reduce spatial dimensions
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((pool_size, pool_size))
+
+        # KAN energy head
+        kan_input_dim = fno_width * pool_size * pool_size
+
+        kan_layers = []
+        prev_dim = kan_input_dim
+
+        for hidden_dim in kan_hidden_dims:
+            kan_layers.append(KANLayer(
+                prev_dim,
+                hidden_dim,
+                grid_size=grid_size,
+                spline_order=spline_order
+            ))
+            kan_layers.append(nn.LayerNorm(hidden_dim))
+            prev_dim = hidden_dim
+
+        # Final energy output
+        kan_layers.append(KANLayer(prev_dim, 1, grid_size=grid_size, spline_order=spline_order))
+
+        self.kan_head = nn.Sequential(*kan_layers)
+
+    def forward(self, u, x):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            V: potential energy (batch,)
+        """
+        # Combine solution and coordinates
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # FNO encoding
+        features = self.fc0(combined)  # (batch, n_x, n_y, fno_width)
+        features = features.permute(0, 3, 1, 2)  # (batch, fno_width, n_x, n_y)
+
+        # Apply FNO layers to extract spatial features
+        for i, (spectral, w) in enumerate(zip(self.spectral_layers, self.w_layers)):
+            x1 = spectral(features)
+            x2 = w(features)
+            features = x1 + x2
+            features = F.gelu(features)
+
+        # Pool to fixed size
+        features = self.adaptive_pool(features)  # (batch, fno_width, pool_size, pool_size)
+
+        # Flatten for KAN
+        features_flat = features.flatten(1)  # (batch, fno_width * pool_size^2)
+
+        # KAN energy prediction
+        energy = self.kan_head(features_flat)  # (batch, 1)
+        energy = energy.squeeze(-1)  # (batch,)
+
+        return energy
+
+
+# ============================================================================
+# Graph Neural Network-based EBM
+# ============================================================================
+
+class GraphConvLayer(nn.Module):
+    """
+    Simple Graph Convolution Layer for spatial fields
+    Implements message passing: h_i' = σ(W_self * h_i + Σ_j W_neighbor * h_j)
+    """
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        # Separate weights for self and neighbor aggregation
+        self.weight_self = nn.Linear(in_features, out_features)
+        self.weight_neighbor = nn.Linear(in_features, out_features)
+        self.norm = nn.LayerNorm(out_features)
+
+    def forward(self, node_features, adjacency):
+        """
+        Args:
+            node_features: (batch, num_nodes, in_features)
+            adjacency: (batch, num_nodes, num_nodes) adjacency matrix
+        Returns:
+            (batch, num_nodes, out_features)
+        """
+        # Self transformation
+        h_self = self.weight_self(node_features)
+
+        # Neighbor aggregation
+        h_neighbor = self.weight_neighbor(node_features)
+
+        # Message passing: aggregate from neighbors
+        # adjacency @ h_neighbor sums features from neighbors
+        h_agg = torch.bmm(adjacency, h_neighbor)
+
+        # Combine self and neighbor information
+        out = h_self + h_agg
+        out = self.norm(out)
+        out = F.gelu(out)
+
+        return out
+
+
+class GNN_EBM(nn.Module):
+    """
+    Graph Neural Network-based Energy Model
+
+    Treats spatial field as a graph where each grid point is a node.
+    Uses message passing to capture local and global spatial interactions.
+
+    Architecture:
+        Field → Graph (nodes=grid points) → GNN layers → Global pooling → Energy
+
+    Advantages:
+    - Natural representation of spatial structure
+    - Permutation invariance (with proper pooling)
+    - Proven effective for molecular energy prediction (analogous problem)
+    - Captures multi-scale interactions through message passing
+    """
+    def __init__(
+        self,
+        node_features=4,  # (u, x, y, input)
+        hidden_dims=[64, 128, 128, 64],
+        use_8_connected=False
+    ):
+        super().__init__()
+
+        self.node_features = node_features
+        self.hidden_dims = hidden_dims
+        self.use_8_connected = use_8_connected
+
+        # Node feature encoder
+        self.node_encoder = nn.Sequential(
+            nn.Linear(node_features, hidden_dims[0]),
+            nn.LayerNorm(hidden_dims[0]),
+            nn.GELU()
+        )
+
+        # GNN layers
+        self.gnn_layers = nn.ModuleList()
+        for i in range(len(hidden_dims) - 1):
+            self.gnn_layers.append(
+                GraphConvLayer(hidden_dims[i], hidden_dims[i + 1])
+            )
+
+        # Global pooling and energy head
+        self.energy_head = nn.Sequential(
+            nn.Linear(hidden_dims[-1], hidden_dims[-1] // 2),
+            nn.LayerNorm(hidden_dims[-1] // 2),
+            nn.GELU(),
+            nn.Linear(hidden_dims[-1] // 2, 1)
+        )
+
+        # Cache for adjacency matrix
+        self.adjacency_cache = {}
+
+    def create_grid_adjacency(self, n_x, n_y, device):
+        """
+        Create adjacency matrix for grid graph
+
+        Args:
+            n_x, n_y: grid dimensions
+            device: torch device
+        Returns:
+            adjacency: (n_x*n_y, n_x*n_y) adjacency matrix
+        """
+        cache_key = (n_x, n_y, device)
+        if cache_key in self.adjacency_cache:
+            return self.adjacency_cache[cache_key]
+
+        num_nodes = n_x * n_y
+        adjacency = torch.zeros(num_nodes, num_nodes, device=device)
+
+        # Create 4-connected or 8-connected grid
+        for i in range(n_x):
+            for j in range(n_y):
+                node_idx = i * n_y + j
+
+                # 4-connected neighbors (up, down, left, right)
+                neighbors = []
+                if i > 0:  # up
+                    neighbors.append((i - 1) * n_y + j)
+                if i < n_x - 1:  # down
+                    neighbors.append((i + 1) * n_y + j)
+                if j > 0:  # left
+                    neighbors.append(i * n_y + (j - 1))
+                if j < n_y - 1:  # right
+                    neighbors.append(i * n_y + (j + 1))
+
+                # 8-connected (add diagonals)
+                if self.use_8_connected:
+                    if i > 0 and j > 0:  # top-left
+                        neighbors.append((i - 1) * n_y + (j - 1))
+                    if i > 0 and j < n_y - 1:  # top-right
+                        neighbors.append((i - 1) * n_y + (j + 1))
+                    if i < n_x - 1 and j > 0:  # bottom-left
+                        neighbors.append((i + 1) * n_y + (j - 1))
+                    if i < n_x - 1 and j < n_y - 1:  # bottom-right
+                        neighbors.append((i + 1) * n_y + (j + 1))
+
+                # Set adjacency
+                for neighbor in neighbors:
+                    adjacency[node_idx, neighbor] = 1.0
+
+        # Normalize by degree (optional: helps with gradient flow)
+        degree = adjacency.sum(dim=1, keepdim=True)
+        adjacency = adjacency / (degree + 1e-8)
+
+        # Cache it
+        self.adjacency_cache[cache_key] = adjacency
+
+        return adjacency
+
+    def forward(self, u, x):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            V: potential energy (batch,)
+        """
+        batch_size, n_x, n_y, _ = u.shape
+
+        # Combine solution and coordinates
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # Reshape to graph nodes
+        node_features = combined.reshape(batch_size, n_x * n_y, self.node_features)
+
+        # Encode node features
+        node_features = self.node_encoder(node_features)  # (batch, num_nodes, hidden_dims[0])
+
+        # Create adjacency matrix
+        adjacency = self.create_grid_adjacency(n_x, n_y, u.device)
+
+        # Expand adjacency for batch
+        adjacency = adjacency.unsqueeze(0).expand(batch_size, -1, -1)
+
+        # Apply GNN layers
+        for gnn_layer in self.gnn_layers:
+            node_features = gnn_layer(node_features, adjacency)
+
+        # Global pooling (mean over all nodes)
+        global_features = node_features.mean(dim=1)  # (batch, hidden_dims[-1])
+
+        # Predict energy
+        energy = self.energy_head(global_features)  # (batch, 1)
+        energy = energy.squeeze(-1)  # (batch,)
+
+        return energy
