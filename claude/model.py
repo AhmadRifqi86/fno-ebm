@@ -2,6 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+try:
+    from mamba_ssm import Mamba
+    MAMBA_AVAILABLE = True
+    print("Using official Mamba implementation from mamba-ssm")
+except ImportError:
+    MAMBA_AVAILABLE = False
+    print("Warning: mamba-ssm not available, falling back to custom implementation")
+    print("Install with: pip install mamba-ssm")
+
 class SpectralConv2d(nn.Module):
     """Spectral convolution layer in Fourier space"""
     def __init__(self, in_channels, out_channels, modes1, modes2):
@@ -103,6 +113,152 @@ class FNO2d(nn.Module):
         x = F.gelu(x)
         x = self.fc2(x)  # (batch, n_x, n_y, 1)
         
+        return x
+
+
+class SpatialTransformerBlock(nn.Module):
+    """Transformer block for spatial attention over 2D fields"""
+    def __init__(self, embed_dim, num_heads=4, mlp_ratio=4.0, dropout=0.0):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+
+        # Multi-head self-attention
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout, batch_first=True
+        )
+
+        # Feed-forward network
+        self.norm2 = nn.LayerNorm(embed_dim)
+        mlp_hidden_dim = int(embed_dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, embed_dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, num_patches, embed_dim)
+        Returns:
+            x: (batch, num_patches, embed_dim)
+        """
+        # Self-attention with residual
+        x_norm = self.norm1(x)
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        x = x + attn_out
+
+        # MLP with residual
+        x = x + self.mlp(self.norm2(x))
+
+        return x
+
+
+class TransformerFNO2d(nn.Module):
+    """
+    Transformer-based Fourier Neural Operator for 2D problems.
+    Replaces SpectralConv2d with spatial transformer attention.
+    """
+    def __init__(self, width=64, num_layers=4, num_heads=4, patch_size=4, dropout=0.0):
+        super().__init__()
+
+        self.width = width
+        self.num_layers = num_layers
+        self.patch_size = patch_size
+
+        # Input projection
+        self.fc0 = nn.Linear(3, self.width)  # (x, y, input_field)
+
+        # Positional embedding parameters (learned)
+        # Will be initialized based on input size in forward pass
+        self.pos_embed = None
+        self.grid_size = None
+
+        # Transformer blocks (replacing SpectralConv2d layers)
+        self.transformer_blocks = nn.ModuleList([
+            SpatialTransformerBlock(
+                embed_dim=self.width,
+                num_heads=num_heads,
+                mlp_ratio=4.0,
+                dropout=dropout
+            )
+            for _ in range(self.num_layers)
+        ])
+
+        # Local (non-attention) connection for residual
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(self.width, self.width, 1)
+            for _ in range(self.num_layers)
+        ])
+
+        # Output projection
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, 1)
+
+    def initialize_pos_embedding(self, grid_h, grid_w, device):
+        """Initialize positional embeddings if needed"""
+        num_patches = grid_h * grid_w
+
+        if self.pos_embed is None or self.grid_size != (grid_h, grid_w):
+            self.grid_size = (grid_h, grid_w)
+            # Create learnable positional embeddings
+            self.pos_embed = nn.Parameter(
+                torch.randn(1, num_patches, self.width, device=device) * 0.02
+            )
+
+    def forward(self, x):
+        """
+        x: (batch, n_x, n_y, 3) where last dim is (x_coord, y_coord, input_field)
+        returns: (batch, n_x, n_y, 1) - the solution field
+        """
+        batch_size, n_x, n_y, _ = x.shape
+
+        # Lift to higher dimension
+        x = self.fc0(x)  # (batch, n_x, n_y, width)
+
+        # Initialize positional embeddings if needed
+        self.initialize_pos_embedding(n_x, n_y, x.device)
+
+        # For transformer processing: flatten spatial dimensions
+        x_flat = x.reshape(batch_size, n_x * n_y, self.width)  # (batch, n_x*n_y, width)
+
+        # Add positional embeddings
+        x_flat = x_flat + self.pos_embed
+
+        # For residual connection: prepare in conv format
+        x_conv = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+
+        # Apply transformer blocks
+        for i in range(self.num_layers):
+            # Transformer path (global attention)
+            x_attn = self.transformer_blocks[i](x_flat)  # (batch, n_x*n_y, width)
+
+            # Reshape for residual
+            x_attn_2d = x_attn.reshape(batch_size, n_x, n_y, self.width)
+            x_attn_2d = x_attn_2d.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+
+            # Local path (pointwise convolution)
+            x_local = self.w_layers[i](x_conv)
+
+            # Combine paths
+            x_conv = x_attn_2d + x_local
+
+            # Activation (except last layer)
+            if i < self.num_layers - 1:
+                x_conv = F.gelu(x_conv)
+                # Update flat representation
+                x_flat = x_conv.permute(0, 2, 3, 1).reshape(batch_size, n_x * n_y, self.width)
+
+        # Project to output
+        x = x_conv.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)  # (batch, n_x, n_y, 1)
+
         return x
 
 
