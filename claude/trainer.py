@@ -5,11 +5,60 @@ import os
 from tqdm import tqdm
 import logging
 from config import Config, Factory
-from model import FNO_EBM
 from customs import EarlyStopping, PhysicsLossFn, CosineAnnealingWarmRestartsWithDecay
 import numpy as np
 
 #Abstract class for physics loss, the physics loss should have format: phy_loss(u, x), u for output, x for grid position
+
+
+# ============================================================================
+# FNO-EBM Combined Model
+# ============================================================================
+
+class FNO_EBM(nn.Module):
+    """
+    Combined FNO-EBM model
+    Total Energy: E(u, X) = 0.5 * ||u - u_FNO(X)||^2 + V(u, X)
+
+    This wrapper class combines an FNO model (for predictions) and an EBM model
+    (for uncertainty quantification).
+    """
+    def __init__(self, fno_model, ebm_model):
+        super().__init__()
+        self.u_fno = fno_model
+        self.V_ebm = ebm_model
+
+    def energy(self, u, x, u_fno=None):
+        """
+        Compute total energy E(u, X)
+
+        Args:
+            u: candidate solution (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+            u_fno: pre-computed FNO solution (optional)
+        Returns:
+            E: total energy (batch,)
+        """
+        if u_fno is None:
+            with torch.no_grad():
+                u_fno = self.u_fno(x)
+
+        # Quadratic term: anchors to FNO solution
+        quadratic_term = 0.5 * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
+
+        # Potential term: captures uncertainty structure
+        potential_term = self.V_ebm(u, x)
+
+        return quadratic_term + potential_term
+
+    def forward(self, x):
+        """Direct FNO prediction"""
+        return self.u_fno(x)
+
+
+# ============================================================================
+# Trainer Class
+# ============================================================================
 
 class Trainer:
     def __init__(self, model: FNO_EBM,phy_loss: PhysicsLossFn, train_loader, val_loader, config: Config):

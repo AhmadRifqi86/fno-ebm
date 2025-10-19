@@ -1,7 +1,7 @@
 
 import torch
 import numpy as np
-from model import FNO_EBM
+from trainer import FNO_EBM
 
 def langevin_dynamics(model: FNO_EBM, x, num_steps=200, step_size=0.005, 
                      noise_scale=None, device='cuda'):

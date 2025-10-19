@@ -5,8 +5,9 @@ import os
 import matplotlib.pyplot as plt
 
 from config import Config
-from model import FNO2d, EBMPotential, FNO_EBM
-from trainer import Trainer
+from fno import FNO2d
+from ebm import EBMPotential
+from trainer import Trainer, FNO_EBM
 from customs import compute_pde_residual
 from inference import inference_deterministic, inference_probabilistic
 from datautils import dummy_dataloaders, visualize_inference_results
