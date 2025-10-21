@@ -122,7 +122,11 @@ class Trainer:
         self.best_val_loss = float('inf')
         self.lambda_phys = config.lambda_phys  # Weight for physics loss
         
-        self.early_stopper = EarlyStopping(
+        self.early_stopper_fno = EarlyStopping(
+            patience=config.patience, 
+            verbose=True
+        )
+        self.early_stopper_ebm = EarlyStopping(
             patience=config.patience, 
             verbose=True
         )
@@ -147,6 +151,7 @@ class Trainer:
             self.config.checkpoint_dir, 
             f'checkpoint_epoch_{type}_{epoch}.pt'
         )
+        #delete the previous checkpoint of the same type
         torch.save(checkpoint, checkpoint_path)
         
         if val_loss < self.best_val_loss:
@@ -466,8 +471,8 @@ class Trainer:
                 best_val_loss = val_loss
                 self.checkpoint(epoch, val_loss,'fno')
             
-            self.early_stopper(val_loss)
-            if self.early_stopper.early_stop:
+            self.early_stopper_fno(val_loss)
+            if self.early_stopper_fno.early_stop:
                 self.logger.info("EARLY STOPPING FNO TRIGGERED, NO IMPROVEMENT IN SEVERAL EPOCHS")
                 break
 
@@ -514,8 +519,8 @@ class Trainer:
                 best_val_loss = val_loss
                 self.checkpoint(epoch, val_loss, 'ebm')
 
-            self.early_stopper(val_loss)
-            if self.early_stopper.early_stop:
+            self.early_stopper_ebm(val_loss)
+            if self.early_stopper_ebm.early_stop:
                 self.logger.info("EARLY STOPPING TRIGGERED FOR EBM, NO IMPROVEMENT IN SEVERAL EPOCHS")
                 break
 

@@ -10,39 +10,46 @@ from dataset import DarcyFlowGenerator, BurgersGenerator, PoissonGenerator
 
 class PDEDataset(Dataset):
     """
-    PyTorch Dataset wrapper for synthetic PDE data.
+    PyTorch Dataset wrapper for synthetic PDE data with normalization.
 
     Handles loading from .npz files or in-memory numpy arrays.
-    Automatically converts to PyTorch tensors and handles permutation.
+    Automatically normalizes output data to zero mean and unit std.
 
     Example:
         >>> dataset = PDEDataset.from_file('data/darcy_train.npz')
         >>> loader = DataLoader(dataset, batch_size=32, shuffle=True)
+        >>> # Denormalize predictions:
+        >>> u_pred_real = u_pred * dataset.u_std + dataset.u_mean
     """
 
-    def __init__(self, X: np.ndarray, U: np.ndarray):
+    def __init__(self, X: np.ndarray, U: np.ndarray, normalize_output: bool = True):
         """
         Initialize dataset from numpy arrays.
 
         Args:
-            X: Input data, shape (n_samples, nx, ny, in_channels) or (n_samples, nx, in_channels)
-            U: Output data, shape (n_samples, nx, ny, out_channels) or (n_samples, nt, nx, out_channels)
+            X: Input data, shape (n_samples, nx, ny, in_channels)
+            U: Output data, shape (n_samples, nx, ny, out_channels)
+            normalize_output: If True, normalize U to zero mean, unit std
         """
+        # Convert to torch tensors but keep original shape
+        # Our FNO model expects (batch, nx, ny, channels) format
         self.X = torch.from_numpy(X).float()
-        self.U = torch.from_numpy(U).float()
 
-        # Permute to PyTorch format: (n_samples, channels, nx, ny)
-        # From numpy format: (n_samples, nx, ny, channels)
-        if self.X.ndim == 4:  # 2D spatial data
-            self.X = self.X.permute(0, 3, 1, 2)  # (n, c, h, w)
-        elif self.X.ndim == 3:  # 1D spatial data (Burgers)
-            self.X = self.X.permute(0, 2, 1)  # (n, c, x)
+        # Normalize output data (critical for small-scale PDEs like Darcy flow)
+        self.normalize_output = normalize_output
+        if normalize_output:
+            self.u_mean = U.mean()
+            self.u_std = U.std()
+            U_normalized = (U - self.u_mean) / self.u_std
+            self.U = torch.from_numpy(U_normalized).float()
 
-        if self.U.ndim == 4 and self.U.shape[1] != 1:  # Time-series (Burgers)
-            # (n_samples, nt, nx, 1) -> keep as is for now
-            self.U = self.U.permute(0, 3, 1, 2)  # (n, c, t, x)
-        elif self.U.ndim == 4:  # 2D spatial output
-            self.U = self.U.permute(0, 3, 1, 2)  # (n, c, h, w)
+            print(f"Output normalization applied:")
+            print(f"  Original: mean={self.u_mean:.6f}, std={self.u_std:.6f}")
+            print(f"  Normalized: mean={U_normalized.mean():.6f}, std={U_normalized.std():.6f}")
+        else:
+            self.u_mean = 0.0
+            self.u_std = 1.0
+            self.U = torch.from_numpy(U).float()
 
     def __len__(self):
         return len(self.X)
@@ -50,13 +57,19 @@ class PDEDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.U[idx]
 
+    def denormalize(self, U_normalized: torch.Tensor) -> torch.Tensor:
+        """Convert normalized predictions back to original scale."""
+        if self.normalize_output:
+            return U_normalized * self.u_std + self.u_mean
+        return U_normalized
+
     @classmethod
-    def from_file(cls, filepath: str):
+    def from_file(cls, filepath: str, normalize_output: bool = True):
         """Load dataset from .npz file."""
         data = np.load(filepath)
         X = data['X']
         U = data['U']
-        return cls(X, U)
+        return cls(X, U, normalize_output=normalize_output)
 
 
 def create_dataloaders(config):
