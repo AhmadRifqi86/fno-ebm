@@ -5,7 +5,7 @@ import os
 from tqdm import tqdm
 import logging
 from config import Config, Factory
-from customs import EarlyStopping, PhysicsLossFn, CosineAnnealingWarmRestartsWithDecay
+from customs import EarlyStopping, PhysicsLossFn
 import numpy as np
 
 #Abstract class for physics loss, the physics loss should have format: phy_loss(u, x), u for output, x for grid position
@@ -44,7 +44,7 @@ class FNO_EBM(nn.Module):
                 u_fno = self.u_fno(x)
 
         # Quadratic term: anchors to FNO solution
-        quadratic_term = 0.5 * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
+        quadratic_term = 0.5 * torch.mean((u - u_fno)**2, dim=[1, 2, 3]) #configurable squared sigma
 
         # Potential term: captures uncertainty structure
         potential_term = self.V_ebm(u, x)
@@ -281,31 +281,33 @@ class Trainer:
         """
         self.ebm_model.eval()
         total_ebm_val_loss = 0
-        
-        with torch.no_grad():
-            for x, y in self.val_loader:
-                x, y = x.to(self.config.device), y.to(self.config.device)
-                
-                # Positive phase
-                pos_energy = self.ebm_model(x, y)
-                
-                # Negative phase (MCMC sampling)
-                y_neg = y.clone().detach()
-                noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
 
-                for _ in range(self.config.mcmc_steps):
-                    y_neg.requires_grad = True
-                    neg_energy_for_grad = self.ebm_model(x, y_neg)
-                    neg_grad = torch.autograd.grad(neg_energy_for_grad.sum(), y_neg)[0]
-                    
+        for x, y in self.val_loader:
+            x, y = x.to(self.config.device), y.to(self.config.device)
+
+            # Positive phase (no grad needed)
+            with torch.no_grad():
+                pos_energy = self.ebm_model(x, y)
+
+            # Negative phase (MCMC sampling - needs gradients)
+            y_neg = y.clone().detach()
+            noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
+
+            for _ in range(self.config.mcmc_steps):
+                y_neg.requires_grad_(True)
+                neg_energy_for_grad = self.ebm_model(x, y_neg)
+                neg_grad = torch.autograd.grad(neg_energy_for_grad.sum(), y_neg)[0]
+
+                with torch.no_grad():
                     noise = torch.randn_like(y_neg) * noise_scale
                     y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
                     y_neg = y_neg.detach()
 
+            with torch.no_grad():
                 neg_energy = self.ebm_model(x, y_neg)
                 ebm_loss = pos_energy.mean() - neg_energy.mean()
                 total_ebm_val_loss += ebm_loss.item()
-                
+
         avg_ebm_val_loss = total_ebm_val_loss / len(self.val_loader)
         return avg_ebm_val_loss
 

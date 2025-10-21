@@ -2,7 +2,7 @@
 import numpy as np
 import math
 import torch
-from traitlets import Callable
+from typing import Callable
 
 
 PhysicsLossFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]

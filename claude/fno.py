@@ -50,7 +50,12 @@ class SpectralConv2d(nn.Module):
     def compl_mul2d(self, input, weights):
         """Complex multiplication in Fourier space"""
         # input: (batch, in_channel, x, y, 2), weights: (in_channel, out_channel, x, y, 2)
-        return torch.einsum("bixy,ioxy->boxy", input, weights)
+        # Complex multiplication: (a + bi)(c + di) = (ac - bd) + (ad + bc)i
+        real = torch.einsum("bixy,ioxy->boxy", input[..., 0], weights[..., 0]) - \
+               torch.einsum("bixy,ioxy->boxy", input[..., 1], weights[..., 1])
+        imag = torch.einsum("bixy,ioxy->boxy", input[..., 0], weights[..., 1]) + \
+               torch.einsum("bixy,ioxy->boxy", input[..., 1], weights[..., 0])
+        return torch.stack([real, imag], dim=-1)
 
     def forward(self, x):
         batch_size = x.shape[0]
@@ -323,7 +328,12 @@ class FourierTransformerBlock(nn.Module):
 
     def compl_mul2d(self, input, weights):
         """Complex multiplication in Fourier space"""
-        return torch.einsum("bixy,ioxy->boxy", input, weights)
+        # input: (batch, in_channel, x, y, 2), weights: (in_channel, out_channel, x, y, 2)
+        real = torch.einsum("bixy,ioxy->boxy", input[..., 0], weights[..., 0]) - \
+               torch.einsum("bixy,ioxy->boxy", input[..., 1], weights[..., 1])
+        imag = torch.einsum("bixy,ioxy->boxy", input[..., 0], weights[..., 1]) + \
+               torch.einsum("bixy,ioxy->boxy", input[..., 1], weights[..., 0])
+        return torch.stack([real, imag], dim=-1)
 
     def forward(self, x):
         """
@@ -609,7 +619,12 @@ class FourierMambaBlock(nn.Module):
 
     def compl_mul2d(self, input, weights):
         """Complex multiplication in Fourier space"""
-        return torch.einsum("bixy,ioxy->boxy", input, weights)
+        # input: (batch, in_channel, x, y, 2), weights: (in_channel, out_channel, x, y, 2)
+        real = torch.einsum("bixy,ioxy->boxy", input[..., 0], weights[..., 0]) - \
+               torch.einsum("bixy,ioxy->boxy", input[..., 1], weights[..., 1])
+        imag = torch.einsum("bixy,ioxy->boxy", input[..., 0], weights[..., 1]) + \
+               torch.einsum("bixy,ioxy->boxy", input[..., 1], weights[..., 0])
+        return torch.stack([real, imag], dim=-1)
 
     def forward(self, x):
         """
