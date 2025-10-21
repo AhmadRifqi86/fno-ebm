@@ -130,7 +130,7 @@ class Trainer:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-    def checkpoint(self, epoch, val_loss):
+    def checkpoint(self, epoch, val_loss, type):
         """
         Save model checkpoint
         """
@@ -145,7 +145,7 @@ class Trainer:
         
         checkpoint_path = os.path.join(
             self.config.checkpoint_dir, 
-            f'checkpoint_epoch_{epoch}.pt'
+            f'checkpoint_epoch_{type}_{epoch}.pt'
         )
         torch.save(checkpoint, checkpoint_path)
         
@@ -464,7 +464,7 @@ class Trainer:
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self.checkpoint(epoch, val_loss)
+                self.checkpoint(epoch, val_loss,'fno')
             
             self.early_stopper(val_loss)
             if self.early_stopper.early_stop:
@@ -512,7 +512,7 @@ class Trainer:
             # Checkpoint and Early Stopping
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                self.checkpoint(epoch, val_loss)
+                self.checkpoint(epoch, val_loss, 'ebm')
 
             self.early_stopper(val_loss)
             if self.early_stopper.early_stop:

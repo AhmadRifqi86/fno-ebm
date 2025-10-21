@@ -37,10 +37,9 @@ fno_width: 64
 ebm_hidden_dim: 128
 
 # Physics and MCMC
-pde_type: 'poisson' # Can be 'poisson', 'heat', etc.
-lambda_phys: 1.0
-mcmc_steps: 60
-mcmc_step_size: 0.005
+lambda_phys: 0.1  # Weight for physics loss (lower for Darcy with noisy data)
+mcmc_steps: 50    # MCMC steps for Langevin dynamics
+mcmc_step_size: 0.01  # Step size for gradient descent in energy landscape
 
 # Data and Paths
 data_path: './data/poisson.mat'

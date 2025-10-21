@@ -1,0 +1,54 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data files (large datasets)
+data/
+*.npz
+*.mat
+*.h5
+*.hdf5
+
+# Model checkpoints (large files)
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output files
+*.png
+*.pdf
+*.svg
+results/
+outputs/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

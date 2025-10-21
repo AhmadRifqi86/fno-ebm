@@ -10,7 +10,7 @@ from ebm import EBMPotential
 from trainer import Trainer, FNO_EBM
 from customs import compute_pde_residual
 from inference import inference_deterministic, inference_probabilistic
-from datautils import dummy_dataloaders, visualize_inference_results
+from datautils import dummy_dataloaders, create_dataloaders, visualize_inference_results
 
 def main():
     """
@@ -22,6 +22,9 @@ def main():
         config_dict = yaml.safe_load(f)
     config = Config(config_dict)
     print(f"Running on device: {config.device}")
+    print(f"PDE Type: {config.pde_type}")
+    print(f"Complexity: {config.complexity}")
+    print(f"Noise Type: {config.noise_type}")
 
     os.makedirs(config.checkpoint_dir, exist_ok=True)
 
@@ -47,7 +50,9 @@ def main():
     model = FNO_EBM(fno_model, ebm_model).to(config.device)
 
     # 3. Create DataLoaders
-    train_loader, val_loader = dummy_dataloaders(config)
+    # Use create_dataloaders for real PDE data (auto-generates if needed)
+    # Use dummy_dataloaders for quick testing with random data
+    train_loader, val_loader = create_dataloaders(config)
 
     # 5. Instantiate Trainer
     print("--- Initializing Trainer ---")
