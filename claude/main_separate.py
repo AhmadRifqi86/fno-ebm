@@ -23,7 +23,7 @@ from pathlib import Path
 
 from config import Config
 from fno import FNO2d
-from ebm import EBMPotential
+from ebm import ConvEBM
 from trainer import Trainer, FNO_EBM
 from customs import DarcyPhysicsLoss
 from inference import inference_deterministic, inference_probabilistic
@@ -72,11 +72,16 @@ def main():
     )
 
     # EBM model
-    ebm_model = EBMPotential(
-        input_dim=4,  # u(1) + x(3)
-        hidden_dims=[config.ebm_hidden_dim, config.ebm_hidden_dim * 2,
-                     config.ebm_hidden_dim * 2, config.ebm_hidden_dim]
-    )
+    # ebm_model = EBMPotential(
+    #     input_dim=4,  # u(1) + x(3)
+    #     hidden_dims=[config.ebm_hidden_dim, config.ebm_hidden_dim * 2,
+    #                  config.ebm_hidden_dim * 2, config.ebm_hidden_dim]
+    # )
+    ebm_model = ConvEBM(
+      in_channels=4,  # u + (x, y, a)
+      hidden_channels=[64, 128, 128, 64]  # Convolutional channels
+   )
+
 
     # Combined model
     model = FNO_EBM(fno_model, ebm_model).to(config.device)

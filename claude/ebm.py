@@ -66,6 +66,60 @@ class EBMPotential(nn.Module):
 
 
 # ============================================================================
+# Convolutional EBM (RECOMMENDED FOR SPATIAL STRUCTURE)
+# ============================================================================
+
+class ConvEBM(nn.Module):
+    """
+    Convolutional Energy-Based Model for spatially-structured uncertainty.
+
+    Unlike MLP-based EBM that processes each pixel independently,
+    ConvEBM uses convolutions to capture spatial correlations.
+
+    This is CRITICAL for learning structured uncertainty maps!
+    """
+    def __init__(self, in_channels=4, hidden_channels=[64, 128, 128, 64]):
+        super().__init__()
+
+        layers = []
+        prev_channels = in_channels
+
+        for hidden_ch in hidden_channels:
+            layers.append(nn.Conv2d(prev_channels, hidden_ch, kernel_size=3, padding=1))
+            layers.append(nn.GroupNorm(8, hidden_ch))  # GroupNorm for stability
+            layers.append(nn.GELU())
+            prev_channels = hidden_ch
+
+        # Final conv to energy map
+        layers.append(nn.Conv2d(prev_channels, 1, kernel_size=1))
+
+        self.network = nn.Sequential(*layers)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+    def forward(self, u, x):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            V: potential energy (batch,)
+        """
+        # Concatenate solution with coordinates
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # Reshape to (batch, channels, height, width) for conv
+        combined = combined.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
+
+        # Apply convolutional network
+        energy_map = self.network(combined)  # (batch, 1, n_x, n_y)
+
+        # Global average pooling to get scalar energy
+        V = self.pool(energy_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+
+        return V
+
+
+# ============================================================================
 # KAN-based EBM
 # ============================================================================
 
