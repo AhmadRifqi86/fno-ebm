@@ -319,6 +319,97 @@ class DarcyFlowGenerator:
 
         return X, U
 
+    def generate_dual_dataset(
+        self,
+        n_samples: int,
+        noise_type: str = 'heteroscedastic',
+        noise_params: dict = None,
+        verbose: bool = True
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Generate dataset with BOTH clean and noisy outputs.
+
+        Useful for physics-informed training where:
+        - FNO trains on clean data with physics loss
+        - EBM trains on noisy observations for uncertainty quantification
+
+        Args:
+            n_samples: Number of samples to generate
+            noise_type: Type of noise to add
+            noise_params: Noise parameters
+            verbose: Print progress
+
+        Returns:
+            X: Input tensor (n_samples, nx, ny, 3) - same inputs
+            U_clean: Clean output tensor (n_samples, nx, ny, 1) - for FNO
+            U_noisy: Noisy output tensor (n_samples, nx, ny, 1) - for EBM
+        """
+        X = np.zeros((n_samples, self.resolution, self.resolution, 3))
+        U_clean = np.zeros((n_samples, self.resolution, self.resolution, 1))
+        U_noisy = np.zeros((n_samples, self.resolution, self.resolution, 1))
+
+        if verbose:
+            print(f"Generating {n_samples} Darcy flow samples (clean + noisy)...")
+            print(f"  Resolution: {self.resolution}x{self.resolution}")
+            print(f"  Complexity: {self.complexity}")
+            print(f"  Noise type: {noise_type}")
+
+        for i in range(n_samples):
+            if verbose and (i + 1) % 100 == 0:
+                print(f"  Generated {i + 1}/{n_samples} samples", end='\r')
+
+            # Generate permeability
+            a = self.generate_permeability(seed_offset=i)
+
+            # Solve PDE (clean solution)
+            u_clean = self.solve_darcy(a)
+
+            # Add noise to create noisy version
+            if noise_params is None:
+                noise_params = {}
+
+            if noise_type == 'gaussian':
+                u_noisy, _ = add_gaussian_noise(
+                    u_clean,
+                    noise_level=noise_params.get('noise_level', 0.01),
+                    seed=self.seed + i if self.seed else None
+                )
+            elif noise_type == 'heteroscedastic':
+                u_noisy, _ = add_heteroscedastic_noise(
+                    u_clean,
+                    base_noise=noise_params.get('base_noise', 0.001),
+                    scale_factor=noise_params.get('scale_factor', 0.02),
+                    seed=self.seed + i if self.seed else None
+                )
+            elif noise_type == 'mixed':
+                u_noisy, _ = add_mixed_noise(
+                    u_clean,
+                    gaussian_level=noise_params.get('gaussian_level', 0.005),
+                    hetero_base=noise_params.get('base_noise', 0.001),
+                    hetero_scale=noise_params.get('hetero_scale', 0.01),
+                    spatial_level=noise_params.get('spatial_level', 0.003),
+                    correlation_length=noise_params.get('mixed_correlation_length', 2.0),
+                    seed=self.seed + i if self.seed else None
+                )
+            else:
+                # No noise
+                u_noisy = u_clean.copy()
+
+            # Prepare input (coordinates + permeability)
+            x_input = np.stack([self.X, self.Y, a], axis=-1)
+
+            X[i] = x_input
+            U_clean[i, ..., 0] = u_clean
+            U_noisy[i, ..., 0] = u_noisy
+
+        if verbose:
+            print(f"  Generated {n_samples}/{n_samples} samples ✓")
+            print(f"  X shape: {X.shape}")
+            print(f"  U_clean shape: {U_clean.shape}")
+            print(f"  U_noisy shape: {U_noisy.shape}")
+
+        return X, U_clean, U_noisy
+
     def save_dataset(
         self,
         X: np.ndarray,

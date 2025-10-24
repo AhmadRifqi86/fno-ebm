@@ -64,6 +64,178 @@ def compute_pde_residual(u, x_coords, y_coords, pde_type='poisson'):
 
     return residual
 
+
+def compute_darcy_residual(u, x_grid, a_field=None):
+    """
+    Compute Darcy flow PDE residual using finite differences.
+
+    Darcy flow equation:
+        -∇·(a(x,y)∇u) = f
+
+    Expanded form:
+        -(a·u_xx + a·u_yy + a_x·u_x + a_y·u_y) = f
+
+    Where:
+        u(x,y) = pressure/hydraulic head (solution)
+        a(x,y) = permeability coefficient (spatially varying)
+        f(x,y) = source term (typically f=1)
+
+    Args:
+        u: Solution field (batch, nx, ny, 1)
+        x_grid: Input grid (batch, nx, ny, 3) where:
+                x_grid[..., 0] = x coordinates
+                x_grid[..., 1] = y coordinates
+                x_grid[..., 2] = permeability a(x,y)
+        a_field: Optional explicit permeability field (batch, nx, ny)
+                 If None, extracts from x_grid[..., 2]
+
+    Returns:
+        residual: PDE residual (batch, nx-2, ny-2)
+                  Smaller due to boundary removal for finite differences
+
+    Notes:
+        - Uses central finite differences (2nd order accurate)
+        - Assumes uniform grid spacing from 0 to 1
+        - Dirichlet boundary conditions (u=0 on boundary)
+        - Source term f=1 (standard Darcy flow)
+    """
+    # Extract fields
+    u = u.squeeze(-1)  # (batch, nx, ny)
+
+    if a_field is None:
+        # Extract permeability from input grid
+        a_field = x_grid[..., 2]  # (batch, nx, ny)
+
+    # Grid parameters
+    batch_size, nx, ny = u.shape
+    dx = 1.0 / (nx - 1)
+    dy = 1.0 / (ny - 1)
+
+    # ========================================================================
+    # Compute first derivatives of u (central differences)
+    # ========================================================================
+    # u_x at interior points (batch, nx-2, ny-2)
+    u_x = (u[:, 2:, 1:-1] - u[:, :-2, 1:-1]) / (2 * dx)
+
+    # u_y at interior points (batch, nx-2, ny-2)
+    u_y = (u[:, 1:-1, 2:] - u[:, 1:-1, :-2]) / (2 * dy)
+
+    # ========================================================================
+    # Compute second derivatives of u (central differences)
+    # ========================================================================
+    # u_xx at interior points (batch, nx-2, ny-2)
+    u_xx = (u[:, 2:, 1:-1] - 2*u[:, 1:-1, 1:-1] + u[:, :-2, 1:-1]) / (dx**2)
+
+    # u_yy at interior points (batch, nx-2, ny-2)
+    u_yy = (u[:, 1:-1, 2:] - 2*u[:, 1:-1, 1:-1] + u[:, 1:-1, :-2]) / (dy**2)
+
+    # ========================================================================
+    # Compute first derivatives of a(x,y) (permeability gradients)
+    # ========================================================================
+    # a_x at interior points (batch, nx-2, ny-2)
+    a_x = (a_field[:, 2:, 1:-1] - a_field[:, :-2, 1:-1]) / (2 * dx)
+
+    # a_y at interior points (batch, nx-2, ny-2)
+    a_y = (a_field[:, 1:-1, 2:] - a_field[:, 1:-1, :-2]) / (2 * dy)
+
+    # ========================================================================
+    # Extract a at interior points
+    # ========================================================================
+    a_interior = a_field[:, 1:-1, 1:-1]  # (batch, nx-2, ny-2)
+
+    # ========================================================================
+    # Compute divergence: ∇·(a∇u)
+    # ========================================================================
+    # ∇·(a∇u) = a·∇²u + ∇a·∇u
+    #         = a·(u_xx + u_yy) + (a_x·u_x + a_y·u_y)
+
+    div_a_grad_u = (
+        a_interior * u_xx +  # a * u_xx
+        a_interior * u_yy +  # a * u_yy
+        a_x * u_x +          # a_x * u_x
+        a_y * u_y            # a_y * u_y
+    )
+
+    # ========================================================================
+    # Source term (f = 1 for standard Darcy flow)
+    # ========================================================================
+    f = torch.ones_like(div_a_grad_u)
+
+    # ========================================================================
+    # PDE Residual: -∇·(a∇u) - f = 0
+    # ========================================================================
+    residual = -div_a_grad_u - f
+
+    # ========================================================================
+    # Normalize residual to prevent physics loss from dominating
+    # ========================================================================
+    # Problem: Finite differences create O(1/dx²) ≈ 4000x amplification
+    # Solution: Normalize by characteristic scales
+
+    # Normalize by grid spacing squared (cancels out 1/dx² from derivatives)
+    residual = residual * (dx**2)
+
+    # Normalize by mean permeability (cancels out permeability magnitude)
+    mean_permeability = torch.mean(torch.abs(a_field)) + 1e-8
+    residual = residual / mean_permeability
+
+    return residual
+
+
+class DarcyPhysicsLoss:
+    """
+    Wrapper class for Darcy flow physics loss.
+
+    Provides a callable interface compatible with the trainer's PhysicsLossFn type.
+
+    Usage:
+        phy_loss = DarcyPhysicsLoss()
+        residual = phy_loss(u_pred, x_coords, y_coords, x_grid)
+        loss = torch.mean(residual**2)
+    """
+    def __init__(self, source_term=1.0, normalize=True):
+        """
+        Args:
+            source_term: Value of source term f (default: 1.0)
+            normalize: Whether to normalize physics loss by grid resolution (default: True)
+                       This prevents finite difference amplification from dominating
+        """
+        self.source_term = source_term
+        self.normalize = normalize
+
+    def __call__(self, u, x_coords, y_coords, x_grid=None):
+        """
+        Compute Darcy residual.
+
+        Args:
+            u: Solution field (batch, nx, ny, 1)
+            x_coords: x coordinates (batch, nx, ny) - not used
+            y_coords: y coordinates (batch, nx, ny) - not used
+            x_grid: Full input grid (batch, nx, ny, 3) containing permeability
+
+        Returns:
+            residual: PDE residual (batch, nx-2, ny-2)
+        """
+        if x_grid is None:
+            raise ValueError("x_grid must be provided for Darcy physics loss")
+
+        return compute_darcy_residual(u, x_grid)
+
+    def compute_loss(self, u, x_grid):
+        """
+        Convenience method to compute MSE of residual.
+
+        Args:
+            u: Solution field (batch, nx, ny, 1)
+            x_grid: Input grid (batch, nx, ny, 3)
+
+        Returns:
+            loss: Mean squared residual (scalar)
+        """
+        residual = compute_darcy_residual(u, x_grid)
+        return torch.mean(residual**2)
+
+
 class CosineAnnealingWarmRestartsWithDecay(torch.optim.lr_scheduler._LRScheduler):
     def __init__(self, optimizer, T_0, T_mult=1.0, freq_mult=1.0, eta_min=0, decay=0.9, last_epoch=-1):
         self.T_0 = T_0

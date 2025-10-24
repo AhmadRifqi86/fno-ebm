@@ -1,8 +1,12 @@
+# ============================================================================
+# RECOMMENDED CONFIG FOR DARCY FLOW (1000 samples, 64x64, heteroscedastic noise)
+# ============================================================================
+
 # Training Hyperparameters
 epochs: 150              # Total epochs (not used in staged training)
-fno_epochs: 100          # Stage 1: FNO training (increased to avoid early stopping)
-ebm_epochs: 30           # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
-patience: 30             # Early stopping patience (increased - was too aggressive)
+fno_epochs: 80           # Stage 1: FNO training (increased for better convergence)
+ebm_epochs: 30           # Stage 2: EBM training (increased for better UQ)
+patience: 20             # Early stopping patience
 accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
 
 # Optimizer and Scheduler
@@ -11,7 +15,7 @@ ebm_learning_rate: 0.0001
 
 fno_optimizer_config:
   type: adam
-  lr: 0.0005             # Moderate LR for stable convergence, should be high?
+  lr: 0.0003             # Moderate LR for stable convergence
   weight_decay: 0.0001   # Light regularization (reduced from 0.01)
 
 ebm_optimizer_config:
@@ -20,33 +24,28 @@ ebm_optimizer_config:
   weight_decay: 0.00001  # Very light regularization for EBM
   betas: [0.9, 0.999]
 
-# fno_scheduler_config:
-#   type: cosine_annealing_warm_restarts_with_decay
-#   T_0: 15                # Restart every 15 epochs
-#   T_mult: 1.0
-#   freq_mult: 0.95        # Gradually shorter cycles
-#   eta_min: 0.00001       # Minimum learning rate
-#   decay: 0.95            # Decay max LR each restart
-
 fno_scheduler_config:
-  type: step_lr
-  step_size: 10          # Reduce LR every 10 epochs
-  gamma: 0.8 
+  type: cosine_annealing_warm_restarts_with_decay
+  T_0: 15                # Restart every 15 epochs
+  T_mult: 1.0
+  freq_mult: 0.95        # Gradually shorter cycles
+  eta_min: 0.00001       # Minimum learning rate
+  decay: 0.95            # Decay max LR each restart
 
 ebm_scheduler_config:
   type: step_lr
   step_size: 10          # Reduce LR every 10 epochs
-  gamma: 0.8             # Half the learning rate
+  gamma: 0.5             # Half the learning rate
 
 # Model Parameters
-fno_modes: 16           # Fourier modes (increased for better representation)
-fno_width: 96           # Hidden dimension (increased from 64)
+fno_modes: 12            # Fourier modes (reduced from 16 for 64x64 resolution)
+fno_width: 64            # Hidden dimension
 ebm_hidden_dim: 128      # EBM network width
 
 # Physics and MCMC
-lambda_phys: 0.00009        # Physics loss weight (DISABLED - data has noise, let model learn from data), need to be small, i'll try 0.0001 or 0.00015
-mcmc_steps: 200           # Langevin MCMC steps (balanced)
-mcmc_step_size: 0.05      # Step size for energy landscape exploration (increased for small gradients), try big, later will try 0.01
+lambda_phys: 0.05        # Physics loss weight (LOW for noisy data)
+mcmc_steps: 40           # Langevin MCMC steps (balanced)
+mcmc_step_size: 0.015    # Step size for energy landscape exploration
 
 # Data and Paths
 data_dir: './data'
@@ -64,7 +63,11 @@ train_test_split: 0.8
 
 # PDE Selection
 pde_type: 'darcy'
+
+# Complexity Level
 complexity: 'medium'
+
+# Noise Configuration
 noise_type: 'heteroscedastic'
 
 # Heteroscedastic noise parameters

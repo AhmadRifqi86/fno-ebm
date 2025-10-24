@@ -19,7 +19,7 @@ def langevin_dynamics(model: FNO_EBM, x, num_steps=200, step_size=0.005,
     
     for k in range(num_steps):
         # Compute energy gradient
-        energy = model.energy(u, x).sum()
+        energy = model.energy(u, x, training=False).sum()
         grad_u = torch.autograd.grad(energy, u)[0]
         
         with torch.no_grad():

@@ -202,13 +202,14 @@ class FNO_EBM(nn.Module):
         self.u_fno = fno_model
         self.V = ebm_potential
         
-    def energy(self, u, x, u_fno=None):
+    def energy(self, u, x, training=False, u_fno=None):
         """
         Compute total energy E(u, X)
-        
+
         Args:
             u: candidate solution (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
+            training: if True, return only V_EBM (no quadratic); if False, return full energy
             u_fno: pre-computed FNO solution (optional)
         Returns:
             E: total energy (batch,)
@@ -216,14 +217,19 @@ class FNO_EBM(nn.Module):
         if u_fno is None:
             with torch.no_grad():
                 u_fno = self.u_fno(x)
-        
+
         # Quadratic term: anchors to FNO solution
         quadratic_term = 0.5 * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
-        
+
         # Potential term: captures uncertainty structure
         potential_term = self.V(u, x)
-        
-        return quadratic_term + potential_term
+
+        if training:
+            # During EBM training: only V_EBM, no quadratic
+            return potential_term
+        else:
+            # During inference: full energy with quadratic anchor
+            return quadratic_term + potential_term
     
     def forward(self, x):
         """Direct FNO prediction"""
@@ -383,17 +389,17 @@ def train_ebm_stage(fno_ebm_model, train_loader, num_epochs=100,
             u_pos = u_pos.to(device)
             
             optimizer.zero_grad()
-            
-            # Positive energy (data)
-            E_pos = fno_ebm_model.energy(u_pos, x).mean()
-            
+
+            # Positive energy (data) - training mode: V_EBM only, no quadratic
+            E_pos = fno_ebm_model.energy(u_pos, x, training=True).mean()
+
             # Generate negative samples via Langevin dynamics
-            u_neg = langevin_dynamics(fno_ebm_model, x, 
-                                     num_steps=num_mcmc_steps, 
+            u_neg = langevin_dynamics(fno_ebm_model, x,
+                                     num_steps=num_mcmc_steps,
                                      device=device)
-            
-            # Negative energy (generated samples)
-            E_neg = fno_ebm_model.energy(u_neg, x).mean()
+
+            # Negative energy (generated samples) - training mode: V_EBM only, no quadratic
+            E_neg = fno_ebm_model.energy(u_neg, x, training=True).mean()
             
             # Contrastive divergence loss
             loss = E_pos - E_neg

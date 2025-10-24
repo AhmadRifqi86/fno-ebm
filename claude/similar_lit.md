@@ -1,4 +1,5 @@
-1. Probabilistic Predictions with Fourier Neural Operators (OpenReview)
+# Research Novelty and Similar Paper 
+  1. Probabilistic Predictions with Fourier Neural Operators (OpenReview)
 
   - Relevance: Directly combines FNO with generative modeling based on strictly proper scoring rules
   - Key insight: Uses energy score as a strictly proper scoring rule in Hilbert spaces for probabilistic predictions
@@ -78,7 +79,7 @@ Key Differences Between Your Approach and the Papers
   Your Approach (trainer.py:342-377):
   - Uses contrastive divergence training:
   pos_energy = self.ebm_model(x, y)  # positive phase
-  # Langevin MCMC for negative samples
+  ## Langevin MCMC for negative samples
   ebm_loss = pos_energy.mean() - neg_energy.mean()
   - Two-stage training (trainer.py:472-486):
     a. Stage 1: Train FNO with physics loss
@@ -148,8 +149,178 @@ Key Differences Between Your Approach and the Papers
   7. ✅ Two-stage training strategy
 
 
+# Baseline Paper
 
-## Sanity checks result  (Sun 19 Oct 2025)
+## Priority 1: Papers Using PDEBench
+
+### 1. **PDEBench: An Extensive Benchmark for Scientific Machine Learning** (2022)
+- **Link**: https://arxiv.org/abs/2210.07182
+- **GitHub**: https://github.com/pdebench/PDEBench
+- **Relevance**: **PRIMARY BASELINE** - Official benchmark suite with baseline FNO results
+- **Dataset**: 11 PDEs including Darcy Flow, Navier-Stokes, Burgers, and more
+- **Key FNO Benchmark Results**:
+  - Strong general performance across most PDEs
+  - Darcy Flow: Relative L2 error ~0.05-0.10 (depending on resolution)
+  - Limitations identified: High-frequency dynamics, scaling issues
+  - RMSE increases 2 orders of magnitude for high-frequency problems
+- **Why cite**: Establishes baseline FNO performance on standard benchmarks
+
+### 2. **Probabilistic Neural Operators (PNO)** (February 2025)
+- **Link**: https://arxiv.org/abs/2502.12902
+- **Code**: https://github.com/cbuelt/pfno
+- **Relevance**: **MOST SIMILAR TO YOUR WORK** - Extends FNO with probabilistic framework for UQ
+- **Method**: Generative modeling using strictly proper scoring rules (energy score)
+- **Key Difference from Your Work**: Single-stage training with energy score vs your two-stage (FNO→EBM)
+- **Benchmark Results**:
+  - Darcy Flow: Improved calibration over baseline FNO
+  - 2D/3D Navier-Stokes: Better calibration error than deterministic FNO
+  - Real weather data: Demonstrates practical applicability
+- **Metrics Reported**: CRPS, calibration error, relative L2 error
+- **Why cite**: Direct competitor for probabilistic operator learning with UQ
+
+### 3. **DGenNO: Deep Generative Neural Operator for Forward and Inverse PDE Problems** (2025)
+- **Link**: https://arxiv.org/abs/2502.06250
+- **Relevance**: Physics-aware neural operator with generative probabilistic modeling
+- **Method**: Combines neural operators with deep generative framework
+- **Application**: Both forward and inverse PDE problems
+- **Benchmark**: Multiple PDEs including Darcy flow and Burgers equation
+- **Why cite**: Alternative approach to probabilistic neural operators
+
+## Priority 2: Recent UQ Methods for Neural Operators (2024-2025)
+
+### 4. **Conformalized-DeepONet: Uncertainty Quantification with Conformal Prediction** (February 2024)
+- **Link**: https://arxiv.org/abs/2402.15406
+- **Relevance**: **GOLD STANDARD FOR CALIBRATION** - Distribution-free UQ with coverage guarantees
+- **Method**: Conformal prediction framework for neural operators
+- **Benchmark Results**:
+  - Turbulent flow: 100% empirical coverage at 95% confidence level
+  - Mean relative L2 error: 4.82%
+  - Elastoplastic deformation: 92.59% coverage, 10.72% error
+- **Key Strength**: Theoretical coverage guarantees (your EBM approach doesn't have this)
+- **Why cite**: State-of-the-art for calibrated uncertainty quantification
+
+### 5. **Distribution-Free Uncertainty Quantification in Neural Operators** (December 2024)
+- **Link**: https://arxiv.org/abs/2412.09369
+- **Method**: Conformalized Randomized Prior Operator (CRP-O)
+- **Relevance**: Combines neural operators with conformal prediction
+- **Key Feature**: Probabilistic guarantees without distributional assumptions
+- **Why cite**: Recent alternative UQ approach with theoretical guarantees
+
+### 6. **Approximate Bayesian Neural Operators (ABNO)** (2022-2024)
+- **Papers**: Multiple works on Bayesian DeepONet and FNO
+- **Method**: Variational inference or MCMC for Bayesian neural operators
+- **Benchmark**: Standard operator learning problems
+- **Key Feature**: Provides both aleatoric and epistemic uncertainty
+- **Limitation**: Computationally expensive (similar to your MCMC sampling)
+- **Why cite**: Alternative Bayesian approach to UQ in neural operators
+
+### 7. **DIVERSENO: Diverse Ensembles of Neural Operators** (ICLR 2024)
+- **Link**: https://openreview.net/forum?id=zP8cWiSxqy
+- **Method**: Ensemble-based uncertainty quantification
+- **Relevance**: Simple baseline for UQ - train multiple FNOs with different initializations
+- **Benchmark**: Multiple PDEs from PDEBench
+- **Advantages**: Easy to implement, well-calibrated for interpolation
+- **Disadvantages**: Expensive (multiple models), poor extrapolation
+- **Why cite**: Simple but effective baseline to compare against
+
+## Priority 3: Energy-Based Approaches to Neural Operators
+
+### 8. **Energy-Conserving Neural Operators (ENO)** (February 2024)
+- **Link**: https://arxiv.org/abs/2402.08166
+- **Relevance**: Uses energy formulation for physics constraints (similar philosophy to your work)
+- **Method**: Enforces energy conservation in neural operator architecture
+- **Key Difference**: Uses energy for **physics constraints**, not for **uncertainty quantification**
+- **Benchmark**: Hamiltonian systems, wave equations
+- **Why cite**: Related energy-based approach but different application
+
+### 9. **Variational Inference Neural Operators (VINO)** (2025)
+- **Link**: https://arxiv.org/abs/2501.10257
+- **Method**: Variational energy formulation for operator learning
+- **Relevance**: Energy-based framework for learning operators
+- **Application**: PDE solution with energy minimization
+- **Why cite**: Another energy-based approach to operator learning
+
+### 10. **Improved Training of Physics-Informed Networks Using Energy-Based Priors** (OpenReview)
+- **Link**: https://openreview.net/forum?id=zqkfJA6R1-r
+- **Relevance**: Uses EBM priors for physics-informed networks
+- **Key Result**: EBM priors expedite PINN convergence by 10x
+- **Difference**: Applied to PINNs not neural operators, used as prior not for UQ
+- **Why cite**: Related use of EBMs in scientific ML
+
+## Priority 4: Other Relevant Baselines
+
+### 11. **Adversarially Trained Neural Operators with Generative Models** (May 2025)
+- **Link**: https://arxiv.org/abs/2505.23106
+- **Method**: GAN-based training for neural operators
+- **Relevance**: Generative modeling approach to neural operators
+- **Key Result**: 15x reduction in energy-spectrum error for turbulent flows
+- **Application**: Overcomes oversmoothing in standard L2-trained neural operators
+- **Why cite**: Alternative generative approach (GAN vs your EBM)
+
+### 12. **Neural Operator induced Gaussian Process (NOGaP)** (2024)
+- **Link**: https://www.sciencedirect.com/science/article/abs/pii/S0045782524005218
+- **Journal**: Computer Methods in Applied Mechanics and Engineering
+- **Method**: Combines neural operators with GP framework
+- **Relevance**: Probabilistic framework with uncertainty quantification
+- **Why cite**: GP-based alternative for UQ in operator learning
+
+## Comparison Strategy
+
+### What Metrics to Report
+
+Based on these papers, you should report:
+
+1. **Accuracy Metrics** (to match PDEBench):
+   - Relative L2 error: ||u_pred - u_true||₂ / ||u_true||₂
+   - Mean Squared Error (MSE)
+   - R² coefficient
+
+2. **Uncertainty Calibration** (to match PNO, Conformalized-DeepONet):
+   - Calibration error (most important!)
+   - Continuous Ranked Probability Score (CRPS)
+   - Coverage at different confidence levels (e.g., 50%, 90%, 95%)
+   - Sharpness (average prediction interval width)
+
+3. **Physics Compliance** (your unique strength):
+   - PDE residual: ||R(u_pred)||₂ where R is PDE residual operator
+   - Boundary condition violation
+   - Conservation error (if applicable)
+
+4. **Computational Cost**:
+   - Training time
+   - Inference time per sample
+   - Number of MCMC steps needed
+
+### Expected Performance Summary
+
+Based on the papers, here's honest expectation for your FNO-EBM:
+
+| Metric              | PDEBench FNO | PNO (2025) | Conformalized-DeepONet | Your FNO-EBM (Expected) |
+|---------------------|--------------|------------|------------------------|-------------------------|
+| Relative L2 Error   | 0.05-0.10    | 0.04-0.09  | 0.048                  | **0.05-0.10** (comparable) |
+| Calibration Error   | N/A          | ~0.05      | <0.05                  | **~0.05-0.08** (competitive) |
+| Coverage (95%)      | N/A          | ~92%       | ~95%                   | **~90-94%** (good) |
+| Physics Residual    | Moderate     | Moderate   | High                   | **Low** (your strength) |
+| Inference Time      | Fast         | Fast       | Fast                   | **Slow** (MCMC sampling) |
+
+### Your Honest Positioning
+
+**What to emphasize**:
+1. ✅ **Physics compliance**: Lower PDE residuals than all baselines
+2. ✅ **Interpretable uncertainty**: Energy-based framework is more interpretable than dropout/ensembles
+3. ✅ **Flexible architecture**: Multiple EBM backbones (MLP/KAN/GNN)
+4. ✅ **Modular design**: Can swap FNO for other neural operators
+
+**What to acknowledge**:
+1. ⚠️ **No coverage guarantees**: Unlike Conformalized-DeepONet, no theoretical guarantees
+2. ⚠️ **Higher computational cost**: MCMC sampling is slower than dropout/ensemble
+3. ⚠️ **Accuracy comparable not better**: Similar MSE/L2 error to baselines
+4. ⚠️ **Calibration competitive not superior**: Similar calibration to PNO
+
+**Your niche**: *"Physics-informed probabilistic operator learning when physical constraints are critical and interpretable uncertainty is valued, even at higher computational cost."*
+
+
+# Sanity checks result  (Sun 19 Oct 2025)
 
 ● Short Answer: YES, but with caveats
 
@@ -1188,3 +1359,238 @@ Let me give you concrete examples.
   - Measure noise from real data if available
 
   ---
+
+
+# Why the physics loss dominating total loss?
+
+Excellent question! Let me give you the mathematical reasoning for why physics loss dominates when data is normalized.
+
+  ---
+  Mathematical Explanation: Why Physics Loss Explodes on Normalized Data
+
+  The Core Problem: Derivative Scaling
+
+  Setup
+
+  Original Darcy equation:
+  -∇·(a(x)∇u(x)) = f(x)
+
+  Data normalization:
+  u_normalized = (u - u_mean) / u_std
+
+  where for your Darcy flow: u_std ≈ 0.016 (very small!)
+
+  ---
+  Derivative Chain Rule Analysis
+
+  Spatial derivatives transform as:
+
+  ∂u_normalized/∂x = ∂/∂x[(u - u_mean)/u_std]
+                   = (1/u_std) · ∂u/∂x
+                   = (1/0.016) · ∂u/∂x
+                   ≈ 62.5 · ∂u/∂x
+
+  Key insight: Derivatives are inversely proportional to the normalization scale!
+
+  ---
+  Physics Loss Scaling
+
+  Original physics residual (unnormalized):
+
+  R_original = -∇·(a∇u) - f
+
+  Magnitude: If u ~ O(0.01), then:
+  - ∇u ~ O(0.01/L) where L=1 (domain size)
+  - ∇·(a∇u) ~ O(0.01)
+  - R_original ~ O(0.01)
+
+  Physics loss (unnormalized):
+  L_phys_original = ||R_original||² ~ O(0.0001)
+
+  ---
+  Normalized physics residual:
+
+  When you normalize u → u_normalized:
+
+  ∇u_normalized = (1/u_std) · ∇u = 62.5 · ∇u
+
+  So the residual becomes:
+  R_normalized = -∇·(a∇u_normalized) - f_normalized
+               = -∇·(a · 62.5∇u) - f_normalized
+               = 62.5 · [-∇·(a∇u)] - f_normalized
+
+  But wait! You're likely not normalizing the coefficient a or source f, only the solution u. This creates asymmetry:
+
+  R_normalized ≈ 62.5 · [-∇·(a∇u)] - f_unnormalized
+               └─ scaled up by 1/u_std ─┘
+
+  Magnitude:
+  ||R_normalized|| ~ 62.5 × ||R_original|| = 62.5 × 0.01 = 0.625
+
+  Physics loss (normalized):
+  L_phys_normalized = ||R_normalized||² 
+                    ~ (62.5)² × ||R_original||²
+                    = 3906 × L_phys_original
+                    = 3906 × 0.0001
+                    = 0.39
+
+  Result: Physics loss is ~4000× larger on normalized data!
+
+  ---
+  Data Loss Scaling
+
+  Original data loss:
+
+  L_data_original = ||u_pred - u_true||²
+                  ~ O(0.016²) = O(0.000256)
+
+  Normalized data loss:
+
+  L_data_normalized = ||u_pred_normalized - u_true_normalized||²
+
+  After normalization: std(u_normalized) = 1, so:
+  L_data_normalized ~ O(1²) = O(1)
+
+  But in practice, with good training:
+  L_data_normalized ~ 0.0005  (0.05% of variance)
+
+  ---
+  The Imbalance: Complete Mathematical Derivation
+
+  Total loss comparison:
+
+  Unnormalized case:
+  L_total = L_data + λ · L_phys
+          = 0.000256 + λ × 0.0001
+
+  For balance: λ · L_phys ~ L_data
+  λ = 0.000256 / 0.0001 = 2.56
+  So λ ~ O(1) is reasonable.
+
+  ---
+  Normalized case:
+  L_total = L_data_normalized + λ · L_phys_normalized
+          = 0.0005 + λ × 0.39
+
+  For balance: λ · L_phys ~ L_data
+  λ = 0.0005 / 0.39 ≈ 0.0013
+
+  You need λ ~ 0.001 not λ ~ 1!
+
+  ---
+  Why Your λ = 0.00009 Works
+
+  Your physics loss is actually even larger than my estimate:
+
+  λ · L_phys = L_data
+  0.00009 × L_phys = 0.0005
+  L_phys = 0.0005 / 0.00009 ≈ 5.5
+
+  This means your physics residual is VERY large (~5.5), confirming the derivative amplification!
+
+  ---
+  General Formula: Optimal Lambda_phys
+
+  Scaling relationship:
+
+  λ_normalized = λ_original × (u_std)²
+
+  For your case:
+  λ_normalized = λ_original × (0.016)²
+               = λ_original × 0.000256
+
+  Example:
+  - If λ_original = 1.0 would work on unnormalized data
+  - Then λ_normalized = 1.0 × 0.000256 = 0.000256 on normalized data
+
+  Your λ = 0.00009 is even smaller, suggesting physics residuals are extra large (possibly due to not normalizing a or f).
+
+  ---
+  The Root Cause: Three Factors
+
+  1. Derivative Amplification
+
+  ∇u_normalized ~ (1/u_std) · ∇u = 62.5 · ∇u
+
+  2. Quadratic Scaling in Loss
+
+  ||∇u_normalized||² ~ (1/u_std)² · ||∇u||² = 3906 · ||∇u||²
+
+  3. Asymmetric Normalization
+
+  You normalize u but likely not a and f, creating:
+  -∇·(a∇u_normalized) - f
+  = -(1/u_std)∇·(a∇u) - f
+    └─ scaled ─┘   └─ unscaled! ─┘
+
+  This mismatch makes the residual even worse!
+
+  ---
+  Solutions (In Order of Best Practice)
+
+  ✅ Option 1: Scale lambda_phys (What you're doing)
+
+  lambda_phys = 0.00009  # Scale down by (u_std)² ≈ 2.5e-4
+
+  Pros: Simple, works
+  Cons: Non-intuitive tiny values
+
+  ---
+  ✅ Option 2: Compute physics loss on UNNORMALIZED data
+
+  ## Denormalize predictions first
+  u_pred_real = u_pred * u_std + u_mean
+
+  ## Then compute physics residual
+  residual = compute_residual(u_pred_real, a, f)  # Original scale
+  physics_loss = torch.mean(residual**2)
+
+  ## Now lambda can be O(1)
+  total_loss = data_loss + 1.0 * physics_loss
+
+  Pros: Intuitive lambda values, physically meaningful
+  Cons: Need to denormalize during training
+
+  ---
+  ✅ Option 3: Normalize physics residual to match data loss scale
+
+  physics_loss_raw = torch.mean(residual**2)
+  physics_loss_normalized = physics_loss_raw / (u_std**2)
+
+  total_loss = data_loss + lambda_phys * physics_loss_normalized
+
+  Pros: Both losses on same scale
+  Cons: Extra normalization step
+
+  ---
+  ✅ Option 4: Adaptive weighting
+
+  ## Automatically balance losses
+  data_loss_val = torch.mean((u_pred - u_true)**2)
+  physics_loss_val = torch.mean(residual**2)
+
+  ## Make them equal magnitude
+  lambda_phys = data_loss_val.detach() / (physics_loss_val.detach() + 1e-8)
+
+  total_loss = data_loss + lambda_phys * physics_loss
+
+  Pros: Automatic balancing
+  Cons: Lambda changes during training
+
+  ---
+  Summary: The Mathematical Answer
+
+  Your physics loss explodes because:
+
+  1. Normalization amplifies derivatives by 1/u_std = 62.5
+  2. Squared terms in loss amplify by (1/u_std)² ≈ 3906
+  3. Asymmetric normalization (normalizing u but not a, f) creates larger residuals
+
+  Your solution (tiny lambda) is mathematically correct:
+  λ_normalized = λ_original × (u_std)²
+  0.00009 ≈ 0.35 × (0.016)²
+
+  This compensates for the ~4000× amplification of physics loss!
+
+  Bottom line: There's nothing wrong with your approach - it's the mathematically rigorous solution to handle normalized data with physics constraints. The "strange" tiny lambda
+  is actually the correct scaling factor given your normalization scheme

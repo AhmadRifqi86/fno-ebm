@@ -37,7 +37,7 @@ class PDEDataset(Dataset):
 
         # Normalize output data (critical for small-scale PDEs like Darcy flow)
         self.normalize_output = normalize_output
-        if normalize_output:
+        if normalize_output:    #
             self.u_mean = U.mean()
             self.u_std = U.std()
             U_normalized = (U - self.u_mean) / self.u_std

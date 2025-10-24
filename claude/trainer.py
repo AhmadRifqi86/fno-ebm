@@ -28,7 +28,7 @@ class FNO_EBM(nn.Module):
         self.u_fno = fno_model
         self.V_ebm = ebm_model
 
-    def energy(self, u, x, u_fno=None):
+    def energy(self, u, x, training=False,u_fno=None):
         """
         Compute total energy E(u, X)
 
@@ -48,8 +48,10 @@ class FNO_EBM(nn.Module):
 
         # Potential term: captures uncertainty structure
         potential_term = self.V_ebm(u, x)
-
-        return quadratic_term + potential_term
+        if training:
+            return potential_term
+        else:
+            return quadratic_term + potential_term
 
     def forward(self, x):
         """Direct FNO prediction"""
@@ -61,14 +63,46 @@ class FNO_EBM(nn.Module):
 # ============================================================================
 
 class Trainer:
-    def __init__(self, model: FNO_EBM,phy_loss: PhysicsLossFn, train_loader, val_loader, config: Config):
+    def __init__(self, model: FNO_EBM, phy_loss: PhysicsLossFn,
+                 train_loader, val_loader, config: Config,
+                 ebm_train_loader=None, ebm_val_loader=None):
         """
-        Initialize trainer with models, data loaders and configuration
+        Initialize trainer with models, data loaders and configuration.
+
+        Supports two training modes:
+        1. Single-dataset mode (train_loader only):
+           - Both FNO and EBM train on same noisy data
+           - Physics loss should be disabled (lambda_phys=0)
+
+        2. Dual-dataset mode (provide ebm_*_loader):
+           - FNO trains on clean data (train_loader) with physics loss
+           - EBM trains on noisy data (ebm_*_loader) for uncertainty
+           - Physics loss can be enabled (lambda_phys>0)
+
+        Args:
+            model: FNO_EBM combined model
+            phy_loss: Physics loss function
+            train_loader: Dataloader for FNO training
+            val_loader: Dataloader for FNO validation
+            config: Configuration object
+            ebm_train_loader: Optional separate dataloader for EBM training (noisy data)
+            ebm_val_loader: Optional separate dataloader for EBM validation (noisy data)
         """
         self.fno_model = model.u_fno
         self.ebm_model = model.V_ebm
-        self.train_loader = train_loader
-        self.val_loader = val_loader
+
+        # FNO dataloaders (clean data in dual-dataset mode)
+        self.fno_train_loader = train_loader
+        self.fno_val_loader = val_loader
+
+        # EBM dataloaders (noisy data in dual-dataset mode)
+        # If not provided, use same as FNO (single-dataset mode)
+        self.ebm_train_loader = ebm_train_loader if ebm_train_loader is not None else train_loader
+        self.ebm_val_loader = ebm_val_loader if ebm_val_loader is not None else val_loader
+
+        # Detect training mode
+        self.dual_dataset_mode = (ebm_train_loader is not None)
+
         self.config = config
         self.accumulation_steps = getattr(config, 'accumulation_steps', 1)
 
@@ -134,10 +168,18 @@ class Trainer:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-    def checkpoint(self, epoch, val_loss, type):
+    def checkpoint(self, epoch, val_loss, stage_type, is_best=False):
         """
-        Save model checkpoint
+        Save model checkpoint - only keeps best and current for each stage.
+
+        Args:
+            epoch: Current epoch number
+            val_loss: Validation loss
+            stage_type: 'fno' or 'ebm'
+            is_best: Whether this is the best model so far
         """
+        os.makedirs(self.config.checkpoint_dir, exist_ok=True)
+
         checkpoint = {
             'epoch': epoch,
             'fno_model': self.fno_model.state_dict(),
@@ -146,21 +188,22 @@ class Trainer:
             'ebm_optimizer': self.ebm_optimizer.state_dict(),
             'val_loss': val_loss,
         }
-        
-        checkpoint_path = os.path.join(
-            self.config.checkpoint_dir, 
-            f'checkpoint_epoch_{type}_{epoch}.pt'
+
+        # Save current epoch checkpoint (overwrites previous current)
+        current_path = os.path.join(
+            self.config.checkpoint_dir,
+            f'current_{stage_type}.pt'
         )
-        #delete the previous checkpoint of the same type
-        torch.save(checkpoint, checkpoint_path)
-        
-        if val_loss < self.best_val_loss:
-            self.best_val_loss = val_loss
+        torch.save(checkpoint, current_path)
+
+        # Save best model if this is the best
+        if is_best:
             best_path = os.path.join(
                 self.config.checkpoint_dir,
-                'best_model.pt'
+                f'best_model_{stage_type}.pt'
             )
             torch.save(checkpoint, best_path)
+            self.logger.info(f"Saved best {stage_type.upper()} model (epoch {epoch}, val_loss={val_loss:.6f})")
 
     def resume(self):
         """
@@ -204,23 +247,32 @@ class Trainer:
         
         # EBM Training Step
         self.ebm_optimizer.zero_grad()
-        
+
         # Positive phase
         pos_energy = self.ebm_model(x, y)
-        
-        # Negative phase (MCMC sampling)
-        y_neg = y.clone().detach()
+
+        # Negative phase (MCMC sampling with Langevin dynamics)
+        # Initialize from FNO prediction (not ground truth!)
+        with torch.no_grad():
+            y_neg = self.fno_model(x).clone().detach()
         y_neg.requires_grad = True
-        
+
+        noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
+
         for _ in range(self.config.mcmc_steps):
             y_neg.requires_grad = True
             neg_energy = self.ebm_model(x, y_neg)
             neg_grad = torch.autograd.grad(
-                neg_energy.sum(), 
+                neg_energy.sum(),
                 y_neg,
                 create_graph=True
             )[0]
-            y_neg = y_neg - self.config.mcmc_step_size * neg_grad
+
+            # Langevin update: gradient descent + noise
+            with torch.no_grad():
+                noise = torch.randn_like(y_neg) * noise_scale
+                y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
+
             y_neg = y_neg.detach()
         
         neg_energy = self.ebm_model(x, y_neg)
@@ -257,7 +309,7 @@ class Trainer:
         total_val_loss = 0
         
         with torch.no_grad():
-            for x, y in self.val_loader:
+            for x, y in self.fno_val_loader:
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 fno_output = self.fno_model(x)
                 
@@ -267,15 +319,15 @@ class Trainer:
                 # Physics loss
                 x_coords = x[..., 0].requires_grad_(True)
                 y_coords = x[..., 1].requires_grad_(True)
-                residual = self.phy_loss_fn(fno_output, x_coords, y_coords)
-                #residual = compute_pde_residual(fno_output, x_coords, y_coords)
+                # Pass full x_grid for Darcy physics loss
+                residual = self.phy_loss_fn(fno_output, x_coords, y_coords, x_grid=x)
                 physics_loss = torch.mean(residual**2)
                 
                 # Total validation loss
                 val_loss = data_loss + self.lambda_phys * physics_loss
                 total_val_loss += val_loss.item()
                 
-        avg_val_loss = total_val_loss / len(self.val_loader)
+        avg_val_loss = total_val_loss / len(self.fno_val_loader)
         return avg_val_loss
     
     def validate_ebm(self):
@@ -285,9 +337,10 @@ class Trainer:
         A lower (more negative) loss is better.
         """
         self.ebm_model.eval()
+        self.fno_model.eval()
         total_ebm_val_loss = 0
 
-        for x, y in self.val_loader:
+        for x, y in self.ebm_val_loader:
             x, y = x.to(self.config.device), y.to(self.config.device)
 
             # Positive phase (no grad needed)
@@ -295,7 +348,9 @@ class Trainer:
                 pos_energy = self.ebm_model(x, y)
 
             # Negative phase (MCMC sampling - needs gradients)
-            y_neg = y.clone().detach()
+            # Initialize from FNO prediction (consistent with training!)
+            with torch.no_grad():
+                y_neg = self.fno_model(x).clone().detach()
             noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
 
             for _ in range(self.config.mcmc_steps):
@@ -313,7 +368,7 @@ class Trainer:
                 ebm_loss = pos_energy.mean() - neg_energy.mean()
                 total_ebm_val_loss += ebm_loss.item()
 
-        avg_ebm_val_loss = total_ebm_val_loss / len(self.val_loader)
+        avg_ebm_val_loss = total_ebm_val_loss / len(self.ebm_val_loader)
         return avg_ebm_val_loss
 
     def train_no_stage(self):
@@ -370,42 +425,47 @@ class Trainer:
     def train_step_fno(self, x, y):
         """
         Single training step for FNO with both data and physics losses
+
+        Returns:
+            tuple: (total_loss, data_loss, physics_loss) as floats
         """
         #self.fno_optimizer.zero_grad()
-        
+
         # Forward pass
         fno_output = self.fno_model(x)
-        
+
         # Data loss
         data_loss = self.fno_criterion(fno_output, y)
-        
+
         # Physics loss (PDE residual)
         x_coords = x[..., 0].requires_grad_(True)
         y_coords = x[..., 1].requires_grad_(True)
-        residual = self.phy_loss_fn(fno_output, x_coords, y_coords)
-        #residual = compute_pde_residual(fno_output, x_coords, y_coords)
+        # Pass full x_grid for Darcy physics loss (includes permeability in x[..., 2])
+        residual = self.phy_loss_fn(fno_output, x_coords, y_coords, x_grid=x)
         physics_loss = torch.mean(residual**2)
-        
+
         # Total loss
         total_loss = data_loss + self.lambda_phys * physics_loss
         total_loss_scaled = total_loss / self.accumulation_steps
 
         total_loss_scaled.backward()
         #self.fno_optimizer.step()
-        
-        return total_loss.item()
+
+        return total_loss.item(), data_loss.item(), physics_loss.item()
 
     def train_step_ebm(self, x, y, langevin=True):
         """
         Single training step for EBM only
         """
         #self.ebm_optimizer.zero_grad()
-        
+
         # Positive phase
         pos_energy = self.ebm_model(x, y)
-        
+
         # Negative phase (MCMC sampling)
-        y_neg = y.clone().detach()
+        # Initialize from FNO prediction (not ground truth!)
+        with torch.no_grad():
+            y_neg = self.fno_model(x).clone().detach()
         y_neg.requires_grad = True
         
         for _ in range(self.config.mcmc_steps):   #Apakah ini langevin dynamics tanpa function
@@ -434,43 +494,62 @@ class Trainer:
 
     def train_fno(self, num_epochs):
         """
-        Train FNO model only
+        Train FNO model only.
+
+        Uses fno_train_loader (clean data in dual-dataset mode, noisy data otherwise).
         """
-        self.logger.info("Starting FNO training...")
+        mode_str = "clean data" if self.dual_dataset_mode else "single dataset (noisy)"
+        self.logger.info(f"Starting FNO training on {mode_str}...")
         best_val_loss = float('inf')
-        
+
         for epoch in range(num_epochs):
             self.fno_model.train()
-            epoch_loss = 0
-            
-            loop = tqdm(self.train_loader)
+            epoch_total_loss = 0
+            epoch_data_loss = 0
+            epoch_physics_loss = 0
+
+            loop = tqdm(self.fno_train_loader)  # Use FNO-specific loader
             for batch_idx, (x, y) in enumerate(loop):
                 x, y = x.to(self.config.device), y.to(self.config.device)
-                loss = self.train_step_fno(x, y)
-                epoch_loss += loss
+                total_loss, data_loss, physics_loss = self.train_step_fno(x, y)
+                epoch_total_loss += total_loss
+                epoch_data_loss += data_loss
+                epoch_physics_loss += physics_loss
 
                 if (batch_idx + 1) % self.accumulation_steps == 0:
                     self.fno_optimizer.step()  #apply gradient update
                     self.fno_optimizer.zero_grad()  #reset gradient to zero
-                
+
                 loop.set_description(f"FNO Training Epoch [{epoch}/{num_epochs}]")
-                loop.set_postfix(fno_loss=loss)
-            
+                loop.set_postfix(
+                    total=f"{total_loss:.4f}",
+                    data=f"{data_loss:.4f}",
+                    phys=f"{physics_loss:.4f}"
+                )
+
             val_loss = self.validate()
-            avg_epoch_loss = epoch_loss / len(self.train_loader)
-            
+            avg_total_loss = epoch_total_loss / len(self.fno_train_loader)
+            avg_data_loss = epoch_data_loss / len(self.fno_train_loader)
+            avg_physics_loss = epoch_physics_loss / len(self.fno_train_loader)
+
             self.logger.info(
-                f"FNO Epoch {epoch}: Train Loss={avg_epoch_loss:.4f}, "
-                f"Val Loss={val_loss:.4f}"
+                f"FNO Epoch {epoch}: "
+                f"Total={avg_total_loss:.6f}, "
+                f"Data={avg_data_loss:.6f}, "
+                f"Physics={avg_physics_loss:.6f}, "
+                f"Val={val_loss:.6f}"
             )
 
             if self.fno_scheduler:
                 self.fno_scheduler.step()
-            
-            if val_loss < best_val_loss:
+
+            # Save checkpoint every epoch
+            is_best = val_loss < best_val_loss
+            if is_best:
                 best_val_loss = val_loss
-                self.checkpoint(epoch, val_loss,'fno')
-            
+
+            self.checkpoint(epoch, val_loss, 'fno', is_best=is_best)
+
             self.early_stopper_fno(val_loss)
             if self.early_stopper_fno.early_stop:
                 self.logger.info("EARLY STOPPING FNO TRIGGERED, NO IMPROVEMENT IN SEVERAL EPOCHS")
@@ -480,16 +559,18 @@ class Trainer:
     def train_ebm(self, num_epochs):
         """
         Train EBM model only, with checkpointing and early stopping.
+
+        Uses ebm_train_loader (noisy data in dual-dataset mode, same as FNO otherwise).
         """
+        mode_str = "noisy observations" if self.dual_dataset_mode else "same dataset as FNO"
+        self.logger.info(f"Starting EBM training on {mode_str}...")
         best_val_loss = float('inf')
-        self.logger.info("Starting EBM training...")
-        # Reset early stopper for the EBM stage
-        
+
         for epoch in range(num_epochs):
             self.ebm_model.train()
             epoch_loss = 0
-            
-            loop = tqdm(self.train_loader)
+
+            loop = tqdm(self.ebm_train_loader)  # Use EBM-specific loader
             for batch_idx, (x, y) in enumerate(loop):
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 loss = self.train_step_ebm(x, y)
@@ -498,13 +579,13 @@ class Trainer:
                 if (batch_idx + 1) % self.accumulation_steps == 0:
                     self.ebm_optimizer.step()
                     self.ebm_optimizer.zero_grad()
-                
+
                 loop.set_description(f"EBM Training Epoch [{epoch+1}/{num_epochs}]")
                 loop.set_postfix(ebm_loss=loss)
-            
-            # EBM Validation
+
+            # EBM Validation (uses EBM val loader)
             val_loss = self.validate_ebm()
-            avg_epoch_loss = epoch_loss / len(self.train_loader)
+            avg_epoch_loss = epoch_loss / len(self.ebm_train_loader)
             
             self.logger.info(
                 f"EBM Epoch {epoch+1}: Train Loss={avg_epoch_loss:.4f}, "
@@ -514,10 +595,12 @@ class Trainer:
             if self.ebm_scheduler:
                 self.ebm_scheduler.step()
 
-            # Checkpoint and Early Stopping
-            if val_loss < best_val_loss:
+            # Save checkpoint every epoch
+            is_best = val_loss < best_val_loss
+            if is_best:
                 best_val_loss = val_loss
-                self.checkpoint(epoch, val_loss, 'ebm')
+
+            self.checkpoint(epoch, val_loss, 'ebm', is_best=is_best)
 
             self.early_stopper_ebm(val_loss)
             if self.early_stopper_ebm.early_stop:
