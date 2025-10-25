@@ -28,39 +28,53 @@ class FNO_EBM(nn.Module):
         self.u_fno = fno_model
         self.V_ebm = ebm_model
 
-    def energy(self, u, x, training=False, u_fno=None):
+    def energy(self, u, x, training=False, use_anchor_in_training=False, u_fno=None, sigma_squared_train=None, sigma_squared_inference=None):
         """
         Compute total energy E(u, X)
 
-        CRITICAL: Uses different formulations for training vs inference
-        - Training: E = V_EBM(u, x) only (EBM learns full distribution)
-        - Inference: E = ||u - u_FNO||²/2 + V_EBM(u, x) (anchor biases toward FNO)
+        Supports two modes:
+        - Mode 1 (use_anchor_in_training=False):
+            Training: E = V_EBM(u, x) only
+            Inference: E = ||u - u_FNO||²/(2*σ²) + V_EBM(u, x)
+        - Mode 2 (use_anchor_in_training=True):
+            Training: E = ||u - u_FNO||²/(2*σ²_train) + V_EBM(u, x)
+            Inference: E = ||u - u_FNO||²/(2*σ²_inference) + V_EBM(u, x)
 
         Args:
             u: candidate solution (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
-            training: if True, use training energy (V_EBM only)
-            u_fno: pre-computed FNO solution (optional, only used for inference)
+            training: if True, we're in training mode
+            use_anchor_in_training: if True, use FNO anchor even during training
+            u_fno: pre-computed FNO solution (optional)
+            sigma_squared_train: variance for training anchor (default: 100.0, weak anchor)
+            sigma_squared_inference: variance for inference anchor (default: 1.0, strong anchor)
         Returns:
             E: total energy (batch,)
         """
         # Potential term: learned energy function
         potential_term = self.V_ebm(u, x)
 
-        if training:
-            # TRAINING: Use only V_EBM to learn the full energy landscape
-            # This follows standard EBM training (Du & Mordatch 2019)
+        # Decide whether to use anchor
+        use_anchor = (not training) or (training and use_anchor_in_training)
+
+        if not use_anchor:
+            # Mode 1 Training: V_EBM only (standard EBM training)
             return potential_term
         else:
-            # INFERENCE: Add quadratic anchor to bias samples toward FNO prediction
-            # This prevents MCMC from wandering too far from physics-informed solution
+            # Mode 1 Inference OR Mode 2 (Training/Inference with anchor)
             if u_fno is None:
                 with torch.no_grad():
                     u_fno = self.u_fno(x)
 
             # Quadratic term: anchors to FNO solution
             # sigma_squared controls how tightly samples are pulled toward FNO
-            sigma_squared = 1.0  # Can be tuned: larger = weaker anchor
+            if training:
+                # Training with anchor: use weak anchor by default
+                sigma_squared = sigma_squared_train if sigma_squared_train is not None else 100.0
+            else:
+                # Inference: use strong anchor by default
+                sigma_squared = sigma_squared_inference if sigma_squared_inference is not None else 1.0
+
             quadratic_term = 0.5 / sigma_squared * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
 
             return quadratic_term + potential_term
@@ -469,33 +483,64 @@ class Trainer:
 
         return total_loss.item(), data_loss.item(), physics_loss.item()
 
-    def train_step_ebm(self, x, y, langevin=True):
+    def train_step_ebm(self, x, y, langevin=True, use_anchor=None):
         """
         Single training step for EBM only
 
-        During TRAINING: E(u, x) = V_EBM(u, x) only (standard EBM training)
-        During INFERENCE: E(u, x) = 0.5 * ||u - u_FNO(x)||² + V_EBM(u, x)
+        Supports two modes (controlled by use_anchor flag):
+        - Mode 1 (use_anchor=False): E_train = V_EBM only, E_inference = quadratic + V_EBM
+        - Mode 2 (use_anchor=True): E_train = weak quadratic + V_EBM, E_inference = strong quadratic + V_EBM
 
-        This follows Du & Mordatch 2019 - let EBM learn full energy landscape,
-        then add FNO anchor during inference to bias samples toward physics.
+        Args:
+            x: input coordinates
+            y: ground truth
+            langevin: if True, use Langevin dynamics (with noise)
+            use_anchor: if True, use FNO anchor during training. If None, read from config.
         """
         #self.ebm_optimizer.zero_grad()
 
+        # Read use_anchor from config if not provided
+        if use_anchor is None:
+            use_anchor = getattr(self.config, 'use_anchor_in_ebm_training', False)
+
+        # Read sigma values from config
+        sigma_squared_train = getattr(self.config, 'sigma_squared_train', 100.0)
+        sigma_squared_inference = getattr(self.config, 'sigma_squared_inference', 1.0)
+
+        # Pre-compute FNO if using anchor
+        if use_anchor:
+            with torch.no_grad():
+                u_fno = self.fno_model(x)
+        else:
+            u_fno = None
+
         # Positive phase: compute energy of ground truth
-        # training=True means using V_EBM(y, x) only (no FNO anchor)
-        pos_energy = self.model.energy(y, x, training=True)
+        pos_energy = self.model.energy(
+            y, x,
+            training=True,
+            use_anchor_in_training=use_anchor,
+            u_fno=u_fno,
+            sigma_squared_train=sigma_squared_train,
+            sigma_squared_inference=sigma_squared_inference
+        )
 
         # Negative phase (MCMC sampling)
         # Initialize from CORRUPTED ground truth to create diverse negative samples
-        # This forces EBM to learn meaningful energy discrimination
-        y_neg = y + 0.2 * torch.randn_like(y)  # Add significant noise to ground truth
+        y_neg = y + 0.2 * torch.randn_like(y)
         y_neg = y_neg.detach()
         y_neg.requires_grad = True
 
-        # Langevin MCMC to find low-energy samples under V_EBM only
+        # Langevin MCMC to find low-energy samples
         for _ in range(self.config.mcmc_steps):
             y_neg.requires_grad = True
-            neg_energy = self.model.energy(y_neg, x, training=True)
+            neg_energy = self.model.energy(
+                y_neg, x,
+                training=True,
+                use_anchor_in_training=use_anchor,
+                u_fno=u_fno,
+                sigma_squared_train=sigma_squared_train,
+                sigma_squared_inference=sigma_squared_inference
+            )
             neg_grad = torch.autograd.grad(
                 neg_energy.sum(),
                 y_neg,
@@ -511,9 +556,16 @@ class Trainer:
             y_neg = y_neg.detach()
 
         # Final negative energy
-        neg_energy = self.model.energy(y_neg, x, training=True)
+        neg_energy = self.model.energy(
+            y_neg, x,
+            training=True,
+            use_anchor_in_training=use_anchor,
+            u_fno=u_fno,
+            sigma_squared_train=sigma_squared_train,
+            sigma_squared_inference=sigma_squared_inference
+        )
 
-        # Contrastive divergence loss: push down positive energy, push up negative energy
+        # Contrastive divergence loss
         ebm_loss = pos_energy.mean() - neg_energy.mean()
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
