@@ -53,6 +53,11 @@ use_anchor_in_ebm_training: false  # If true: use FNO anchor during training (Mo
 sigma_squared_train: 100.0         # Variance for training anchor (weak anchor, only used if use_anchor_in_ebm_training=true)
 sigma_squared_inference: 1.0       # Variance for inference anchor (strong anchor, always used during inference)
 
+# Persistent Contrastive Divergence (PCD)
+use_pcd: true                      # Enable PCD replay buffer (highly recommended!)
+pcd_buffer_size: 1000              # Maximum number of negative samples to store (1000 = ~16k parameters at 64x64)
+pcd_reinit_prob: 0.05              # Probability of fresh initialization instead of replay buffer (5% = 95% from buffer)
+
 # Data and Paths
 data_dir: './data'
 checkpoint_dir: './checkpoints'

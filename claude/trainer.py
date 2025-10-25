@@ -188,12 +188,22 @@ class Trainer:
             verbose=True
         )
         self.early_stopper_ebm = EarlyStopping(
-            patience=config.patience, 
+            patience=config.patience,
             verbose=True
         )
+
+        # Persistent Contrastive Divergence (PCD) replay buffer
+        self.use_pcd = getattr(config, 'use_pcd', True)  # Enable PCD by default
+        self.pcd_buffer_size = getattr(config, 'pcd_buffer_size', 1000)
+        self.pcd_reinit_prob = getattr(config, 'pcd_reinit_prob', 0.05)  # 5% fresh samples
+        self.replay_buffer = []  # Store (x, y_neg) tuples for PCD
+
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
+
+        if self.use_pcd:
+            self.logger.info(f"PCD enabled: buffer_size={self.pcd_buffer_size}, reinit_prob={self.pcd_reinit_prob}")
 
     def checkpoint(self, epoch, val_loss, stage_type, is_best=False):
         """
@@ -524,9 +534,24 @@ class Trainer:
             sigma_squared_inference=sigma_squared_inference
         )
 
-        # Negative phase (MCMC sampling)
-        # Initialize from CORRUPTED ground truth to create diverse negative samples
-        y_neg = y + 0.2 * torch.randn_like(y)
+        # Negative phase (MCMC sampling with PCD)
+        batch_size = x.shape[0]
+
+        if self.use_pcd and len(self.replay_buffer) > 0 and np.random.random() > self.pcd_reinit_prob:
+            # PCD: Initialize from replay buffer (persistent chains)
+            # Randomly sample from buffer
+            buffer_indices = np.random.choice(len(self.replay_buffer), size=min(batch_size, len(self.replay_buffer)), replace=False)
+            y_neg = torch.stack([self.replay_buffer[i][1] for i in buffer_indices]).to(x.device)
+
+            # If buffer smaller than batch, pad with corrupted ground truth
+            if y_neg.shape[0] < batch_size:
+                n_missing = batch_size - y_neg.shape[0]
+                y_neg_extra = y[:n_missing] + 0.2 * torch.randn_like(y[:n_missing])
+                y_neg = torch.cat([y_neg, y_neg_extra], dim=0)
+        else:
+            # Standard CD: Initialize from corrupted ground truth
+            y_neg = y + 0.2 * torch.randn_like(y)
+
         y_neg = y_neg.detach()
         y_neg.requires_grad = True
 
@@ -564,6 +589,19 @@ class Trainer:
             sigma_squared_train=sigma_squared_train,
             sigma_squared_inference=sigma_squared_inference
         )
+
+        # Update PCD replay buffer with new negative samples
+        if self.use_pcd:
+            # Store (x, y_neg) pairs in buffer
+            for i in range(batch_size):
+                self.replay_buffer.append((
+                    x[i].detach().cpu(),
+                    y_neg[i].detach().cpu()
+                ))
+
+            # Keep buffer size manageable (FIFO)
+            if len(self.replay_buffer) > self.pcd_buffer_size:
+                self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
 
         # Contrastive divergence loss
         ebm_loss = pos_energy.mean() - neg_energy.mean()

@@ -24,8 +24,10 @@
 ## Baseline Paper and Reference Paper [PLAN] [Thu 23 Oct 2025]  
 ## Download dataset PDEBench, Command [PLAN] [Fri 24 Oct 2025]
 ## Training with mcmc_steps set to 200 and 0.01
+## Maybe i should try using torchebm library [PLAN] [Mon 27 Oct 2025]
 ## Create training automation script so i could leave the laptop
 ## Test using other synthetic PDE for single and separated data [PLAN] [Mon 27 Oct 2025]
+## Training FNO model using EBM pos-neg sampling and contrastive divergence loss (plug FNO model into EBM training regime)[FAR] 
 wget https://darus.uni-stuttgart.de/api/access/datafile/133139 \
        -O data/pdebench/2D_DarcyFlow_beta1.0_Train.hdf5
   wget https://darus.uni-stuttgart.de/api/access/datafile/133140 \
@@ -40,6 +42,74 @@ wget https://darus.uni-stuttgart.de/api/access/datafile/133139 \
   4. Diagnostic check (#10) - See what was actually learned
   5. If still fails: Convolutional EBM (#4) - Architectural change
   6. If desperate: Persistent CD (#7) - More advanced technique
+
+# Recommendation todo for EBM (25 Oct 2025)
+Recommended Solutions (in order of impact):
+
+  Solution 1: Implement Persistent Contrastive Divergence (HIGHEST IMPACT)
+
+  class Trainer:
+      def __init__(self, ...):
+          # Add replay buffer
+          self.replay_buffer = []  # Store previous negatives
+
+      def train_step_ebm(self, x, y):
+          # Initialize negatives from replay buffer (80%) + noise (20%)
+          if len(self.replay_buffer) > 0 and random.random() < 0.8:
+              y_neg = self.replay_buffer.pop(0)  # Reuse old negative
+          else:
+              y_neg = torch.randn_like(y)  # Fresh random sample
+
+          # Run MCMC
+          for _ in range(mcmc_steps):
+              # ... langevin dynamics ...
+
+          # Store back to buffer
+          self.replay_buffer.append(y_neg.detach())
+          if len(self.replay_buffer) > 1000:  # Keep buffer size manageable
+              self.replay_buffer.pop(0)
+
+  This is THE KEY missing piece!
+
+  Solution 2: Try Single-Dataset Mode (SECOND HIGHEST IMPACT)
+
+  Stop using dual-dataset mode entirely:
+  # Both FNO and EBM train on SAME noisy data
+  trainer = Trainer(
+      model=model,
+      train_loader=noisy_data_loader,  # Same for both!
+      ebm_train_loader=None  # Don't provide separate loader
+  )
+
+  This eliminates the distribution mismatch.
+
+  Solution 3: Better Negative Initialization
+
+  Instead of y + 0.2*noise, try:
+  # Option A: Uniform random on grid
+  y_neg = torch.rand_like(y) * 2 - 1  # [-1, 1]
+
+  # Option B: Mix of strategies
+  if random.random() < 0.33:
+      y_neg = torch.randn_like(y)  # Pure noise
+  elif random.random() < 0.66:
+      y_neg = y + 0.5 * torch.randn_like(y)  # More corruption
+  else:
+      y_neg = self.fno_model(x) + 0.3 * torch.randn_like(y)  # From FNO
+
+  Solution 4: Add Spectral Normalization
+
+  Quick fix to ebm.py:
+  import torch.nn.utils.spectral_norm as spectral_norm
+
+  class ConvEBM(nn.Module):
+      def __init__(self, ...):
+          layers = []
+          for ...
+              layers.append(spectral_norm(
+                  nn.Conv2d(prev_channels, hidden_ch, kernel_size=3, padding=1)
+              ))
+
 
 # Note
 - When lamda_physics sets to 0.0, the FNO learns from data only and giving good results on synthetic data 
