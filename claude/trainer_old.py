@@ -12,16 +12,19 @@ import numpy as np
 
 
 # ============================================================================
-# FNO-EBM Combined Model
+# FNO-EBM Combined Model (OLD VERSION - WITH FNO ANCHOR DURING TRAINING)
 # ============================================================================
 
 class FNO_EBM(nn.Module):
     """
-    Combined FNO-EBM model
+    Combined FNO-EBM model (OLD VERSION)
     Total Energy: E(u, X) = 0.5 * ||u - u_FNO(X)||^2 + V(u, X)
 
     This wrapper class combines an FNO model (for predictions) and an EBM model
     (for uncertainty quantification).
+
+    WARNING: This version uses FNO anchor during TRAINING which prevents V_EBM from learning!
+    This is the BROKEN version kept for reference only.
     """
     def __init__(self, fno_model, ebm_model):
         super().__init__()
@@ -30,40 +33,29 @@ class FNO_EBM(nn.Module):
 
     def energy(self, u, x, training=False, u_fno=None):
         """
-        Compute total energy E(u, X)
-
-        CRITICAL: Uses different formulations for training vs inference
-        - Training: E = V_EBM(u, x) only (EBM learns full distribution)
-        - Inference: E = ||u - u_FNO||²/2 + V_EBM(u, x) (anchor biases toward FNO)
+        Compute total energy E(u, X) (OLD VERSION - ALWAYS USES FNO ANCHOR)
 
         Args:
             u: candidate solution (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
-            training: if True, use training energy (V_EBM only)
-            u_fno: pre-computed FNO solution (optional, only used for inference)
+            training: unused in old version (kept for compatibility)
+            u_fno: pre-computed FNO solution (optional)
         Returns:
             E: total energy (batch,)
         """
-        # Potential term: learned energy function
+        if u_fno is None:
+            with torch.no_grad():
+                u_fno = self.u_fno(x)
+
+        # Quadratic term: anchors to FNO solution
+        quadratic_term = 0.5 * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
+
+        # Potential term: captures uncertainty structure
         potential_term = self.V_ebm(u, x)
 
-        if training:
-            # TRAINING: Use only V_EBM to learn the full energy landscape
-            # This follows standard EBM training (Du & Mordatch 2019)
-            return potential_term
-        else:
-            # INFERENCE: Add quadratic anchor to bias samples toward FNO prediction
-            # This prevents MCMC from wandering too far from physics-informed solution
-            if u_fno is None:
-                with torch.no_grad():
-                    u_fno = self.u_fno(x)
-
-            # Quadratic term: anchors to FNO solution
-            # sigma_squared controls how tightly samples are pulled toward FNO
-            sigma_squared = 1.0  # Can be tuned: larger = weaker anchor
-            quadratic_term = 0.5 / sigma_squared * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
-
-            return quadratic_term + potential_term
+        # OLD VERSION: Always return full energy (both training and inference)
+        # PROBLEM: The FNO anchor dominates gradients, preventing V_EBM from learning!
+        return quadratic_term + potential_term
 
     def forward(self, x):
         """Direct FNO prediction"""
@@ -159,22 +151,22 @@ class Trainer:
                 config.ebm_scheduler_config,
                 self.ebm_optimizer
             )
-        
+
         # Setup loss functions
-        self.fno_criterion = nn.MSELoss() #Maybe I should change this to a function of PDE residual 
+        self.fno_criterion = nn.MSELoss() #Maybe I should change this to a function of PDE residual
         self.phy_loss_fn = phy_loss
 
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self.lambda_phys = config.lambda_phys  # Weight for physics loss
-        
+
         self.early_stopper_fno = EarlyStopping(
-            patience=config.patience, 
+            patience=config.patience,
             verbose=True
         )
         self.early_stopper_ebm = EarlyStopping(
-            patience=config.patience, 
+            patience=config.patience,
             verbose=True
         )
         # Setup logging
@@ -226,7 +218,7 @@ class Trainer:
             self.config.checkpoint_dir,
             'best_model.pt'
         )
-        
+
         if os.path.exists(checkpoint_path):
             checkpoint = torch.load(checkpoint_path)
             self.fno_model.load_state_dict(checkpoint['fno_model'])
@@ -257,7 +249,7 @@ class Trainer:
         total_loss = data_loss + self.lambda_phys * physics_loss
         total_loss.backward()
         self.fno_optimizer.step()
-        
+
         # EBM Training Step
         self.ebm_optimizer.zero_grad()
 
@@ -287,12 +279,12 @@ class Trainer:
                 y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
 
             y_neg = y_neg.detach()
-        
+
         neg_energy = self.ebm_model(x, y_neg)
         ebm_loss = pos_energy.mean() - neg_energy.mean()
         ebm_loss.backward()
         self.ebm_optimizer.step()
-        
+
         return total_loss.item(), ebm_loss.item()
 
     def validate_old(self):
@@ -302,17 +294,17 @@ class Trainer:
         self.fno_model.eval()
         self.ebm_model.eval()
         total_val_loss = 0
-        
+
         with torch.no_grad():
             for x, y in self.val_loader:
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 fno_output = self.fno_model(x)
                 val_loss = self.fno_criterion(fno_output, y)
                 total_val_loss += val_loss.item()
-                
+
         avg_val_loss = total_val_loss / len(self.val_loader)
         return avg_val_loss
-    
+
     def validate(self):
         """
         Validation step including physics loss
@@ -320,29 +312,29 @@ class Trainer:
         self.fno_model.eval()
         self.ebm_model.eval()
         total_val_loss = 0
-        
+
         with torch.no_grad():
             for x, y in self.fno_val_loader:
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 fno_output = self.fno_model(x)
-                
+
                 # Data loss
                 data_loss = self.fno_criterion(fno_output, y)
-                
+
                 # Physics loss
                 x_coords = x[..., 0].requires_grad_(True)
                 y_coords = x[..., 1].requires_grad_(True)
                 # Pass full x_grid for Darcy physics loss
                 residual = self.phy_loss_fn(fno_output, x_coords, y_coords, x_grid=x)
                 physics_loss = torch.mean(residual**2)
-                
+
                 # Total validation loss
                 val_loss = data_loss + self.lambda_phys * physics_loss
                 total_val_loss += val_loss.item()
-                
+
         avg_val_loss = total_val_loss / len(self.fno_val_loader)
         return avg_val_loss
-    
+
     def validate_ebm(self):
         """
         Validation step for the EBM.
@@ -393,30 +385,30 @@ class Trainer:
         """
         # Try to resume training
         self.resume()
-        
+
         for epoch in range(self.current_epoch, self.config.epochs):
             self.fno_model.train()
             self.ebm_model.train()
-            
+
             # Training loop with progress bar
             loop = tqdm(self.train_loader)
             epoch_fno_loss = 0
             epoch_ebm_loss = 0
-            
+
             for batch_idx, (x, y) in enumerate(loop):
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 fno_loss, ebm_loss = self.train_step(x, y)
-                
+
                 epoch_fno_loss += fno_loss
                 epoch_ebm_loss += ebm_loss
-                
+
                 # Update progress bar
                 loop.set_description(f"Epoch [{epoch}/{self.config.epochs}]")
                 loop.set_postfix(
                     fno_loss=fno_loss,
                     ebm_loss=ebm_loss
                 )
-            
+
             # Validation phase
             val_loss = self.validate()
 
@@ -424,18 +416,18 @@ class Trainer:
                 self.fno_scheduler.step()
             if self.ebm_scheduler:
                 self.ebm_scheduler.step()
-            
+
             # Log metrics
             self.logger.info(
                 f"Epoch {epoch}: FNO Loss={epoch_fno_loss/len(self.train_loader):.4f}, "
                 f"EBM Loss={epoch_ebm_loss/len(self.train_loader):.4f}, "
                 f"Val Loss={val_loss:.4f}"
             )
-            
+
             # Save checkpoint
             self.checkpoint(epoch, val_loss)
             self.current_epoch = epoch + 1
-    
+
     # ...existing code...
 
     def train_step_fno(self, x, y):
@@ -471,31 +463,34 @@ class Trainer:
 
     def train_step_ebm(self, x, y, langevin=True):
         """
-        Single training step for EBM only
+        Single training step for EBM only (OLD VERSION - WITH FNO ANCHOR)
 
-        During TRAINING: E(u, x) = V_EBM(u, x) only (standard EBM training)
-        During INFERENCE: E(u, x) = 0.5 * ||u - u_FNO(x)||² + V_EBM(u, x)
+        OLD VERSION: Uses FULL energy during training: E(u, x) = 0.5 * ||u - u_FNO(x)||² + V_EBM(u, x)
 
-        This follows Du & Mordatch 2019 - let EBM learn full energy landscape,
-        then add FNO anchor during inference to bias samples toward physics.
+        PROBLEM: The quadratic anchor dominates gradients and prevents V_EBM from learning!
+        This results in random noise in uncertainty maps.
         """
         #self.ebm_optimizer.zero_grad()
 
+        # Pre-compute FNO predictions once (used in all energy computations)
+        with torch.no_grad():
+            u_fno = self.fno_model(x)
+
         # Positive phase: compute energy of ground truth
-        # training=True means using V_EBM(y, x) only (no FNO anchor)
-        pos_energy = self.model.energy(y, x, training=True)
+        # OLD VERSION: Uses full energy including FNO anchor
+        pos_energy = self.model.energy(y, x, training=True, u_fno=u_fno)
 
         # Negative phase (MCMC sampling)
         # Initialize from CORRUPTED ground truth to create diverse negative samples
-        # This forces EBM to learn meaningful energy discrimination
         y_neg = y + 0.2 * torch.randn_like(y)  # Add significant noise to ground truth
         y_neg = y_neg.detach()
         y_neg.requires_grad = True
 
-        # Langevin MCMC to find low-energy samples under V_EBM only
+        # Langevin MCMC to find low-energy samples
         for _ in range(self.config.mcmc_steps):
             y_neg.requires_grad = True
-            neg_energy = self.model.energy(y_neg, x, training=True)
+            # OLD VERSION: Uses full energy including FNO anchor
+            neg_energy = self.model.energy(y_neg, x, training=True, u_fno=u_fno)
             neg_grad = torch.autograd.grad(
                 neg_energy.sum(),
                 y_neg,
@@ -511,9 +506,10 @@ class Trainer:
             y_neg = y_neg.detach()
 
         # Final negative energy
-        neg_energy = self.model.energy(y_neg, x, training=True)
+        # OLD VERSION: Uses full energy including FNO anchor
+        neg_energy = self.model.energy(y_neg, x, training=True, u_fno=u_fno)
 
-        # Contrastive divergence loss: push down positive energy, push up negative energy
+        # Contrastive divergence loss
         ebm_loss = pos_energy.mean() - neg_energy.mean()
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
@@ -615,7 +611,7 @@ class Trainer:
             # EBM Validation (uses EBM val loader)
             val_loss = self.validate_ebm()
             avg_epoch_loss = epoch_loss / len(self.ebm_train_loader)
-            
+
             self.logger.info(
                 f"EBM Epoch {epoch+1}: Train Loss={avg_epoch_loss:.4f}, "
                 f"Val Loss (Energy Gap)={val_loss:.4f}"
@@ -642,15 +638,15 @@ class Trainer:
         Staged training: First FNO, then EBM
         """
         self.logger.info("Starting staged training...")
-        
+
         # Stage 1: Train FNO
         self.logger.info("Stage 1: Training FNO")
         self.train_fno(self.config.fno_epochs)
-        
+
         # Stage 2: Train EBM
         self.logger.info("Stage 2: Training EBM")
         self.train_ebm(self.config.ebm_epochs)
-        
+
         self.logger.info("Staged training completed")
 
 # ...existing code...
