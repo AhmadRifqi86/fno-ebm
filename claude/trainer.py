@@ -556,6 +556,9 @@ class Trainer:
         y_neg.requires_grad = True
 
         # Langevin MCMC to find low-energy samples
+        # Read gradient clipping value from config
+        grad_clip = getattr(self.config, 'mcmc_grad_clip', 0.03)
+
         for _ in range(self.config.mcmc_steps):
             y_neg.requires_grad = True
             neg_energy = self.model.energy(
@@ -571,6 +574,11 @@ class Trainer:
                 y_neg,
                 create_graph=True
             )[0]
+
+            # CRITICAL: Clip gradients to prevent MCMC explosion (UvA tutorial trick)
+            # Without this, gradients can become arbitrarily large during sampling
+            if grad_clip > 0:
+                neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
 
             # Langevin update: gradient descent + noise
             if langevin:
@@ -604,7 +612,17 @@ class Trainer:
                 self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
 
         # Contrastive divergence loss
-        ebm_loss = pos_energy.mean() - neg_energy.mean()
+        cd_loss = pos_energy.mean() - neg_energy.mean()
+
+        # CRITICAL: Energy regularization (UvA tutorial trick)
+        # Prevents energy values from drifting to arbitrarily large magnitudes
+        # Keeps energy landscape bounded and numerically stable
+        alpha = getattr(self.config, 'energy_reg_alpha', 0.1)
+        reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
+
+        # Total EBM loss: contrastive divergence + regularization
+        ebm_loss = cd_loss + reg_loss
+
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
         #self.ebm_optimizer.step()

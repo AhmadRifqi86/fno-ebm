@@ -102,7 +102,10 @@ class ConvEBM(nn.Module):
             u: solution field (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
         Returns:
-            V: potential energy (batch,)
+            energy: scalar energy (batch,)
+
+        Note: Returns -E(u,x) following standard EBM convention where p(u) ∝ exp(f(u))
+        and f(u) = -E(u). This prevents sign confusion and aligns with literature.
         """
         # Concatenate solution with coordinates
         combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
@@ -110,13 +113,18 @@ class ConvEBM(nn.Module):
         # Reshape to (batch, channels, height, width) for conv
         combined = combined.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
 
-        # Apply convolutional network
-        energy_map = self.network(combined)  # (batch, 1, n_x, n_y)
+        # Apply convolutional network to get f(u,x)
+        f_map = self.network(combined)  # (batch, 1, n_x, n_y)
 
-        # Global average pooling to get scalar energy
-        V = self.pool(energy_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+        # Global average pooling to get scalar f(u,x)
+        f = self.pool(f_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
 
-        return V
+        # Standard EBM convention: network outputs f(u,x) = -E(u,x)
+        # So energy E = -f
+        # But for compatibility and following standard practice:
+        # We return f directly (which is -E in standard notation)
+        # The loss function will work with this convention
+        return f
 
 
 # ============================================================================

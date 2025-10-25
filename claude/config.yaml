@@ -58,6 +58,10 @@ use_pcd: true                      # Enable PCD replay buffer (highly recommende
 pcd_buffer_size: 1000              # Maximum number of negative samples to store (1000 = ~16k parameters at 64x64)
 pcd_reinit_prob: 0.05              # Probability of fresh initialization instead of replay buffer (5% = 95% from buffer)
 
+# EBM Training Stability (CRITICAL!)
+mcmc_grad_clip: 0.03               # Gradient clipping during MCMC sampling (prevents explosion), 0 = no clipping
+energy_reg_alpha: 0.1              # Energy regularization weight (prevents unbounded energy values), 0 = no reg
+
 # Data and Paths
 data_dir: './data'
 checkpoint_dir: './checkpoints'
