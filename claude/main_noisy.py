@@ -5,26 +5,35 @@ main_noisy.py - Single-Dataset Training Mode
 Trains FNO-EBM on a single noisy dataset.
 Both FNO and EBM train on the same noisy observations.
 
+⭐ RECOMMENDED for fixing EBM training issues! ⭐
+
+Why single-dataset mode?
+- No distribution mismatch between FNO and EBM
+- EBM can learn solution uncertainty (not just observation noise)
+- FNO learns robust features from noisy data
+- Better uncertainty calibration
+
 Usage:
     python main_noisy.py
 
 Requirements:
     - config.yaml with lambda_phys=0.0 (physics loss disabled)
-    - Noisy dataset generated via: python generate_data.py
+    - Noisy dataset in data/ folder
 """
 
 import yaml
 import torch
 from torch.utils.data import DataLoader
 import os
+from pathlib import Path
 
 from config import Config
 from fno import FNO2d
-from ebm import EBMPotential
+from ebm import ConvEBM  # Using ConvEBM for spatial structure!
 from trainer import Trainer, FNO_EBM
 from customs import DarcyPhysicsLoss
 from inference import inference_deterministic, inference_probabilistic
-from datautils import create_dataloaders, visualize_inference_results
+from datautils import PDEDataset, visualize_inference_results
 
 
 def main():
@@ -69,24 +78,69 @@ def main():
         num_layers=4
     )
 
-    # EBM model
-    ebm_model = EBMPotential(
-        input_dim=4,  # u(1) + x(3)
-        hidden_dims=[config.ebm_hidden_dim, config.ebm_hidden_dim * 2,
-                     config.ebm_hidden_dim * 2, config.ebm_hidden_dim]
+    # EBM model - Using ConvEBM for spatial structure
+    ebm_model = ConvEBM(
+        in_channels=4,  # u + (x, y, a)
+        hidden_channels=[64, 128, 128, 64]  # Convolutional channels
     )
 
     # Combined model
     model = FNO_EBM(fno_model, ebm_model).to(config.device)
 
     print(f"FNO: modes={config.fno_modes}, width={config.fno_width}")
-    print(f"EBM: hidden_dim={config.ebm_hidden_dim}")
+    print(f"EBM: ConvEBM with spatial convolutions")
 
     # 3. Load Noisy Dataset
     print("\n--- Loading Noisy Dataset ---")
-    train_loader, val_loader = create_dataloaders(config)
+
+    data_dir = Path(config.data_dir) if hasattr(config, 'data_dir') else Path('data')
+    resolution = config.grid_size if hasattr(config, 'grid_size') else 64
+    complexity = config.complexity if hasattr(config, 'complexity') else 'medium'
+    noise_type = config.noise_type if hasattr(config, 'noise_type') else 'heteroscedastic'
+
+    # Construct file paths for noisy dataset
+    noisy_train_file = data_dir / f"darcy_{complexity}_{noise_type}_res{resolution}_train.npz"
+    noisy_val_file = data_dir / f"darcy_{complexity}_{noise_type}_res{resolution}_val.npz"
+
+    # Check if files exist
+    if not noisy_train_file.exists() or not noisy_val_file.exists():
+        print(f"\n❌ ERROR: Noisy dataset files not found!")
+        print(f"Expected files:")
+        print(f"  - {noisy_train_file}")
+        print(f"  - {noisy_val_file}")
+        print("\nPlease generate dataset first (it should be auto-generated if missing)")
+        print("Or check that config.yaml settings match your data files.")
+
+    # Load noisy datasets
+    print(f"Loading noisy dataset from {data_dir}...")
+    train_dataset = PDEDataset.from_file(str(noisy_train_file), normalize_output=True)
+    val_dataset = PDEDataset.from_file(str(noisy_val_file), normalize_output=True)
 
     print("✓ Dataset loaded (automatically normalized)")
+
+    # 3b. Create DataLoaders
+    print("\n--- Creating DataLoaders ---")
+
+    batch_size = config.batch_size if hasattr(config, 'batch_size') else 16
+    num_workers = config.num_workers if hasattr(config, 'num_workers') else 0
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    print(f"✓ DataLoaders created (batch_size={batch_size})")
 
     # 4. Initialize Trainer (Single-Dataset Mode)
     print("\n--- Initializing Trainer (Single-Dataset Mode) ---")
@@ -150,24 +204,49 @@ def main():
             device=config.device
         )
 
+        # Denormalize predictions for visualization
+        # (predictions are in normalized space, convert back to original scale)
+        y_fno_pred_denorm = train_dataset.denormalize(y_fno_pred)
+        y_true_denorm = train_dataset.denormalize(y_true_samples)
+
+        # Denormalize stats
+        stats_denorm = {
+            'mean': train_dataset.denormalize(stats['mean']),
+            'std': stats['std'] * train_dataset.u_std,  # Scale std by original std
+        }
+
         # Visualize
-        visualize_inference_results(y_true_samples, y_fno_pred, stats, config)
+        visualize_inference_results(y_true_denorm, y_fno_pred_denorm, stats_denorm, config)
         print("✓ Inference results saved")
 
     else:
         print("⚠️  Could not find best model checkpoints")
 
     print("\n" + "=" * 70)
-    print("SUMMARY")
+    print("SUMMARY - SINGLE-DATASET MODE")
     print("=" * 70)
     print(f"Checkpoints saved in: {config.checkpoint_dir}/")
-    print("  - best_model_fno.pt")
-    print("  - best_model_ebm.pt")
+    print("  - best_model_fno.pt (trained on noisy data)")
+    print("  - best_model_ebm.pt (trained on noisy data)")
     print("  - current_fno.pt")
     print("  - current_ebm.pt")
+    print("\nDatasets used:")
+    print(f"  - FNO training: {noisy_train_file}")
+    print(f"  - EBM training: {noisy_train_file} (SAME AS FNO)")
     print("\nTo view results:")
     print("  - Check logs above for validation loss")
     print("  - View inference_results.png in checkpoint directory")
+    print("\nKey differences from dual-dataset mode:")
+    print("  ✓ No distribution mismatch between FNO and EBM")
+    print("  ✓ EBM learns solution uncertainty (not just noise)")
+    print("  ✓ FNO learns robust features from noisy observations")
+    print("  ✓ Better calibrated uncertainty estimates")
+    print("\nIf EBM uncertainty maps show spatial structure:")
+    print("  → SUCCESS! Single-dataset mode fixed the issue")
+    print("If EBM uncertainty is still random noise:")
+    print("  → Check training logs for EBM loss progression")
+    print("  → Try visualizing negative samples during training")
+    print("  → Consider score matching as alternative")
     print("=" * 70)
 
 

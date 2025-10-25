@@ -18,15 +18,17 @@
 ## Test main.py using dummy data [DONE] [Wed 21 Oct 2025]
 ## Fixing checkpointing mechanism, only save if there is improvement, with removing the older file first [DONE] [Wed 21 Oct 2025]
 ## Creating two type of main: Single-noisy, double-noisy-separate, try to train for both [DONE] [Wed 21 Oct 2025]
-## Underfitting Indication, try to fix underfitting
 ## Log the physics loss and data loss separately [DONE] [Thu 23 Oct 2025]
 ## Fixing physics loss scale and lambda physics param on trainer and config [DONE] [Thu 23 Oct 2025]
-## Baseline Paper and Reference Paper [PLAN] [Thu 23 Oct 2025]  
-## Download dataset PDEBench, Command [PLAN] [Fri 24 Oct 2025]
-## Training with mcmc_steps set to 200 and 0.01
-## Maybe i should try using torchebm library [PLAN] [Mon 27 Oct 2025]
+## Baseline Paper and Reference Paper [DONE] [Thu 23 Oct 2025]  
+## Download dataset PDEBench, Command [PLAN] [Fri 24 Oct 2025] (baru darcy flow)
+## Training using single noisy data [PLAN] [Mon 27 Oct 2025]
+## Maybe i should try using torchebm library [PLAN] [Mon 27 Oct 2025] [Probably]
 ## Create training automation script so i could leave the laptop
 ## Test using other synthetic PDE for single and separated data [PLAN] [Mon 27 Oct 2025]
+## Normalize permeability data [PLAN] [Sat 26 Oct 2025] [Probably]
+## One more training to visualize negative sample plot [PLAN] [Sun 26 Oct 2025] [Probably]
+## Try Score Matching EBM [PLAN]
 ## Training FNO model using EBM pos-neg sampling and contrastive divergence loss (plug FNO model into EBM training regime)[FAR] 
 wget https://darus.uni-stuttgart.de/api/access/datafile/133139 \
        -O data/pdebench/2D_DarcyFlow_beta1.0_Train.hdf5
@@ -119,3 +121,8 @@ Recommended Solutions (in order of impact):
 
 # Log
 - Applying noise to EBM training step instead of deterministic gradient descent, still retraining
+
+
+# Next Question for Claude
+- Will spectral normalization help both PCD and SM EBM training?
+- Does the input data for EBM already normalized?

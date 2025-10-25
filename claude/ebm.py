@@ -78,6 +78,7 @@ class ConvEBM(nn.Module):
 
     This is CRITICAL for learning structured uncertainty maps!
     """
+    # Consider use spectral normalization later
     def __init__(self, in_channels=4, hidden_channels=[64, 128, 128, 64]):
         super().__init__()
 
