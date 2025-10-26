@@ -7,6 +7,7 @@ import logging
 from config import Config, Factory
 from customs import EarlyStopping, PhysicsLossFn
 import numpy as np
+from ebm import ConditionalEnergyWrapper
 
 # Import torchebm library
 try:
@@ -431,7 +432,7 @@ class Trainer:
         Returns:
             ebm_loss: EBM loss value (float)
         """
-        from ebm import ConditionalEnergyWrapper
+        
 
         # STEP 1: Add small noise to positive samples (prevents overfitting)
         small_noise = torch.randn_like(y) * 0.005
@@ -446,8 +447,7 @@ class Trainer:
         )
 
         # STEP 3: Create conditional sampler and loss for this batch
-        from torchebm.samplers import LangevinDynamics as LangevinSampler
-        from torchebm.losses import ContrastiveDivergence
+        
 
         conditional_sampler = LangevinSampler(
             energy_function=conditional_energy,

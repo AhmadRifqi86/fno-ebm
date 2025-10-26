@@ -163,7 +163,12 @@ class ConditionalEnergyWrapper(BaseEnergyFunction):
         """
         super().__init__()
         self.energy_fn = energy_fn
-        self.register_buffer('condition', condition)
+        # Store condition - clone and detach to avoid gradient issues
+        self._condition = condition.clone().detach()
+
+    @property
+    def condition(self):
+        return self._condition
 
     def forward(self, u):
         """
@@ -172,11 +177,13 @@ class ConditionalEnergyWrapper(BaseEnergyFunction):
         Returns:
             energy: scalar energy (batch,)
         """
-        return self.energy_fn(u, self.condition)
+        # Always ensure condition is on same device as u
+        cond = self._condition.to(u.device)
+        return self.energy_fn(u, cond)
 
     def update_condition(self, new_condition):
         """Update the conditioning information"""
-        self.condition = new_condition
+        self._condition = new_condition.clone().detach()
 
 
 # ============================================================================

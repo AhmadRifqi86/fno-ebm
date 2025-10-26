@@ -204,6 +204,7 @@ class Trainer:
 
         if self.use_pcd:
             self.logger.info(f"PCD enabled: buffer_size={self.pcd_buffer_size}, reinit_prob={self.pcd_reinit_prob}")
+        self.logger.info("Negative sampling traces will be printed to terminal during training")
 
     def checkpoint(self, epoch, val_loss, stage_type, is_best=False):
         """
@@ -501,7 +502,7 @@ class Trainer:
 
         return total_loss.item(), data_loss.item(), physics_loss.item()
 
-    def train_step_ebm(self, x, y, langevin=True, use_anchor=None):
+    def train_step_ebm(self, x, y, langevin=True, use_anchor=None, trace_samples=False):
         """
         FIXED EBM training - Following UvA Deep Energy Models Tutorial
 
@@ -510,6 +511,9 @@ class Trainer:
         2. Random uniform initialization instead of corrupted data
         3. Small noise added to positive samples
         4. 60 MCMC steps instead of 200
+
+        Args:
+            trace_samples: If True, collect detailed tracing information
         """
         batch_size = x.shape[0]
 
@@ -520,7 +524,7 @@ class Trainer:
         y_noisy = torch.clamp(y_noisy, -3, 3)
 
         # STEP 2: Compute positive energy (V_EBM only, no anchor during training)
-        pos_energy = self.ebm_model(x, y_noisy)
+        pos_energy = self.ebm_model(y_noisy, x)  # Fixed: y_noisy is u (solution), x is conditioning
 
         # STEP 3: Initialize negative samples from buffer (PCD)
         if self.use_pcd and len(self.replay_buffer) > 0 and np.random.random() > self.pcd_reinit_prob:
@@ -537,9 +541,17 @@ class Trainer:
                 n_missing = batch_size - y_neg.shape[0]
                 y_neg_extra = torch.rand(n_missing, *y.shape[1:], device=x.device) * 2 - 1
                 y_neg = torch.cat([y_neg, y_neg_extra], dim=0)
+            init_source = "buffer"
         else:
             # Fresh initialization (5% of time): random uniform [-1, 1] (UvA style)
             y_neg = torch.rand_like(y) * 2 - 1
+            init_source = "random"
+
+        # Store initial state for tracing
+        if trace_samples:
+            y_neg_init = y_neg.clone().detach()
+            energy_trajectory = []
+            grad_norm_trajectory = []
 
         # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
         mcmc_steps = 60  # UvA uses 60 during training (not 200!)
@@ -558,7 +570,7 @@ class Trainer:
             y_neg.requires_grad_(True)
 
             # Compute energy
-            neg_energy_for_grad = self.ebm_model(x, y_neg)
+            neg_energy_for_grad = self.ebm_model(y_neg, x)
 
             # CRITICAL FIX: NO create_graph=True!
             # Only backprop to get gradients, don't keep computation graph
@@ -568,6 +580,12 @@ class Trainer:
                 retain_graph=False,
                 create_graph=False  # FIXED: Was True, killed training!
             )[0]
+
+            # Track gradient norm before clipping
+            if trace_samples and i % 10 == 0:
+                with torch.no_grad():
+                    grad_norm_trajectory.append(neg_grad.norm().item())
+                    energy_trajectory.append(neg_energy_for_grad.mean().item())
 
             # Clip gradients
             neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
@@ -583,7 +601,7 @@ class Trainer:
             y_neg = y_neg.detach()
 
         # STEP 5: Final negative energy
-        neg_energy = self.ebm_model(x, y_neg)
+        neg_energy = self.ebm_model(y_neg, x)
 
         # STEP 6: Update buffer
         if self.use_pcd:
@@ -608,6 +626,36 @@ class Trainer:
 
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
+
+        # Return tracing info if requested
+        if trace_samples:
+            trace_info = {
+                'init_source': init_source,
+                'pos_energy_mean': pos_energy.mean().item(),
+                'neg_energy_mean': neg_energy.mean().item(),
+                'energy_gap': (neg_energy - pos_energy).mean().item(),
+                'pos_stats': {
+                    'mean': y.mean().item(),
+                    'std': y.std().item(),
+                    'min': y.min().item(),
+                    'max': y.max().item()
+                },
+                'neg_init_stats': {
+                    'mean': y_neg_init.mean().item(),
+                    'std': y_neg_init.std().item(),
+                    'min': y_neg_init.min().item(),
+                    'max': y_neg_init.max().item()
+                },
+                'neg_final_stats': {
+                    'mean': y_neg.mean().item(),
+                    'std': y_neg.std().item(),
+                    'min': y_neg.min().item(),
+                    'max': y_neg.max().item()
+                },
+                'energy_trajectory': energy_trajectory,
+                'grad_norm_trajectory': grad_norm_trajectory
+            }
+            return ebm_loss.item(), trace_info
 
         return ebm_loss.item()
 
@@ -692,7 +740,17 @@ class Trainer:
             loop = tqdm(self.ebm_train_loader)  # Use EBM-specific loader
             for batch_idx, (x, y) in enumerate(loop):
                 x, y = x.to(self.config.device), y.to(self.config.device)
-                loss = self.train_step_ebm(x, y)
+
+                # Enable tracing for first batch of each epoch and every 50 batches
+                trace_samples = (batch_idx == 0) or (batch_idx % 50 == 0)
+
+                if trace_samples:
+                    loss, trace_info = self.train_step_ebm(x, y, trace_samples=True)
+                    # Print trace information to terminal
+                    self._print_trace_info(epoch, batch_idx, trace_info)
+                else:
+                    loss = self.train_step_ebm(x, y, trace_samples=False)
+
                 epoch_loss += loss
 
                 if (batch_idx + 1) % self.accumulation_steps == 0:
@@ -705,7 +763,7 @@ class Trainer:
             # EBM Validation (uses EBM val loader)
             val_loss = self.validate_ebm()
             avg_epoch_loss = epoch_loss / len(self.ebm_train_loader)
-            
+
             self.logger.info(
                 f"EBM Epoch {epoch+1}: Train Loss={avg_epoch_loss:.4f}, "
                 f"Val Loss (Energy Gap)={val_loss:.4f}"
@@ -725,6 +783,58 @@ class Trainer:
             if self.early_stopper_ebm.early_stop:
                 self.logger.info("EARLY STOPPING TRIGGERED FOR EBM, NO IMPROVEMENT IN SEVERAL EPOCHS")
                 break
+
+    def _print_trace_info(self, epoch, batch_idx, trace_info):
+        """Print negative sampling trace information to terminal"""
+        self.logger.info("=" * 80)
+        self.logger.info(f"NEGATIVE SAMPLING TRACE - Epoch {epoch}, Batch {batch_idx}")
+        self.logger.info("=" * 80)
+
+        # Initialization
+        self.logger.info(f"Initialization Source: {trace_info['init_source']}")
+
+        # Positive samples statistics
+        self.logger.info("\nPOSITIVE SAMPLES (Ground Truth):")
+        self.logger.info(f"  Mean: {trace_info['pos_stats']['mean']:8.4f}  Std: {trace_info['pos_stats']['std']:8.4f}")
+        self.logger.info(f"  Min:  {trace_info['pos_stats']['min']:8.4f}  Max: {trace_info['pos_stats']['max']:8.4f}")
+
+        # Negative samples - initial
+        self.logger.info(f"\nNEGATIVE SAMPLES - Initial ({trace_info['init_source']}):")
+        self.logger.info(f"  Mean: {trace_info['neg_init_stats']['mean']:8.4f}  Std: {trace_info['neg_init_stats']['std']:8.4f}")
+        self.logger.info(f"  Min:  {trace_info['neg_init_stats']['min']:8.4f}  Max: {trace_info['neg_init_stats']['max']:8.4f}")
+
+        # Negative samples - final
+        self.logger.info("\nNEGATIVE SAMPLES - After MCMC:")
+        self.logger.info(f"  Mean: {trace_info['neg_final_stats']['mean']:8.4f}  Std: {trace_info['neg_final_stats']['std']:8.4f}")
+        self.logger.info(f"  Min:  {trace_info['neg_final_stats']['min']:8.4f}  Max: {trace_info['neg_final_stats']['max']:8.4f}")
+
+        # Energy statistics
+        self.logger.info("\nENERGY STATISTICS:")
+        self.logger.info(f"  Positive Energy:  {trace_info['pos_energy_mean']:8.4f}")
+        self.logger.info(f"  Negative Energy:  {trace_info['neg_energy_mean']:8.4f}")
+        self.logger.info(f"  Energy Gap:       {trace_info['energy_gap']:8.4f} (should be POSITIVE!)")
+
+        # MCMC trajectory
+        if trace_info['energy_trajectory']:
+            self.logger.info("\nMCMC TRAJECTORY (sampled every 10 steps):")
+            self.logger.info("  Step   Energy    Grad Norm")
+            for i, (energy, grad_norm) in enumerate(zip(trace_info['energy_trajectory'],
+                                                         trace_info['grad_norm_trajectory'])):
+                step = i * 10
+                self.logger.info(f"  {step:4d}  {energy:8.4f}  {grad_norm:8.4f}")
+
+        # Diagnosis
+        self.logger.info("\nDIAGNOSIS:")
+        if abs(trace_info['neg_final_stats']['mean'] - trace_info['pos_stats']['mean']) < 0.1:
+            self.logger.info("  ⚠ WARNING: Negative samples too similar to positive samples (mode collapse?)")
+        if trace_info['energy_gap'] < 0:
+            self.logger.info("  ⚠ WARNING: Negative energy gap is NEGATIVE (should be positive!)")
+        if trace_info['neg_final_stats']['std'] < 0.01:
+            self.logger.info("  ⚠ WARNING: Negative samples have very low variance")
+        if abs(trace_info['neg_init_stats']['mean'] - trace_info['neg_final_stats']['mean']) < 0.05:
+            self.logger.info("  ⚠ WARNING: MCMC sampling didn't change samples much (gradients too small?)")
+
+        self.logger.info("=" * 80)
 
 
     def train_staged(self):
