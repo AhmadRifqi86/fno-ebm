@@ -495,137 +495,111 @@ class Trainer:
 
     def train_step_ebm(self, x, y, langevin=True, use_anchor=None):
         """
-        Single training step for EBM only
+        FIXED EBM training - Following UvA Deep Energy Models Tutorial
 
-        Supports two modes (controlled by use_anchor flag):
-        - Mode 1 (use_anchor=False): E_train = V_EBM only, E_inference = quadratic + V_EBM
-        - Mode 2 (use_anchor=True): E_train = weak quadratic + V_EBM, E_inference = strong quadratic + V_EBM
-
-        Args:
-            x: input coordinates
-            y: ground truth
-            langevin: if True, use Langevin dynamics (with noise)
-            use_anchor: if True, use FNO anchor during training. If None, read from config.
+        CRITICAL FIXES from UvA tutorial:
+        1. NO create_graph=True during MCMC (was killing training!)
+        2. Random uniform initialization instead of corrupted data
+        3. Small noise added to positive samples
+        4. 60 MCMC steps instead of 200
         """
-        #self.ebm_optimizer.zero_grad()
-
-        # Read use_anchor from config if not provided
-        if use_anchor is None:
-            use_anchor = getattr(self.config, 'use_anchor_in_ebm_training', False)
-
-        # Read sigma values from config
-        sigma_squared_train = getattr(self.config, 'sigma_squared_train', 100.0)
-        sigma_squared_inference = getattr(self.config, 'sigma_squared_inference', 1.0)
-
-        # Pre-compute FNO if using anchor
-        if use_anchor:
-            with torch.no_grad():
-                u_fno = self.fno_model(x)
-        else:
-            u_fno = None
-
-        # Positive phase: compute energy of ground truth
-        pos_energy = self.model.energy(
-            y, x,
-            training=True,
-            use_anchor_in_training=use_anchor,
-            u_fno=u_fno,
-            sigma_squared_train=sigma_squared_train,
-            sigma_squared_inference=sigma_squared_inference
-        )
-
-        # Negative phase (MCMC sampling with PCD)
         batch_size = x.shape[0]
 
+        # STEP 1: Add small noise to positive samples (UvA trick!)
+        # Prevents overfitting to exact training data
+        small_noise = torch.randn_like(y) * 0.005
+        y_noisy = y + small_noise
+        y_noisy = torch.clamp(y_noisy, -3, 3)
+
+        # STEP 2: Compute positive energy (V_EBM only, no anchor during training)
+        pos_energy = self.ebm_model(x, y_noisy)
+
+        # STEP 3: Initialize negative samples from buffer (PCD)
         if self.use_pcd and len(self.replay_buffer) > 0 and np.random.random() > self.pcd_reinit_prob:
-            # PCD: Initialize from replay buffer (persistent chains)
-            # Randomly sample from buffer
-            buffer_indices = np.random.choice(len(self.replay_buffer), size=min(batch_size, len(self.replay_buffer)), replace=False)
+            # Sample from buffer (95% of time)
+            buffer_indices = np.random.choice(
+                len(self.replay_buffer),
+                size=min(batch_size, len(self.replay_buffer)),
+                replace=False
+            )
             y_neg = torch.stack([self.replay_buffer[i][1] for i in buffer_indices]).to(x.device)
 
-            # If buffer smaller than batch, pad with corrupted ground truth
+            # Pad if needed with random uniform (UvA style)
             if y_neg.shape[0] < batch_size:
                 n_missing = batch_size - y_neg.shape[0]
-                y_neg_extra = y[:n_missing] + 0.2 * torch.randn_like(y[:n_missing])
+                y_neg_extra = torch.rand(n_missing, *y.shape[1:], device=x.device) * 2 - 1
                 y_neg = torch.cat([y_neg, y_neg_extra], dim=0)
         else:
-            # Standard CD: Initialize from corrupted ground truth
-            y_neg = y + 0.2 * torch.randn_like(y)
+            # Fresh initialization (5% of time): random uniform [-1, 1] (UvA style)
+            y_neg = torch.rand_like(y) * 2 - 1
 
-        y_neg = y_neg.detach()
-        y_neg.requires_grad = True
+        # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
+        mcmc_steps = 60  # UvA uses 60 during training (not 200!)
+        step_size = self.config.mcmc_step_size
+        grad_clip = 0.03
 
-        # Langevin MCMC to find low-energy samples
-        # Read gradient clipping value from config
-        grad_clip = getattr(self.config, 'mcmc_grad_clip', 0.03)
+        y_neg = y_neg.detach()  # Start fresh, no gradients
 
-        for _ in range(self.config.mcmc_steps):
-            y_neg.requires_grad = True
-            neg_energy = self.model.energy(
-                y_neg, x,
-                training=True,
-                use_anchor_in_training=use_anchor,
-                u_fno=u_fno,
-                sigma_squared_train=sigma_squared_train,
-                sigma_squared_inference=sigma_squared_inference
-            )
+        for i in range(mcmc_steps):
+            # Add small noise and clamp (UvA does this)
+            noise_this_step = torch.randn_like(y_neg) * 0.005
+            y_neg = y_neg + noise_this_step
+            y_neg = torch.clamp(y_neg, -3, 3)
+
+            # Enable gradients for this step only
+            y_neg.requires_grad_(True)
+
+            # Compute energy
+            neg_energy_for_grad = self.ebm_model(x, y_neg)
+
+            # CRITICAL FIX: NO create_graph=True!
+            # Only backprop to get gradients, don't keep computation graph
             neg_grad = torch.autograd.grad(
-                neg_energy.sum(),
+                neg_energy_for_grad.sum(),
                 y_neg,
-                create_graph=True
+                retain_graph=False,
+                create_graph=False  # FIXED: Was True, killed training!
             )[0]
 
-            # CRITICAL: Clip gradients to prevent MCMC explosion (UvA tutorial trick)
-            # Without this, gradients can become arbitrarily large during sampling
-            if grad_clip > 0:
-                neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
+            # Clip gradients
+            neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
 
-            # Langevin update: gradient descent + noise
-            if langevin:
-                noise = torch.randn_like(y_neg) * np.sqrt(2 * self.config.mcmc_step_size)
-                y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
-            else:
-                y_neg = y_neg - self.config.mcmc_step_size * neg_grad
+            # Update (detach to break gradient flow)
+            with torch.no_grad():
+                if langevin:
+                    noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
+                    y_neg = y_neg - step_size * neg_grad + noise
+                else:
+                    y_neg = y_neg - step_size * neg_grad
+
             y_neg = y_neg.detach()
 
-        # Final negative energy
-        neg_energy = self.model.energy(
-            y_neg, x,
-            training=True,
-            use_anchor_in_training=use_anchor,
-            u_fno=u_fno,
-            sigma_squared_train=sigma_squared_train,
-            sigma_squared_inference=sigma_squared_inference
-        )
+        # STEP 5: Final negative energy
+        neg_energy = self.ebm_model(x, y_neg)
 
-        # Update PCD replay buffer with new negative samples
+        # STEP 6: Update buffer
         if self.use_pcd:
-            # Store (x, y_neg) pairs in buffer
             for i in range(batch_size):
                 self.replay_buffer.append((
                     x[i].detach().cpu(),
                     y_neg[i].detach().cpu()
                 ))
 
-            # Keep buffer size manageable (FIFO)
             if len(self.replay_buffer) > self.pcd_buffer_size:
                 self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
 
-        # Contrastive divergence loss
-        cd_loss = pos_energy.mean() - neg_energy.mean()
-
-        # CRITICAL: Energy regularization (UvA tutorial trick)
-        # Prevents energy values from drifting to arbitrarily large magnitudes
-        # Keeps energy landscape bounded and numerically stable
-        alpha = getattr(self.config, 'energy_reg_alpha', 0.1)
+        # STEP 7: Compute loss (UvA formula)
+        alpha = 0.1  # UvA default
         reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
 
-        # Total EBM loss: contrastive divergence + regularization
-        ebm_loss = cd_loss + reg_loss
+        # Contrastive divergence
+        cd_loss = neg_energy.mean() - pos_energy.mean()
+
+        # Total loss
+        ebm_loss = reg_loss + cd_loss
 
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
-        #self.ebm_optimizer.step()
 
         return ebm_loss.item()
 

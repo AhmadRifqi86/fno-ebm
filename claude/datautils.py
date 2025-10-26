@@ -15,6 +15,10 @@ class PDEDataset(Dataset):
     Handles loading from .npz files or in-memory numpy arrays.
     Automatically normalizes output data to zero mean and unit std.
 
+    **CRITICAL FIX:** Now normalizes ALL input channels beyond x,y coordinates!
+    - Channels 0,1: x,y coordinates (kept as is, already in [0,1])
+    - Channels 2+: Physical fields (permeability, forcing, etc.) - normalized to N(0,1)
+
     Example:
         >>> dataset = PDEDataset.from_file('data/darcy_train.npz')
         >>> loader = DataLoader(dataset, batch_size=32, shuffle=True)
@@ -22,28 +26,73 @@ class PDEDataset(Dataset):
         >>> u_pred_real = u_pred * dataset.u_std + dataset.u_mean
     """
 
-    def __init__(self, X: np.ndarray, U: np.ndarray, normalize_output: bool = True):
+    def __init__(self, X: np.ndarray, U: np.ndarray, normalize_output: bool = True, normalize_input: bool = True):
         """
         Initialize dataset from numpy arrays.
 
         Args:
             X: Input data, shape (n_samples, nx, ny, in_channels)
+               First 2 channels: x,y coordinates (kept unnormalized)
+               Remaining channels: Physical fields (normalized to N(0,1))
             U: Output data, shape (n_samples, nx, ny, out_channels)
             normalize_output: If True, normalize U to zero mean, unit std
+            normalize_input: If True, normalize input channels beyond x,y coords
         """
-        # Convert to torch tensors but keep original shape
-        # Our FNO model expects (batch, nx, ny, channels) format
-        self.X = torch.from_numpy(X).float()
+        # Store original X shape
+        self.n_samples, self.nx, self.ny, self.in_channels = X.shape
 
-        # Normalize output data (critical for small-scale PDEs like Darcy flow)
+        # ===== INPUT NORMALIZATION (CRITICAL FIX!) =====
+        self.normalize_input = normalize_input
+
+        if normalize_input and self.in_channels > 2:
+            # Split coordinate channels from physical field channels
+            X_coords = X[..., :2]  # (n_samples, nx, ny, 2) - x,y coordinates
+            X_fields = X[..., 2:]  # (n_samples, nx, ny, n_fields) - permeability, forcing, etc.
+
+            # Normalize each physical field channel independently
+            self.x_fields_mean = []
+            self.x_fields_std = []
+            X_fields_normalized = np.zeros_like(X_fields)
+
+            print(f"\nInput normalization applied:")
+            print(f"  Keeping channels 0,1 (coordinates) unnormalized: range [0,1]")
+
+            for ch in range(X_fields.shape[-1]):
+                field = X_fields[..., ch]
+                mean = field.mean()
+                std = field.std()
+
+                self.x_fields_mean.append(mean)
+                self.x_fields_std.append(std)
+
+                X_fields_normalized[..., ch] = (field - mean) / std
+
+                print(f"  Channel {ch+2}: mean={mean:.6f}, std={std:.6f} → N(0,1)")
+
+            # Concatenate coordinates + normalized fields
+            X_normalized = np.concatenate([X_coords, X_fields_normalized], axis=-1)
+            self.X = torch.from_numpy(X_normalized).float()
+
+            print(f"  Final input shape: {self.X.shape}")
+        else:
+            # No normalization (or only 2 channels = coordinates only)
+            self.x_fields_mean = []
+            self.x_fields_std = []
+            self.X = torch.from_numpy(X).float()
+
+            if self.in_channels > 2:
+                print(f"\nWARNING: Input normalization disabled, but you have {self.in_channels} channels!")
+                print(f"  This may cause training issues if channels have different scales.")
+
+        # ===== OUTPUT NORMALIZATION =====
         self.normalize_output = normalize_output
-        if normalize_output:    #
+        if normalize_output:
             self.u_mean = U.mean()
             self.u_std = U.std()
             U_normalized = (U - self.u_mean) / self.u_std
             self.U = torch.from_numpy(U_normalized).float()
 
-            print(f"Output normalization applied:")
+            print(f"\nOutput normalization applied:")
             print(f"  Original: mean={self.u_mean:.6f}, std={self.u_std:.6f}")
             print(f"  Normalized: mean={U_normalized.mean():.6f}, std={U_normalized.std():.6f}")
         else:
@@ -63,13 +112,45 @@ class PDEDataset(Dataset):
             return U_normalized * self.u_std + self.u_mean
         return U_normalized
 
+    def denormalize_input_fields(self, X_normalized: torch.Tensor) -> torch.Tensor:
+        """
+        Convert normalized input fields back to original scale.
+        Only affects channels 2+ (physical fields), keeps coordinates unchanged.
+
+        Args:
+            X_normalized: Normalized input (batch, nx, ny, channels)
+
+        Returns:
+            X_denormalized: Input with physical fields denormalized
+        """
+        if not self.normalize_input or len(self.x_fields_mean) == 0:
+            return X_normalized
+
+        X = X_normalized.clone()
+
+        # Denormalize each physical field channel
+        for ch in range(len(self.x_fields_mean)):
+            X[..., ch + 2] = X[..., ch + 2] * self.x_fields_std[ch] + self.x_fields_mean[ch]
+
+        return X
+
     @classmethod
-    def from_file(cls, filepath: str, normalize_output: bool = True):
-        """Load dataset from .npz file."""
+    def from_file(cls, filepath: str, normalize_output: bool = True, normalize_input: bool = True):
+        """
+        Load dataset from .npz file.
+
+        Args:
+            filepath: Path to .npz file
+            normalize_output: If True, normalize output to N(0,1)
+            normalize_input: If True, normalize input channels beyond x,y coords to N(0,1)
+
+        Returns:
+            PDEDataset instance
+        """
         data = np.load(filepath)
         X = data['X']
         U = data['U']
-        return cls(X, U, normalize_output=normalize_output)
+        return cls(X, U, normalize_output=normalize_output, normalize_input=normalize_input)
 
 
 def create_dataloaders(config):

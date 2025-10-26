@@ -126,3 +126,5 @@ Recommended Solutions (in order of impact):
 # Next Question for Claude
 - Will spectral normalization help both PCD and SM EBM training?
 - Does the input data for EBM already normalized?
+- What about training FNO under EBM score matching loss? [web]
+- What about bayesian-FNO? [web]
