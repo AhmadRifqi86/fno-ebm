@@ -340,6 +340,8 @@ class Trainer:
         - Good model: pos=1, neg=10 → gap=9 → val_loss=-9 (low, good!)
         - Bad model:  pos=5, neg=6  → gap=1 → val_loss=-1 (high, bad!)
         """
+        from ebm import ConditionalEnergyWrapper
+
         self.ebm_model.eval()
         self.fno_model.eval()
         total_ebm_val_loss = 0
@@ -355,14 +357,28 @@ class Trainer:
             with torch.no_grad():
                 pos_energy = self.model.energy(y, x, training=False, u_fno=u_fno)
 
-            # Negative phase: Use torchebm's Langevin sampler
+            # Negative phase: Use conditional Langevin sampler
+            # Create conditional energy wrapper for this batch
+            conditional_energy = ConditionalEnergyWrapper(
+                energy_fn=self.ebm_model,
+                condition=x
+            )
+
+            # Create conditional sampler
+            conditional_sampler = LangevinSampler(
+                energy_function=conditional_energy,
+                step_size=self.config.mcmc_step_size,
+                noise_scale=np.sqrt(2 * self.config.mcmc_step_size)
+            )
+
             # Initialize from FNO prediction for inference
             y_neg = u_fno.clone().detach()
 
-            # Sample using torchebm's Langevin sampler
-            y_neg = self.langevin_sampler.sample(
-                init_samples=y_neg,
-                condition=x  # Pass condition if needed
+            # Sample using conditional Langevin sampler
+            # Only samples u, keeps x fixed
+            y_neg = conditional_sampler.sample(
+                x=y_neg,
+                n_steps=self.config.mcmc_steps
             )
 
             with torch.no_grad():
@@ -403,32 +419,51 @@ class Trainer:
 
     def train_step_ebm(self, x, y):
         """
-        EBM training step using torchebm library.
+        EBM training step using torchebm library with conditional sampling.
 
-        This replaces the from-scratch MCMC implementation with torchebm's
-        optimized samplers and loss functions.
+        This uses a ConditionalEnergyWrapper to ensure MCMC sampling only updates
+        the solution field u, while keeping the conditioning information x fixed.
 
         Args:
-            x: Input coordinates (batch, n_x, n_y, 3)
-            y: Ground truth solutions (batch, n_x, n_y, 1)
+            x: Input coordinates (batch, n_x, n_y, 3) - CONDITIONING (stays fixed)
+            y: Ground truth solutions (batch, n_x, n_y, 1) - SAMPLED (updated by MCMC)
 
         Returns:
             ebm_loss: EBM loss value (float)
         """
+        from ebm import ConditionalEnergyWrapper
+
         # STEP 1: Add small noise to positive samples (prevents overfitting)
         small_noise = torch.randn_like(y) * 0.005
         y_noisy = y + small_noise
         y_noisy = torch.clamp(y_noisy, -3, 3)
 
-        # STEP 2: Use torchebm's Contrastive Divergence loss
-        # This handles:
-        # - Computing positive energy
-        # - MCMC sampling for negative samples (via sampler)
-        # - Computing negative energy
-        # - Computing CD loss
-        # Returns: (loss, negative_samples)
-        x_combine = torch.cat([y_noisy, x], dim=-1)
-        ebm_loss, _ = self.cd_loss_fn(x_combine)
+        # STEP 2: Create conditional energy wrapper for this batch
+        # This ensures MCMC only samples u, keeping x fixed
+        conditional_energy = ConditionalEnergyWrapper(
+            energy_fn=self.ebm_model,
+            condition=x
+        )
+
+        # STEP 3: Create conditional sampler and loss for this batch
+        from torchebm.samplers import LangevinDynamics as LangevinSampler
+        from torchebm.losses import ContrastiveDivergence
+
+        conditional_sampler = LangevinSampler(
+            energy_function=conditional_energy,
+            step_size=self.config.mcmc_step_size,
+            noise_scale=np.sqrt(2 * self.config.mcmc_step_size)
+        )
+
+        conditional_cd_loss = ContrastiveDivergence(
+            energy_function=conditional_energy,
+            sampler=conditional_sampler,
+            k_steps=self.config.mcmc_steps
+        )
+
+        # STEP 4: Compute contrastive divergence loss
+        # Now the sampler will only update y (u), not x!
+        ebm_loss, _ = conditional_cd_loss(y_noisy)
 
         # Scale loss for gradient accumulation
         ebm_loss_scaled = ebm_loss / self.accumulation_steps

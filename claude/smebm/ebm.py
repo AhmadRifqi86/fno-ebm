@@ -115,7 +115,7 @@ class ConvEBM(BaseEnergyFunction):
         self.network = nn.Sequential(*layers)
         self.pool = nn.AdaptiveAvgPool2d(1)
 
-    def forward(self,x): #rewrite to forward(self,x)
+    def forward(self, u, x):
         """
         Args:
             u: solution field (batch, n_x, n_y, 1)
@@ -127,10 +127,10 @@ class ConvEBM(BaseEnergyFunction):
         and f(u) = -E(u). This prevents sign confusion and aligns with literature.
         """
         # Concatenate solution with coordinates
-        #combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
 
         # Reshape to (batch, channels, height, width) for conv
-        combined = x.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
+        combined = combined.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
 
         # Apply convolutional network to get f(u,x)
         f_map = self.network(combined)  # (batch, 1, n_x, n_y)
@@ -144,6 +144,39 @@ class ConvEBM(BaseEnergyFunction):
         # We return f directly (which is -E in standard notation)
         # The loss function will work with this convention
         return f
+
+
+class ConditionalEnergyWrapper(BaseEnergyFunction):
+    """
+    Wrapper for conditional EBMs that separates sampling (u) from conditioning (x).
+
+    This wrapper ensures that when MCMC sampling is performed, only the solution field u
+    is updated, while the conditioning information x remains fixed.
+
+    Compatible with torchebm library's samplers and loss functions.
+    """
+    def __init__(self, energy_fn, condition):
+        """
+        Args:
+            energy_fn: The base energy function E(u, x)
+            condition: The conditioning information x (fixed during sampling)
+        """
+        super().__init__()
+        self.energy_fn = energy_fn
+        self.register_buffer('condition', condition)
+
+    def forward(self, u):
+        """
+        Args:
+            u: solution field to be sampled (batch, n_x, n_y, 1)
+        Returns:
+            energy: scalar energy (batch,)
+        """
+        return self.energy_fn(u, self.condition)
+
+    def update_condition(self, new_condition):
+        """Update the conditioning information"""
+        self.condition = new_condition
 
 
 # ============================================================================

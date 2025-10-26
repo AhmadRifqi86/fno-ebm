@@ -1,6 +1,6 @@
 # Training Hyperparameters
 epochs: 150              # Total epochs (not used in staged training)
-fno_epochs: 100          # Stage 1: FNO training (increased to avoid early stopping)
+fno_epochs: 20          # Stage 1: FNO training (increased to avoid early stopping)
 ebm_epochs: 30           # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
 patience: 30             # Early stopping patience (increased - was too aggressive)
 accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
