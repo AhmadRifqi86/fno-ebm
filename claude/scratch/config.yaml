@@ -1,0 +1,106 @@
+# Training Hyperparameters
+epochs: 150              # Total epochs (not used in staged training)
+fno_epochs: 100          # Stage 1: FNO training (increased to avoid early stopping)
+ebm_epochs: 30           # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
+patience: 30             # Early stopping patience (increased - was too aggressive)
+accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
+
+# Optimizer and Scheduler
+fno_learning_rate: 0.001
+ebm_learning_rate: 0.0001
+
+fno_optimizer_config:
+  type: adam
+  lr: 0.0005             # Moderate LR for stable convergence, should be high?
+  weight_decay: 0.0001   # Light regularization (reduced from 0.01)
+
+ebm_optimizer_config:
+  type: adam              # CHANGED: Use Adam (not AdamW) like UvA
+  lr: 0.0001             # Conservative LR for EBM stability
+  weight_decay: 0.0      # NO weight decay (UvA doesn't use it)
+  betas: [0.0, 0.999]    # CRITICAL: beta1=0.0 (UvA trick for changing loss surface)
+
+# fno_scheduler_config:
+#   type: cosine_annealing_warm_restarts_with_decay
+#   T_0: 15                # Restart every 15 epochs
+#   T_mult: 1.0
+#   freq_mult: 0.95        # Gradually shorter cycles
+#   eta_min: 0.00001       # Minimum learning rate
+#   decay: 0.95            # Decay max LR each restart
+
+fno_scheduler_config:
+  type: step_lr
+  step_size: 10          # Reduce LR every 10 epochs
+  gamma: 0.8 
+
+ebm_scheduler_config:
+  type: step_lr
+  step_size: 10          # Reduce LR every 10 epochs
+  gamma: 0.8             # Half the learning rate
+
+# Model Parameters
+fno_modes: 16           # Fourier modes (increased for better representation)
+fno_width: 96           # Hidden dimension (increased from 64)
+ebm_hidden_dim: 128      # EBM network width
+
+# Physics and MCMC
+lambda_phys: 0.00009        # Physics loss weight (DISABLED - data has noise, let model learn from data), need to be small, i'll try 0.0001 or 0.00015
+mcmc_steps: 200           # Langevin MCMC steps (balanced)
+mcmc_step_size: 0.05      # Step size for energy landscape exploration (increased for small gradients), try big, later will try 0.01
+
+# EBM Energy Formulation
+use_anchor_in_ebm_training: false  # If true: use FNO anchor during training (Mode 2), if false: V_EBM only during training (Mode 1)
+sigma_squared_train: 100.0         # Variance for training anchor (weak anchor, only used if use_anchor_in_ebm_training=true)
+sigma_squared_inference: 1.0       # Variance for inference anchor (strong anchor, always used during inference)
+
+# Persistent Contrastive Divergence (PCD)
+use_pcd: true                      # Enable PCD replay buffer (highly recommended!)
+pcd_buffer_size: 1000              # Maximum number of negative samples to store (1000 = ~16k parameters at 64x64)
+pcd_reinit_prob: 0.05              # Probability of fresh initialization instead of replay buffer (5% = 95% from buffer)
+
+# EBM Training Stability (CRITICAL!)
+mcmc_grad_clip: 0.03               # Gradient clipping during MCMC sampling (prevents explosion), 0 = no clipping
+energy_reg_alpha: 0.1              # Energy regularization weight (prevents unbounded energy values), 0 = no reg
+
+# Data and Paths
+data_dir: '../data'  # Data is in parent directory (claude/data/)
+checkpoint_dir: './checkpoints'
+batch_size: 16           # Good for 64x64 on most GPUs
+grid_size: 64
+n_train: 1000
+n_test: 200
+num_workers: 4
+save_data: true
+
+# Dataset Generation Parameters
+data_seed: 42
+train_test_split: 0.8
+
+# PDE Selection
+pde_type: 'darcy'
+complexity: 'medium'
+noise_type: 'heteroscedastic'
+
+# Heteroscedastic noise parameters
+base_noise: 0.001        # Minimum noise floor
+scale_factor: 0.02       # 2% relative noise
+
+# Gaussian noise parameters (if noise_type='gaussian')
+noise_level: 0.01
+
+# Spatially correlated noise parameters (if noise_type='spatially_correlated')
+spatial_noise_level: 0.01
+correlation_length: 3.0
+
+# Mixed noise parameters (if noise_type='mixed')
+gaussian_level: 0.005
+hetero_scale: 0.01
+spatial_level: 0.003
+mixed_correlation_length: 2.0
+
+# Burgers-specific parameters (only used if pde_type='burgers')
+burgers_nx: 256
+burgers_nt: 100
+burgers_viscosity: 0.01
+burgers_T: 1.0
+burgers_L: 6.283185307179586

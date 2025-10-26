@@ -93,7 +93,8 @@ def main():
     # 3. Load Noisy Dataset
     print("\n--- Loading Noisy Dataset ---")
 
-    data_dir = Path(config.data_dir) if hasattr(config, 'data_dir') else Path('data')
+    # Data directory is in parent folder (claude/data/) since we're in smebm/
+    data_dir = Path(config.data_dir) if hasattr(config, 'data_dir') else Path('../data')
     resolution = config.grid_size if hasattr(config, 'grid_size') else 64
     complexity = config.complexity if hasattr(config, 'complexity') else 'medium'
     noise_type = config.noise_type if hasattr(config, 'noise_type') else 'heteroscedastic'
@@ -110,6 +111,7 @@ def main():
         print(f"  - {noisy_val_file}")
         print("\nPlease generate dataset first (it should be auto-generated if missing)")
         print("Or check that config.yaml settings match your data files.")
+        return  # Exit if files not found
 
     # Load noisy datasets
     print(f"Loading noisy dataset from {data_dir}...")

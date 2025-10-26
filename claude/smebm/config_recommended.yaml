@@ -1,0 +1,95 @@
+# ============================================================================
+# RECOMMENDED CONFIG FOR DARCY FLOW (1000 samples, 64x64, heteroscedastic noise)
+# ============================================================================
+
+# Training Hyperparameters
+epochs: 150              # Total epochs (not used in staged training)
+fno_epochs: 80           # Stage 1: FNO training (increased for better convergence)
+ebm_epochs: 30           # Stage 2: EBM training (increased for better UQ)
+patience: 20             # Early stopping patience
+accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
+
+# Optimizer and Scheduler
+fno_learning_rate: 0.001
+ebm_learning_rate: 0.0001
+
+fno_optimizer_config:
+  type: adam
+  lr: 0.0003             # Moderate LR for stable convergence
+  weight_decay: 0.0001   # Light regularization (reduced from 0.01)
+
+ebm_optimizer_config:
+  type: adamw
+  lr: 0.0001             # Conservative LR for EBM stability
+  weight_decay: 0.00001  # Very light regularization for EBM
+  betas: [0.9, 0.999]
+
+fno_scheduler_config:
+  type: cosine_annealing_warm_restarts_with_decay
+  T_0: 15                # Restart every 15 epochs
+  T_mult: 1.0
+  freq_mult: 0.95        # Gradually shorter cycles
+  eta_min: 0.00001       # Minimum learning rate
+  decay: 0.95            # Decay max LR each restart
+
+ebm_scheduler_config:
+  type: step_lr
+  step_size: 10          # Reduce LR every 10 epochs
+  gamma: 0.5             # Half the learning rate
+
+# Model Parameters
+fno_modes: 12            # Fourier modes (reduced from 16 for 64x64 resolution)
+fno_width: 64            # Hidden dimension
+ebm_hidden_dim: 128      # EBM network width
+
+# Physics and MCMC
+lambda_phys: 0.05        # Physics loss weight (LOW for noisy data)
+mcmc_steps: 40           # Langevin MCMC steps (balanced)
+mcmc_step_size: 0.015    # Step size for energy landscape exploration
+
+# Data and Paths
+data_dir: './data'
+checkpoint_dir: './checkpoints'
+batch_size: 16           # Good for 64x64 on most GPUs
+grid_size: 64
+n_train: 1000
+n_test: 200
+num_workers: 4
+save_data: true
+
+# Dataset Generation Parameters
+data_seed: 42
+train_test_split: 0.8
+
+# PDE Selection
+pde_type: 'darcy'
+
+# Complexity Level
+complexity: 'medium'
+
+# Noise Configuration
+noise_type: 'heteroscedastic'
+
+# Heteroscedastic noise parameters
+base_noise: 0.001        # Minimum noise floor
+scale_factor: 0.02       # 2% relative noise
+
+# Gaussian noise parameters (if noise_type='gaussian')
+noise_level: 0.01
+
+# Spatially correlated noise parameters (if noise_type='spatially_correlated')
+spatial_noise_level: 0.01
+correlation_length: 3.0
+
+# Mixed noise parameters (if noise_type='mixed')
+gaussian_level: 0.005
+hetero_scale: 0.01
+spatial_level: 0.003
+mixed_correlation_length: 2.0
+
+# Burgers-specific parameters (only used if pde_type='burgers')
+burgers_nx: 256
+burgers_nt: 100
+burgers_viscosity: 0.01
+burgers_T: 1.0
+burgers_L: 6.283185307179586

@@ -1,0 +1,14 @@
+================================================================================
+DIAGNOSING INFERENCE MCMC SAMPLING
+================================================================================
+Loading: data/darcy_medium_heteroscedastic_res64_val.npz
+Output normalization applied:
+  Original: mean=-0.023472, std=0.015617
+  Normalized: mean=-0.000000, std=1.000000
+Using official Mamba implementation from mamba-ssm
+Traceback (most recent call last):
+  File "/home/arifadh/Desktop/Skripsi-Magang-Proyek/ece-ntust/fno-ebm/claude/diagnose_inference.py", line 224, in <module>
+    diagnose_mcmc_sampling()
+  File "/home/arifadh/Desktop/Skripsi-Magang-Proyek/ece-ntust/fno-ebm/claude/diagnose_inference.py", line 54, in diagnose_mcmc_sampling
+    fno_model = FNO2d(
+TypeError: FNO2d.__init__() got an unexpected keyword argument 'modes'

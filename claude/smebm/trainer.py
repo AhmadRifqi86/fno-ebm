@@ -8,6 +8,17 @@ from config import Config, Factory
 from customs import EarlyStopping, PhysicsLossFn
 import numpy as np
 
+# Import torchebm library
+try:
+    from torchebm.samplers import LangevinDynamics as LangevinSampler
+    from torchebm.losses import ContrastiveDivergence
+    TORCHEBM_AVAILABLE = True
+    print("Using torchebm library for EBM training")
+except ImportError:
+    TORCHEBM_AVAILABLE = False
+    print("Warning: torchebm library not available")
+    print("Install with: pip install torchebm")
+
 #Abstract class for physics loss, the physics loss should have format: phy_loss(u, x), u for output, x for grid position
 
 
@@ -85,7 +96,7 @@ class FNO_EBM(nn.Module):
 
 
 # ============================================================================
-# Trainer Class
+# Trainer Class (Using torchebm library)
 # ============================================================================
 
 class Trainer:
@@ -94,6 +105,9 @@ class Trainer:
                  ebm_train_loader=None, ebm_val_loader=None):
         """
         Initialize trainer with models, data loaders and configuration.
+
+        This version uses the torchebm library for EBM training instead of
+        from-scratch implementation.
 
         Supports two training modes:
         1. Single-dataset mode (train_loader only):
@@ -114,6 +128,12 @@ class Trainer:
             ebm_train_loader: Optional separate dataloader for EBM training (noisy data)
             ebm_val_loader: Optional separate dataloader for EBM validation (noisy data)
         """
+        if not TORCHEBM_AVAILABLE:
+            raise ImportError(
+                "torchebm library is required for this trainer. "
+                "Install with: pip install torchebm"
+            )
+
         self.model = model  # Store full FNO_EBM model for energy() method
         self.fno_model = model.u_fno
         self.ebm_model = model.V_ebm
@@ -173,18 +193,18 @@ class Trainer:
                 config.ebm_scheduler_config,
                 self.ebm_optimizer
             )
-        
+
         # Setup loss functions
-        self.fno_criterion = nn.MSELoss() #Maybe I should change this to a function of PDE residual 
+        self.fno_criterion = nn.MSELoss() #Maybe I should change this to a function of PDE residual
         self.phy_loss_fn = phy_loss
 
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self.lambda_phys = config.lambda_phys  # Weight for physics loss
-        
+
         self.early_stopper_fno = EarlyStopping(
-            patience=config.patience, 
+            patience=config.patience,
             verbose=True
         )
         self.early_stopper_ebm = EarlyStopping(
@@ -192,18 +212,31 @@ class Trainer:
             verbose=True
         )
 
-        # Persistent Contrastive Divergence (PCD) replay buffer
-        self.use_pcd = getattr(config, 'use_pcd', True)  # Enable PCD by default
-        self.pcd_buffer_size = getattr(config, 'pcd_buffer_size', 1000)
-        self.pcd_reinit_prob = getattr(config, 'pcd_reinit_prob', 0.05)  # 5% fresh samples
-        self.replay_buffer = []  # Store (x, y_neg) tuples for PCD
+        # ======================================================================
+        # torchebm library components
+        # ======================================================================
+        # Create Langevin sampler for MCMC sampling
+        # Note: The sampler will be passed to ContrastiveDivergence
+        self.langevin_sampler = LangevinSampler(
+            energy_function=self.ebm_model,
+            step_size=config.mcmc_step_size,
+            noise_scale=np.sqrt(2 * config.mcmc_step_size)
+        )
+
+        # Create Contrastive Divergence loss
+        # The EBM model is the energy function
+        self.cd_loss_fn = ContrastiveDivergence(
+            energy_function=self.ebm_model,
+            sampler=self.langevin_sampler,
+            k_steps=config.mcmc_steps  # Number of MCMC steps for negative sample generation
+        )
 
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
-        if self.use_pcd:
-            self.logger.info(f"PCD enabled: buffer_size={self.pcd_buffer_size}, reinit_prob={self.pcd_reinit_prob}")
+        self.logger.info("Using torchebm library for EBM training")
+        self.logger.info(f"  Langevin sampler: step_size={config.mcmc_step_size}, num_steps={config.mcmc_steps}")
 
     def checkpoint(self, epoch, val_loss, stage_type, is_best=False):
         """
@@ -250,7 +283,7 @@ class Trainer:
             self.config.checkpoint_dir,
             'best_model.pt'
         )
-        
+
         if os.path.exists(checkpoint_path):
             checkpoint = torch.load(checkpoint_path)
             self.fno_model.load_state_dict(checkpoint['fno_model'])
@@ -263,80 +296,6 @@ class Trainer:
             return True
         return False
 
-    def train_step(self, x, y):
-        """
-        Single training step for both FNO and EBM
-        """
-        # FNO Training Step
-        self.fno_optimizer.zero_grad()
-        fno_output = self.fno_model(x)
-        data_loss = self.fno_criterion(fno_output, y)
-
-        x_coords = x[..., 0].requires_grad_(True)
-        y_coords = x[..., 1].requires_grad_(True)
-        residual = self.phy_loss_fn(fno_output, x_coords, y_coords)
-        #residual = compute_pde_residual(fno_output, x_coords, y_coords)
-        physics_loss = torch.mean(residual**2)
-
-        total_loss = data_loss + self.lambda_phys * physics_loss
-        total_loss.backward()
-        self.fno_optimizer.step()
-        
-        # EBM Training Step
-        self.ebm_optimizer.zero_grad()
-
-        # Positive phase
-        pos_energy = self.ebm_model(x, y)
-
-        # Negative phase (MCMC sampling with Langevin dynamics)
-        # Initialize from CORRUPTED ground truth to create diverse negative samples
-        y_neg = y + 0.2 * torch.randn_like(y)  # Add significant noise to ground truth
-        y_neg = y_neg.detach()
-        y_neg.requires_grad = True
-
-        noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
-
-        for _ in range(self.config.mcmc_steps):
-            y_neg.requires_grad = True
-            neg_energy = self.ebm_model(x, y_neg)
-            neg_grad = torch.autograd.grad(
-                neg_energy.sum(),
-                y_neg,
-                create_graph=True
-            )[0]
-
-            # Langevin update: gradient descent + noise
-            with torch.no_grad():
-                noise = torch.randn_like(y_neg) * noise_scale
-                y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
-
-            y_neg = y_neg.detach()
-        
-        neg_energy = self.ebm_model(x, y_neg)
-        ebm_loss = pos_energy.mean() - neg_energy.mean()
-        ebm_loss.backward()
-        self.ebm_optimizer.step()
-        
-        return total_loss.item(), ebm_loss.item()
-
-    def validate_old(self):
-        """
-        Validation step
-        """
-        self.fno_model.eval()
-        self.ebm_model.eval()
-        total_val_loss = 0
-        
-        with torch.no_grad():
-            for x, y in self.val_loader:
-                x, y = x.to(self.config.device), y.to(self.config.device)
-                fno_output = self.fno_model(x)
-                val_loss = self.fno_criterion(fno_output, y)
-                total_val_loss += val_loss.item()
-                
-        avg_val_loss = total_val_loss / len(self.val_loader)
-        return avg_val_loss
-    
     def validate(self):
         """
         Validation step including physics loss
@@ -344,34 +303,42 @@ class Trainer:
         self.fno_model.eval()
         self.ebm_model.eval()
         total_val_loss = 0
-        
+
         with torch.no_grad():
             for x, y in self.fno_val_loader:
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 fno_output = self.fno_model(x)
-                
+
                 # Data loss
                 data_loss = self.fno_criterion(fno_output, y)
-                
+
                 # Physics loss
                 x_coords = x[..., 0].requires_grad_(True)
                 y_coords = x[..., 1].requires_grad_(True)
                 # Pass full x_grid for Darcy physics loss
                 residual = self.phy_loss_fn(fno_output, x_coords, y_coords, x_grid=x)
                 physics_loss = torch.mean(residual**2)
-                
+
                 # Total validation loss
                 val_loss = data_loss + self.lambda_phys * physics_loss
                 total_val_loss += val_loss.item()
-                
+
         avg_val_loss = total_val_loss / len(self.fno_val_loader)
         return avg_val_loss
-    
+
     def validate_ebm(self):
         """
-        Validation step for the EBM.
-        Computes the average energy gap on the validation set using FULL energy.
-        A lower (more negative) loss is better.
+        Validation step for the EBM using torchebm library.
+        Computes -(energy gap) = pos_energy - neg_energy on validation set.
+
+        Metric interpretation:
+        - Energy gap = neg_energy - pos_energy (should be LARGE and POSITIVE)
+        - Validation loss = pos - neg = -(gap) (should be NEGATIVE and become MORE negative)
+        - Lower (more negative) validation loss = better separation = better model
+
+        Example:
+        - Good model: pos=1, neg=10 → gap=9 → val_loss=-9 (low, good!)
+        - Bad model:  pos=5, neg=6  → gap=1 → val_loss=-1 (high, bad!)
         """
         self.ebm_model.eval()
         self.fno_model.eval()
@@ -388,20 +355,15 @@ class Trainer:
             with torch.no_grad():
                 pos_energy = self.model.energy(y, x, training=False, u_fno=u_fno)
 
-            # Negative phase (MCMC sampling - needs gradients)
+            # Negative phase: Use torchebm's Langevin sampler
             # Initialize from FNO prediction for inference
             y_neg = u_fno.clone().detach()
-            noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
 
-            for _ in range(self.config.mcmc_steps):
-                y_neg.requires_grad_(True)
-                neg_energy_for_grad = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
-                neg_grad = torch.autograd.grad(neg_energy_for_grad.sum(), y_neg)[0]
-
-                with torch.no_grad():
-                    noise = torch.randn_like(y_neg) * noise_scale
-                    y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
-                    y_neg = y_neg.detach()
+            # Sample using torchebm's Langevin sampler
+            y_neg = self.langevin_sampler.sample(
+                init_samples=y_neg,
+                condition=x  # Pass condition if needed
+            )
 
             with torch.no_grad():
                 neg_energy = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
@@ -411,57 +373,6 @@ class Trainer:
         avg_ebm_val_loss = total_ebm_val_loss / len(self.ebm_val_loader)
         return avg_ebm_val_loss
 
-    def train_no_stage(self):
-        """
-        Main training loop
-        """
-        # Try to resume training
-        self.resume()
-        
-        for epoch in range(self.current_epoch, self.config.epochs):
-            self.fno_model.train()
-            self.ebm_model.train()
-            
-            # Training loop with progress bar
-            loop = tqdm(self.train_loader)
-            epoch_fno_loss = 0
-            epoch_ebm_loss = 0
-            
-            for batch_idx, (x, y) in enumerate(loop):
-                x, y = x.to(self.config.device), y.to(self.config.device)
-                fno_loss, ebm_loss = self.train_step(x, y)
-                
-                epoch_fno_loss += fno_loss
-                epoch_ebm_loss += ebm_loss
-                
-                # Update progress bar
-                loop.set_description(f"Epoch [{epoch}/{self.config.epochs}]")
-                loop.set_postfix(
-                    fno_loss=fno_loss,
-                    ebm_loss=ebm_loss
-                )
-            
-            # Validation phase
-            val_loss = self.validate()
-
-            if self.fno_scheduler:
-                self.fno_scheduler.step()
-            if self.ebm_scheduler:
-                self.ebm_scheduler.step()
-            
-            # Log metrics
-            self.logger.info(
-                f"Epoch {epoch}: FNO Loss={epoch_fno_loss/len(self.train_loader):.4f}, "
-                f"EBM Loss={epoch_ebm_loss/len(self.train_loader):.4f}, "
-                f"Val Loss={val_loss:.4f}"
-            )
-            
-            # Save checkpoint
-            self.checkpoint(epoch, val_loss)
-            self.current_epoch = epoch + 1
-    
-    # ...existing code...
-
     def train_step_fno(self, x, y):
         """
         Single training step for FNO with both data and physics losses
@@ -469,8 +380,6 @@ class Trainer:
         Returns:
             tuple: (total_loss, data_loss, physics_loss) as floats
         """
-        #self.fno_optimizer.zero_grad()
-
         # Forward pass
         fno_output = self.fno_model(x)
 
@@ -489,115 +398,39 @@ class Trainer:
         total_loss_scaled = total_loss / self.accumulation_steps
 
         total_loss_scaled.backward()
-        #self.fno_optimizer.step()
 
         return total_loss.item(), data_loss.item(), physics_loss.item()
 
-    def train_step_ebm(self, x, y, langevin=True, use_anchor=None):
+    def train_step_ebm(self, x, y):
         """
-        FIXED EBM training - Following UvA Deep Energy Models Tutorial
+        EBM training step using torchebm library.
 
-        CRITICAL FIXES from UvA tutorial:
-        1. NO create_graph=True during MCMC (was killing training!)
-        2. Random uniform initialization instead of corrupted data
-        3. Small noise added to positive samples
-        4. 60 MCMC steps instead of 200
+        This replaces the from-scratch MCMC implementation with torchebm's
+        optimized samplers and loss functions.
+
+        Args:
+            x: Input coordinates (batch, n_x, n_y, 3)
+            y: Ground truth solutions (batch, n_x, n_y, 1)
+
+        Returns:
+            ebm_loss: EBM loss value (float)
         """
-        batch_size = x.shape[0]
-
-        # STEP 1: Add small noise to positive samples (UvA trick!)
-        # Prevents overfitting to exact training data
+        # STEP 1: Add small noise to positive samples (prevents overfitting)
         small_noise = torch.randn_like(y) * 0.005
         y_noisy = y + small_noise
         y_noisy = torch.clamp(y_noisy, -3, 3)
 
-        # STEP 2: Compute positive energy (V_EBM only, no anchor during training)
-        pos_energy = self.ebm_model(x, y_noisy)
+        # STEP 2: Use torchebm's Contrastive Divergence loss
+        # This handles:
+        # - Computing positive energy
+        # - MCMC sampling for negative samples (via sampler)
+        # - Computing negative energy
+        # - Computing CD loss
+        # Returns: (loss, negative_samples)
+        x_combine = torch.cat([y_noisy, x], dim=-1)
+        ebm_loss, _ = self.cd_loss_fn(x_combine)
 
-        # STEP 3: Initialize negative samples from buffer (PCD)
-        if self.use_pcd and len(self.replay_buffer) > 0 and np.random.random() > self.pcd_reinit_prob:
-            # Sample from buffer (95% of time)
-            buffer_indices = np.random.choice(
-                len(self.replay_buffer),
-                size=min(batch_size, len(self.replay_buffer)),
-                replace=False
-            )
-            y_neg = torch.stack([self.replay_buffer[i][1] for i in buffer_indices]).to(x.device)
-
-            # Pad if needed with random uniform (UvA style)
-            if y_neg.shape[0] < batch_size:
-                n_missing = batch_size - y_neg.shape[0]
-                y_neg_extra = torch.rand(n_missing, *y.shape[1:], device=x.device) * 2 - 1
-                y_neg = torch.cat([y_neg, y_neg_extra], dim=0)
-        else:
-            # Fresh initialization (5% of time): random uniform [-1, 1] (UvA style)
-            y_neg = torch.rand_like(y) * 2 - 1
-
-        # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
-        mcmc_steps = 60  # UvA uses 60 during training (not 200!)
-        step_size = self.config.mcmc_step_size
-        grad_clip = 0.03
-
-        y_neg = y_neg.detach()  # Start fresh, no gradients
-
-        for i in range(mcmc_steps):
-            # Add small noise and clamp (UvA does this)
-            noise_this_step = torch.randn_like(y_neg) * 0.005
-            y_neg = y_neg + noise_this_step
-            y_neg = torch.clamp(y_neg, -3, 3)
-
-            # Enable gradients for this step only
-            y_neg.requires_grad_(True)
-
-            # Compute energy
-            neg_energy_for_grad = self.ebm_model(x, y_neg)
-
-            # CRITICAL FIX: NO create_graph=True!
-            # Only backprop to get gradients, don't keep computation graph
-            neg_grad = torch.autograd.grad(
-                neg_energy_for_grad.sum(),
-                y_neg,
-                retain_graph=False,
-                create_graph=False  # FIXED: Was True, killed training!
-            )[0]
-
-            # Clip gradients
-            neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
-
-            # Update (detach to break gradient flow)
-            with torch.no_grad():
-                if langevin:
-                    noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
-                    y_neg = y_neg - step_size * neg_grad + noise
-                else:
-                    y_neg = y_neg - step_size * neg_grad
-
-            y_neg = y_neg.detach()
-
-        # STEP 5: Final negative energy
-        neg_energy = self.ebm_model(x, y_neg)
-
-        # STEP 6: Update buffer
-        if self.use_pcd:
-            for i in range(batch_size):
-                self.replay_buffer.append((
-                    x[i].detach().cpu(),
-                    y_neg[i].detach().cpu()
-                ))
-
-            if len(self.replay_buffer) > self.pcd_buffer_size:
-                self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
-
-        # STEP 7: Compute loss (UvA formula)
-        alpha = 0.1  # UvA default
-        reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
-
-        # Contrastive divergence
-        cd_loss = neg_energy.mean() - pos_energy.mean()
-
-        # Total loss
-        ebm_loss = reg_loss + cd_loss
-
+        # Scale loss for gradient accumulation
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
         ebm_loss_scaled.backward()
 
@@ -669,12 +502,12 @@ class Trainer:
 
     def train_ebm(self, num_epochs):
         """
-        Train EBM model only, with checkpointing and early stopping.
+        Train EBM model only using torchebm library.
 
         Uses ebm_train_loader (noisy data in dual-dataset mode, same as FNO otherwise).
         """
         mode_str = "noisy observations" if self.dual_dataset_mode else "same dataset as FNO"
-        self.logger.info(f"Starting EBM training on {mode_str}...")
+        self.logger.info(f"Starting EBM training with torchebm on {mode_str}...")
         best_val_loss = float('inf')
 
         for epoch in range(num_epochs):
@@ -691,13 +524,13 @@ class Trainer:
                     self.ebm_optimizer.step()
                     self.ebm_optimizer.zero_grad()
 
-                loop.set_description(f"EBM Training Epoch [{epoch+1}/{num_epochs}]")
+                loop.set_description(f"EBM Training Epoch [{epoch+1}/{num_epochs}] (torchebm)")
                 loop.set_postfix(ebm_loss=loss)
 
             # EBM Validation (uses EBM val loader)
             val_loss = self.validate_ebm()
             avg_epoch_loss = epoch_loss / len(self.ebm_train_loader)
-            
+
             self.logger.info(
                 f"EBM Epoch {epoch+1}: Train Loss={avg_epoch_loss:.4f}, "
                 f"Val Loss (Energy Gap)={val_loss:.4f}"
@@ -723,16 +556,16 @@ class Trainer:
         """
         Staged training: First FNO, then EBM
         """
-        self.logger.info("Starting staged training...")
-        
+        self.logger.info("Starting staged training (using torchebm library)...")
+
         # Stage 1: Train FNO
         self.logger.info("Stage 1: Training FNO")
         self.train_fno(self.config.fno_epochs)
-        
-        # Stage 2: Train EBM
-        self.logger.info("Stage 2: Training EBM")
+
+        # Stage 2: Train EBM with torchebm
+        self.logger.info("Stage 2: Training EBM with torchebm library")
         self.train_ebm(self.config.ebm_epochs)
-        
+
         self.logger.info("Staged training completed")
 
 # ...existing code...

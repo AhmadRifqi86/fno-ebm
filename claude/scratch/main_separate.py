@@ -92,7 +92,7 @@ def main():
     # 3. Load Dual Datasets
     print("\n--- Loading Dual Datasets ---")
 
-    data_dir = Path(config.data_dir) if hasattr(config, 'data_dir') else Path('data')
+    data_dir = Path(config.data_dir) if hasattr(config, 'data_dir') else Path('../data')
     resolution = config.grid_size if hasattr(config, 'grid_size') else 64
     complexity = config.complexity if hasattr(config, 'complexity') else 'medium'
 

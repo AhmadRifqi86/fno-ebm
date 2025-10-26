@@ -63,8 +63,8 @@ mcmc_grad_clip: 0.03               # Gradient clipping during MCMC sampling (pre
 energy_reg_alpha: 0.1              # Energy regularization weight (prevents unbounded energy values), 0 = no reg
 
 # Data and Paths
-data_dir: './data'
-checkpoint_dir: './checkpoints'
+data_dir: '../data'  # Data is in parent directory (claude/data/)
+checkpoint_dir: '../checkpoints'
 batch_size: 16           # Good for 64x64 on most GPUs
 grid_size: 64
 n_train: 1000
