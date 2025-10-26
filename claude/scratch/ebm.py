@@ -77,25 +77,67 @@ class ConvEBM(nn.Module):
     ConvEBM uses convolutions to capture spatial correlations.
 
     This is CRITICAL for learning structured uncertainty maps!
+
+    Features:
+    - Spectral normalization for gradient stability
+    - Skip connections for better gradient flow
+    - Shallow linear layers instead of global pooling for more expressive aggregation
     """
-    # Consider use spectral normalization later
     def __init__(self, in_channels=4, hidden_channels=[64, 128, 128, 64]):
         super().__init__()
 
-        layers = []
-        prev_channels = in_channels
+        self.hidden_channels = hidden_channels
+        self.in_channels = in_channels
 
-        for hidden_ch in hidden_channels:
-            layers.append(nn.Conv2d(prev_channels, hidden_ch, kernel_size=3, padding=1))
-            layers.append(nn.GroupNorm(8, hidden_ch))  # GroupNorm for stability
-            layers.append(nn.GELU())
+        # Build convolutional blocks with skip connections
+        self.conv_blocks = nn.ModuleList()
+        self.skip_convs = nn.ModuleList()  # 1x1 convs for skip connections
+
+        prev_channels = in_channels
+        for i, hidden_ch in enumerate(hidden_channels):
+            # Main convolutional block with spectral normalization
+            block = nn.Sequential(
+                nn.utils.spectral_norm(
+                    nn.Conv2d(prev_channels, hidden_ch, kernel_size=3, padding=1)
+                ),
+                nn.GroupNorm(8, hidden_ch),
+                nn.GELU(),
+                nn.utils.spectral_norm(
+                    nn.Conv2d(hidden_ch, hidden_ch, kernel_size=3, padding=1)
+                ),
+                nn.GroupNorm(8, hidden_ch)
+            )
+            self.conv_blocks.append(block)
+
+            # Skip connection (1x1 conv to match dimensions)
+            if prev_channels != hidden_ch:
+                skip = nn.utils.spectral_norm(
+                    nn.Conv2d(prev_channels, hidden_ch, kernel_size=1)
+                )
+            else:
+                skip = nn.Identity()
+            self.skip_convs.append(skip)
+
             prev_channels = hidden_ch
 
         # Final conv to energy map
-        layers.append(nn.Conv2d(prev_channels, 1, kernel_size=1))
+        self.final_conv = nn.utils.spectral_norm(
+            nn.Conv2d(prev_channels, 1, kernel_size=1)
+        )
 
-        self.network = nn.Sequential(*layers)
-        self.pool = nn.AdaptiveAvgPool2d(1)
+        # Replace global pooling with shallow linear layers for more expressive aggregation
+        # This allows the network to learn how to aggregate spatial information
+        spatial_dim = 64  # Assuming 64x64 input, adjust if needed
+        flattened_dim = 1 * spatial_dim * spatial_dim
+
+        self.aggregation = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flattened_dim, 256),
+            nn.GELU(),
+            nn.Linear(256, 64),
+            nn.GELU(),
+            nn.Linear(64, 1)
+        )
 
     def forward(self, u, x):
         """
@@ -112,13 +154,20 @@ class ConvEBM(nn.Module):
         combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
 
         # Reshape to (batch, channels, height, width) for conv
-        combined = combined.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
+        features = combined.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
 
-        # Apply convolutional network to get f(u,x)
-        f_map = self.network(combined)  # (batch, 1, n_x, n_y)
+        # Apply convolutional blocks with skip connections
+        for conv_block, skip_conv in zip(self.conv_blocks, self.skip_convs):
+            identity = skip_conv(features)
+            features = conv_block(features)
+            features = F.gelu(features + identity)  # Skip connection + activation
 
-        # Global average pooling to get scalar f(u,x)
-        f = self.pool(f_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+        # Final conv to get energy map
+        f_map = self.final_conv(features)  # (batch, 1, n_x, n_y)
+
+        # Use shallow linear layers for aggregation instead of global pooling
+        f = self.aggregation(f_map)  # (batch, 1)
+        f = f.squeeze(-1)  # (batch,)
 
         # Standard EBM convention: network outputs f(u,x) = -E(u,x)
         # So energy E = -f
