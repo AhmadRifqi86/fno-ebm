@@ -188,6 +188,217 @@ class ConvEBM(nn.Module):
 
 
 # ============================================================================
+# FNO-based EBM (RECOMMENDED FOR GLOBAL SPATIAL PATTERNS)
+# ============================================================================
+
+class SimpleFNO_EBM(nn.Module):
+    """
+    FNO-based Energy Model with GLOBAL receptive field.
+
+    KEY ADVANTAGE: Spectral convolutions see the ENTIRE spatial field at once!
+    - Solves the receptive field problem (ConvEBM only sees 17x17 pixels)
+    - Can learn global patterns like radial uncertainty
+    - More stable gradients via spectral parameterization
+
+    Architecture:
+        Input (u, x) → FNO encoder layers → Global pooling → MLP head → Energy
+
+    This is SIMPLER than FNO_KAN_EBM (no KAN complexity) but with same
+    global receptive field advantage.
+    """
+    def __init__(
+        self,
+        in_channels=4,
+        fno_modes1=12,
+        fno_modes2=12,
+        fno_width=32,
+        fno_layers=3
+    ):
+        super().__init__()
+
+        self.fno_width = fno_width
+        self.fno_modes1 = fno_modes1
+        self.fno_modes2 = fno_modes2
+
+        # Initial lifting: map from input channels to FNO width
+        self.fc0 = nn.Linear(in_channels, fno_width)
+
+        # FNO spectral convolution layers (GLOBAL receptive field!)
+        self.spectral_layers = nn.ModuleList([
+            SpectralConv2d(fno_width, fno_width, fno_modes1, fno_modes2)
+            for _ in range(fno_layers)
+        ])
+
+        # Local skip connections
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(fno_width, fno_width, 1)
+            for _ in range(fno_layers)
+        ])
+
+        # Final projection to energy map
+        self.final_conv = nn.Conv2d(fno_width, 1, kernel_size=1)
+
+        # Global pooling
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+        # MLP head for energy prediction (removed to simplify - just use pooled features directly)
+        # Simpler is better for initial testing
+
+    def forward(self, u, x):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            energy: scalar energy (batch,)
+        """
+        # Concatenate solution with coordinates
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # Lift to FNO width
+        features = self.fc0(combined)  # (batch, n_x, n_y, fno_width)
+        features = features.permute(0, 3, 1, 2)  # (batch, fno_width, n_x, n_y)
+
+        # Apply FNO layers (each has GLOBAL receptive field via FFT)
+        for spectral, w in zip(self.spectral_layers, self.w_layers):
+            x1 = spectral(features)  # Spectral convolution (GLOBAL)
+            x2 = w(features)         # Local skip connection
+            features = x1 + x2
+            features = F.gelu(features)
+
+        # Final conv to energy map
+        energy_map = self.final_conv(features)  # (batch, 1, n_x, n_y)
+
+        # Global pooling to scalar energy
+        energy = self.pool(energy_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+
+        return energy
+
+
+# ============================================================================
+# Multi-Scale Convolutional EBM
+# ============================================================================
+
+class MultiScaleConvEBM(nn.Module):
+    """
+    Multi-scale convolutional EBM with dilated convolutions.
+
+    Addresses receptive field issue by:
+    1. Using dilated convolutions (exponentially increasing receptive field)
+    2. Multi-scale feature extraction (capture patterns at different scales)
+    3. Weighted pooling instead of simple average
+
+    Still not truly global like FNO, but much better than vanilla ConvEBM.
+    """
+    def __init__(self, in_channels=4, hidden_channels=[32, 64, 64, 32]):
+        super().__init__()
+
+        self.hidden_channels = hidden_channels
+        self.in_channels = in_channels
+
+        # Multi-scale conv blocks with increasing dilation
+        self.conv_blocks = nn.ModuleList()
+        self.skip_convs = nn.ModuleList()
+
+        prev_channels = in_channels
+        dilation = 1
+
+        for i, hidden_ch in enumerate(hidden_channels):
+            # Dilated conv block (exponentially increasing receptive field)
+            block = nn.Sequential(
+                nn.utils.spectral_norm(
+                    nn.Conv2d(prev_channels, hidden_ch, kernel_size=3,
+                             padding=dilation, dilation=dilation)
+                ),
+                nn.GroupNorm(8, hidden_ch),
+                nn.GELU(),
+                nn.utils.spectral_norm(
+                    nn.Conv2d(hidden_ch, hidden_ch, kernel_size=3,
+                             padding=dilation, dilation=dilation)
+                ),
+                nn.GroupNorm(8, hidden_ch)
+            )
+            self.conv_blocks.append(block)
+
+            # Skip connection
+            if prev_channels != hidden_ch:
+                skip = nn.utils.spectral_norm(
+                    nn.Conv2d(prev_channels, hidden_ch, kernel_size=1)
+                )
+            else:
+                skip = nn.Identity()
+            self.skip_convs.append(skip)
+
+            prev_channels = hidden_ch
+            dilation *= 2  # Exponentially increase dilation
+
+        # Final conv to energy map
+        self.final_conv = nn.utils.spectral_norm(
+            nn.Conv2d(prev_channels, 1, kernel_size=1)
+        )
+
+        # Multi-scale pooling (pool at different resolutions)
+        self.pool_4x4 = nn.AdaptiveAvgPool2d(4)
+        self.pool_8x8 = nn.AdaptiveAvgPool2d(8)
+        self.pool_16x16 = nn.AdaptiveAvgPool2d(16)
+
+        # Attention-like weighting for multi-scale features
+        self.scale_weights = nn.Parameter(torch.ones(3) / 3)  # Learnable weights
+
+        # Final MLP to combine multi-scale features
+        self.aggregation = nn.Sequential(
+            nn.Linear(4*4 + 8*8 + 16*16, 128),
+            nn.GELU(),
+            nn.Linear(128, 32),
+            nn.GELU(),
+            nn.Linear(32, 1)
+        )
+
+    def forward(self, u, x):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            energy: scalar energy (batch,)
+        """
+        # Concatenate solution with coordinates
+        combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # Reshape to (batch, channels, height, width) for conv
+        features = combined.permute(0, 3, 1, 2)  # (batch, 4, n_x, n_y)
+
+        # Apply multi-scale convolutional blocks with dilated convs
+        for conv_block, skip_conv in zip(self.conv_blocks, self.skip_convs):
+            identity = skip_conv(features)
+            features = conv_block(features)
+            features = F.gelu(features + identity)
+
+        # Final conv to energy map
+        energy_map = self.final_conv(features)  # (batch, 1, n_x, n_y)
+
+        # Multi-scale pooling
+        feat_4x4 = self.pool_4x4(energy_map).flatten(1)    # (batch, 16)
+        feat_8x8 = self.pool_8x8(energy_map).flatten(1)    # (batch, 64)
+        feat_16x16 = self.pool_16x16(energy_map).flatten(1)  # (batch, 256)
+
+        # Weighted combination of scales (learnable)
+        w = F.softmax(self.scale_weights, dim=0)
+        feat_4x4 = feat_4x4 * w[0]
+        feat_8x8 = feat_8x8 * w[1]
+        feat_16x16 = feat_16x16 * w[2]
+
+        # Concatenate multi-scale features
+        multi_scale_feat = torch.cat([feat_4x4, feat_8x8, feat_16x16], dim=1)
+
+        # Final aggregation
+        energy = self.aggregation(multi_scale_feat)  # (batch, 1)
+        energy = energy.squeeze(-1)  # (batch,)
+
+        return energy
+
+
+# ============================================================================
 # KAN-based EBM
 # ============================================================================
 
