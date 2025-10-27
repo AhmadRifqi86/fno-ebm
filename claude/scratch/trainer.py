@@ -556,7 +556,7 @@ class Trainer:
         # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
         mcmc_steps = 60  # UvA uses 60 during training (not 200!)
         step_size = self.config.mcmc_step_size
-        grad_clip = 0.2
+        grad_clip = 0.05
 
         y_neg = y_neg.detach()  # Start fresh, no gradients
 

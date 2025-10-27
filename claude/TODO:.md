@@ -12,7 +12,7 @@
 ## Creating sythetics data
 ## Using transformer based and mamba based model for FNO [DONE] [Fri 17 Oct 2025]
 ## Using KAN based model for EBM  [DONE]  [Fri 17 Oct 2025]
-## Implementing multi-channel attention for transformerFNO 
+## Implementing multi-channel attention for transformerFNO [Furure]
 ## Separating model for FNO and EBM [DONE] [Sun 19 Oct 2025]
 ## Implementing deploy.py 
 ## Test main.py using dummy data [DONE] [Wed 21 Oct 2025]
@@ -29,6 +29,8 @@
 ## Normalize permeability data [PLAN] [Sat 26 Oct 2025] [Probably]
 ## One more training to visualize negative sample plot [PLAN] [Sun 26 Oct 2025] [Probably]
 ## Try Score Matching EBM [PLAN]
+## Wrapping u and x in convEBM into single x
+## Asking about how to put the energy equation into the torchebm [PLAN] [Mon 27 Oct 2025]
 ## Training FNO model using EBM pos-neg sampling and contrastive divergence loss (plug FNO model into EBM training regime)[FAR] 
 wget https://darus.uni-stuttgart.de/api/access/datafile/133139 \
        -O data/pdebench/2D_DarcyFlow_beta1.0_Train.hdf5

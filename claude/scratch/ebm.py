@@ -3,8 +3,11 @@ Energy-Based Models (EBM) for Uncertainty Quantification
 
 This module contains various EBM architectures:
 - EBMPotential: Standard MLP-based energy model
+- ConvEBM: Convolutional EBM (limited receptive field)
+- SimpleFNO_EBM: FNO-based EBM with global receptive field (RECOMMENDED for spatial uncertainty)
+- MultiScaleConvEBM: Multi-scale convolutional EBM with dilated convs
 - KAN_EBM: Pure KAN-based energy model
-- FNO_KAN_EBM: Hybrid FNO encoder + KAN head (recommended)
+- FNO_KAN_EBM: Hybrid FNO encoder + KAN head
 - GNN_EBM: Graph neural network-based energy model
 """
 
@@ -125,19 +128,23 @@ class ConvEBM(nn.Module):
             nn.Conv2d(prev_channels, 1, kernel_size=1)
         )
 
+        # Use simple global pooling for aggregation (more stable)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+        # COMMENTED OUT: Complex aggregation head was too hard to train
         # Replace global pooling with shallow linear layers for more expressive aggregation
         # This allows the network to learn how to aggregate spatial information
-        spatial_dim = 64  # Assuming 64x64 input, adjust if needed
-        flattened_dim = 1 * spatial_dim * spatial_dim
-
-        self.aggregation = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(flattened_dim, 256),
-            nn.GELU(),
-            nn.Linear(256, 64),
-            nn.GELU(),
-            nn.Linear(64, 1)
-        )
+        # spatial_dim = 64  # Assuming 64x64 input, adjust if needed
+        # flattened_dim = 1 * spatial_dim * spatial_dim
+        #
+        # self.aggregation = nn.Sequential(
+        #     nn.Flatten(),
+        #     nn.Linear(flattened_dim, 256),
+        #     nn.GELU(),
+        #     nn.Linear(256, 64),
+        #     nn.GELU(),
+        #     nn.Linear(64, 1)
+        # )
 
     def forward(self, u, x):
         """
@@ -165,9 +172,12 @@ class ConvEBM(nn.Module):
         # Final conv to get energy map
         f_map = self.final_conv(features)  # (batch, 1, n_x, n_y)
 
-        # Use shallow linear layers for aggregation instead of global pooling
-        f = self.aggregation(f_map)  # (batch, 1)
-        f = f.squeeze(-1)  # (batch,)
+        # Use global average pooling for aggregation (simple and stable)
+        f = self.pool(f_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+
+        # COMMENTED OUT: Complex aggregation was causing training instability
+        # f = self.aggregation(f_map)  # (batch, 1)
+        # f = f.squeeze(-1)  # (batch,)
 
         # Standard EBM convention: network outputs f(u,x) = -E(u,x)
         # So energy E = -f
