@@ -615,7 +615,7 @@ class Trainer:
                 self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
 
         # STEP 7: Compute loss (UvA formula)
-        alpha = 0.1  # UvA default
+        alpha = 0.03  # UvA default
         reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
 
         # Contrastive divergence, maybe pos - neg
