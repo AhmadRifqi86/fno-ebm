@@ -558,10 +558,9 @@ class Trainer:
             grad_norm_trajectory = []
 
         # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
-        mcmc_steps = 100 #60  # UvA uses 60 during training (not 200!)
+        mcmc_steps = 60 #60  # UvA uses 60 during training (not 200!)
         step_size = self.config.mcmc_step_size
         grad_clip = 8.0 #0.4  #change to 0.1
-        noise_scale = 0.0001
         y_neg = y_neg.detach()  # Start fresh, no gradients
 
         for i in range(mcmc_steps):
@@ -597,8 +596,8 @@ class Trainer:
             # Update (detach to break gradient flow)
             with torch.no_grad():
                 if langevin:
-                    noise = torch.randn_like(y_neg) * noise_scale
-                    #noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
+                    #noise = torch.randn_like(y_neg) * noise_scale
+                    noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
                     #y_neg = y_neg - step_size * neg_grad + noise
                     y_neg = y_neg - step_size * neg_grad + noise
                 else:
@@ -625,8 +624,8 @@ class Trainer:
         reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
 
         # Contrastive divergence, maybe pos - neg
-        cd_loss = neg_energy.mean() - pos_energy.mean()
-        #cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
+        #cd_loss = neg_energy.mean() - pos_energy.mean()
+        cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
 
         # Total loss
         ebm_loss = reg_loss + cd_loss
