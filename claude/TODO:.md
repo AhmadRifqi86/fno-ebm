@@ -29,7 +29,7 @@
 ## Normalize permeability data [PLAN] [Sat 26 Oct 2025] [Probably]
 ## One more training to visualize negative sample plot [PLAN] [Sun 26 Oct 2025] [Probably]
 ## Try Score Matching EBM [PLAN]
-## Wrapping u and x in convEBM into single x
+## Compare current implementation vs this link https://github.com/swyoon/pytorch-energy-based-model/tree/master [PLAN]
 ## Asking about how to put the energy equation into the torchebm [PLAN] [Mon 27 Oct 2025]
 ## Training FNO model using EBM pos-neg sampling and contrastive divergence loss (plug FNO model into EBM training regime)[FAR] 
 wget https://darus.uni-stuttgart.de/api/access/datafile/133139 \

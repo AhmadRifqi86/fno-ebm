@@ -77,6 +77,7 @@ class FNO_EBM(nn.Module):
 
             quadratic_term = 0.5 / sigma_squared * torch.mean((u - u_fno)**2, dim=[1, 2, 3])
 
+            #print(f"quadratic_term: {quadratic_term.mean().item()}, potential_term: {potential_term.mean().item()}")
             return quadratic_term + potential_term
 
     def forward(self, x):
@@ -395,7 +396,8 @@ class Trainer:
 
             # Positive phase: energy of ground truth (no grad needed)
             with torch.no_grad():
-                pos_energy = self.model.energy(y, x, training=False, u_fno=u_fno)
+                #pos_energy = self.model.energy(y, x, training=False, u_fno=u_fno)
+                pos_energy = self.ebm_model(y,x)
 
             # Negative phase (MCMC sampling - needs gradients)
             # Initialize from FNO prediction for inference
@@ -404,7 +406,8 @@ class Trainer:
 
             for _ in range(self.config.mcmc_steps):
                 y_neg.requires_grad_(True)
-                neg_energy_for_grad = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
+                #neg_energy_for_grad = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
+                neg_energy_for_grad = self.ebm_model(y_neg, x)
                 neg_grad = torch.autograd.grad(neg_energy_for_grad.sum(), y_neg)[0]
 
                 with torch.no_grad():
@@ -413,7 +416,8 @@ class Trainer:
                     y_neg = y_neg.detach()
 
             with torch.no_grad():
-                neg_energy = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
+                #neg_energy = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
+                neg_energy = self.ebm_model(y_neg, x)
                 ebm_loss = pos_energy.mean() - neg_energy.mean()
                 total_ebm_val_loss += ebm_loss.item()
 
@@ -554,22 +558,22 @@ class Trainer:
             grad_norm_trajectory = []
 
         # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
-        mcmc_steps = 60  # UvA uses 60 during training (not 200!)
+        mcmc_steps = 100 #60  # UvA uses 60 during training (not 200!)
         step_size = self.config.mcmc_step_size
-        grad_clip = 0.05
-
+        grad_clip = 8.0 #0.4  #change to 0.1
+        noise_scale = 0.0001
         y_neg = y_neg.detach()  # Start fresh, no gradients
 
         for i in range(mcmc_steps):
             # Add small noise and clamp (UvA does this)
-            noise_this_step = torch.randn_like(y_neg) * 0.005
-            y_neg = y_neg + noise_this_step
-            y_neg = torch.clamp(y_neg, -3, 3)
-
+            # noise_this_step = torch.randn_like(y_neg) * 0.005
+            # y_neg = y_neg + noise_this_step
+            # y_neg = torch.clamp(y_neg, -3, 3)
+            y_neg = torch.clamp(y_neg, -10, 10)
             # Enable gradients for this step only
             y_neg.requires_grad_(True)
 
-            # Compute energy
+            # Compute energy, using only EBM should I use full equation 
             neg_energy_for_grad = self.ebm_model(y_neg, x)
 
             # CRITICAL FIX: NO create_graph=True!
@@ -593,7 +597,9 @@ class Trainer:
             # Update (detach to break gradient flow)
             with torch.no_grad():
                 if langevin:
-                    noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
+                    noise = torch.randn_like(y_neg) * noise_scale
+                    #noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
+                    #y_neg = y_neg - step_size * neg_grad + noise
                     y_neg = y_neg - step_size * neg_grad + noise
                 else:
                     y_neg = y_neg - step_size * neg_grad
@@ -615,12 +621,12 @@ class Trainer:
                 self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
 
         # STEP 7: Compute loss (UvA formula)
-        alpha = 0.03  # UvA default
+        alpha = 0.08 # UvA default, set somewhere between 0.1 - 0.03
         reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
 
         # Contrastive divergence, maybe pos - neg
-        #cd_loss = neg_energy.mean() - pos_energy.mean()
-        cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
+        cd_loss = neg_energy.mean() - pos_energy.mean()
+        #cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
 
         # Total loss
         ebm_loss = reg_loss + cd_loss

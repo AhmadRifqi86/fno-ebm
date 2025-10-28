@@ -54,7 +54,7 @@ sigma_squared_train: 100.0         # Variance for training anchor (weak anchor, 
 sigma_squared_inference: 1.0       # Variance for inference anchor (strong anchor, always used during inference)
 
 # Persistent Contrastive Divergence (PCD)
-use_pcd: true                      # Enable PCD replay buffer (highly recommended!)
+use_pcd: false                      # Enable PCD replay buffer (highly recommended!)
 pcd_buffer_size: 1000              # Maximum number of negative samples to store (1000 = ~16k parameters at 64x64)
 pcd_reinit_prob: 0.05              # Probability of fresh initialization instead of replay buffer (5% = 95% from buffer)
 
