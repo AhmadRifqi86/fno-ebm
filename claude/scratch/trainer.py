@@ -560,15 +560,15 @@ class Trainer:
         # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
         mcmc_steps = 60 #60  # UvA uses 60 during training (not 200!)
         step_size = self.config.mcmc_step_size
-        grad_clip = 8.0 #0.4  #change to 0.1
+        grad_clip = 0.4 #0.4  #change to 0.1
         y_neg = y_neg.detach()  # Start fresh, no gradients
 
         for i in range(mcmc_steps):
             # Add small noise and clamp (UvA does this)
             # noise_this_step = torch.randn_like(y_neg) * 0.005
             # y_neg = y_neg + noise_this_step
-            # y_neg = torch.clamp(y_neg, -3, 3)
-            y_neg = torch.clamp(y_neg, -10, 10)
+            y_neg = torch.clamp(y_neg, -3, 3)
+            #y_neg = torch.clamp(y_neg, -10, 10)
             # Enable gradients for this step only
             y_neg.requires_grad_(True)
 

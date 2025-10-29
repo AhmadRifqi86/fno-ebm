@@ -185,6 +185,89 @@ class ConditionalEnergyWrapper(BaseEnergyFunction):
         """Update the conditioning information"""
         self._condition = new_condition.clone().detach()
 
+class SimpleFNO_EBM(BaseEnergyFunction):
+    """
+    FNO-based Energy Model with GLOBAL receptive field.
+
+    KEY ADVANTAGE: Spectral convolutions see the ENTIRE spatial field at once!
+    - Solves the receptive field problem (ConvEBM only sees 17x17 pixels)
+    - Can learn global patterns like radial uncertainty
+    - More stable gradients via spectral parameterization
+
+    Architecture:
+        Input (u, x) → FNO encoder layers → Global pooling → MLP head → Energy
+
+    This is SIMPLER than FNO_KAN_EBM (no KAN complexity) but with same
+    global receptive field advantage.
+    """
+    def __init__(
+        self,
+        in_channels=1,
+        fno_modes1=12,
+        fno_modes2=12,
+        fno_width=32,
+        fno_layers=3
+    ):
+        super().__init__()
+
+        self.fno_width = fno_width
+        self.fno_modes1 = fno_modes1
+        self.fno_modes2 = fno_modes2
+
+        # Initial lifting: map from input channels to FNO width
+        self.fc0 = nn.Linear(in_channels, fno_width)
+
+        # FNO spectral convolution layers (GLOBAL receptive field!)
+        self.spectral_layers = nn.ModuleList([
+            SpectralConv2d(fno_width, fno_width, fno_modes1, fno_modes2)
+            for _ in range(fno_layers)
+        ])
+
+        # Local skip connections
+        self.w_layers = nn.ModuleList([
+            nn.Conv2d(fno_width, fno_width, 1)
+            for _ in range(fno_layers)
+        ])
+
+        # Final projection to energy map
+        self.final_conv = nn.Conv2d(fno_width, 1, kernel_size=1)
+
+        # Global pooling
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+        # MLP head for energy prediction (removed to simplify - just use pooled features directly)
+        # Simpler is better for initial testing
+
+    def forward(self, u):
+        """
+        Args:
+            u: solution field (batch, n_x, n_y, 1)
+            x: input coordinates (batch, n_x, n_y, 3)
+        Returns:
+            energy: scalar energy (batch,)
+        """
+        # Concatenate solution with coordinates
+        #combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
+
+        # Lift to FNO width
+        features = self.fc0(u)  # (batch, n_x, n_y, fno_width)
+        features = features.permute(0, 3, 1, 2)  # (batch, fno_width, n_x, n_y)
+
+        # Apply FNO layers (each has GLOBAL receptive field via FFT)
+        for spectral, w in zip(self.spectral_layers, self.w_layers):
+            x1 = spectral(features)  # Spectral convolution (GLOBAL)
+            x2 = w(features)         # Local skip connection
+            features = x1 + x2
+            features = F.gelu(features)
+
+        # Final conv to energy map
+        energy_map = self.final_conv(features)  # (batch, 1, n_x, n_y)
+
+        # Global pooling to scalar energy
+        energy = self.pool(energy_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+
+        return energy
+
 
 # ============================================================================
 # KAN-based EBM

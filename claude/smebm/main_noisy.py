@@ -29,7 +29,7 @@ from pathlib import Path
 
 from config import Config
 from fno import FNO2d
-from ebm import ConvEBM  # Using ConvEBM for spatial structure!
+from ebm import SimpleFNO_EBM  # Using ConvEBM for spatial structure!
 from trainer import Trainer, FNO_EBM
 from customs import DarcyPhysicsLoss
 from inference import inference_deterministic, inference_probabilistic
@@ -79,11 +79,12 @@ def main():
     )
 
     # EBM model - Using ConvEBM for spatial structure
-    ebm_model = ConvEBM(
-        in_channels=4,  # u + (x, y, a)
-        hidden_channels=[64, 128, 128, 64]  # Convolutional channels
-    )
-
+    # ebm_model = ConvEBM(
+    #     in_channels=4,  # u + (x, y, a)
+    #     hidden_channels=[64, 128, 128, 64]  # Convolutional channels
+    # )
+    ebm_model = SimpleFNO_EBM(in_channels=1, fno_width=32, fno_layers=3)
+    
     # Combined model
     model = FNO_EBM(fno_model, ebm_model).to(config.device)
 

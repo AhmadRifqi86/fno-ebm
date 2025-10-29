@@ -418,7 +418,7 @@ class Trainer:
 
         return total_loss.item(), data_loss.item(), physics_loss.item()
 
-    def train_step_ebm(self, x, y):
+    def train_step_ebm(self, y):
         """
         EBM training step using torchebm library with conditional sampling.
 
@@ -439,31 +439,25 @@ class Trainer:
         y_noisy = y + small_noise
         y_noisy = torch.clamp(y_noisy, -3, 3)
 
-        # STEP 2: Create conditional energy wrapper for this batch
-        # This ensures MCMC only samples u, keeping x fixed
-        conditional_energy = ConditionalEnergyWrapper(
-            energy_fn=self.ebm_model,
-            condition=x
-        )
-
         # STEP 3: Create conditional sampler and loss for this batch
         
 
         conditional_sampler = LangevinSampler(
-            energy_function=conditional_energy,
+            energy_function=self.ebm_model,
             step_size=self.config.mcmc_step_size,
             noise_scale=np.sqrt(2 * self.config.mcmc_step_size)
         )
 
-        conditional_cd_loss = ContrastiveDivergence(
-            energy_function=conditional_energy,
+        cd_loss = ContrastiveDivergence(
+            energy_function=self.ebm_model,
             sampler=conditional_sampler,
             k_steps=self.config.mcmc_steps
         )
 
         # STEP 4: Compute contrastive divergence loss
         # Now the sampler will only update y (u), not x!
-        ebm_loss, _ = conditional_cd_loss(y_noisy)
+        #print("Shape of y_noisy: ", y_noisy.shape)
+        ebm_loss, _ = cd_loss(y_noisy)
 
         # Scale loss for gradient accumulation
         ebm_loss_scaled = ebm_loss / self.accumulation_steps
@@ -552,7 +546,7 @@ class Trainer:
             loop = tqdm(self.ebm_train_loader)  # Use EBM-specific loader
             for batch_idx, (x, y) in enumerate(loop):
                 x, y = x.to(self.config.device), y.to(self.config.device)
-                loss = self.train_step_ebm(x, y)
+                loss = self.train_step_ebm(y)
                 epoch_loss += loss
 
                 if (batch_idx + 1) % self.accumulation_steps == 0:
