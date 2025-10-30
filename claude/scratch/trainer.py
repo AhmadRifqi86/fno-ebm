@@ -531,7 +531,7 @@ class Trainer:
         # POSITIVE PHASE: Energy of real data (ground truth)
         # ========================================================================
         y_pos = y.detach()  # No gradient needed for positive samples
-        pos_energy = -1.0 * self.ebm_model(y_pos, x)  # (batch,)
+        pos_energy = self.ebm_model(y_pos, x)  # (batch,)
 
         # ========================================================================
         # NEGATIVE PHASE: Generate samples via Langevin MCMC
@@ -567,7 +567,7 @@ class Trainer:
             y_neg.requires_grad_(True)
 
             # Compute energy from EBM model
-            energy_neg = -1.0*self.ebm_model(y_neg, x)  # (batch,)
+            energy_neg = self.ebm_model(y_neg, x)  # (batch,)
 
             # Compute gradient of energy w.r.t. y_neg
             # We use create_graph=False in training to save memory
@@ -602,7 +602,7 @@ class Trainer:
 
         # Final negative energy (after MCMC)
         y_neg.requires_grad_(True)
-        neg_energy = -1.0*self.ebm_model(y_neg, x)
+        neg_energy = self.ebm_model(y_neg, x)
 
         # ========================================================================
         # CONTRASTIVE DIVERGENCE LOSS
@@ -625,7 +625,7 @@ class Trainer:
         # ========================================================================
         # Add L2 regularization on energy values to prevent them from growing unbounded
         # This is critical for stable training
-        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.1)
+        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.05)
         energy_reg = alpha_reg * (pos_energy.pow(2).mean() + neg_energy.pow(2).mean())
 
         # Total loss
