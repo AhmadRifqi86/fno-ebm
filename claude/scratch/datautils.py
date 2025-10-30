@@ -382,7 +382,7 @@ def visualize_inference_results(y_true, y_fno, stats, config, num_samples=3):
         fig.colorbar(im, ax=axes[i, 2])
 
         # EBM Probabilistic Std Dev (Uncertainty)
-        im = axes[i, 3].imshow(y_ebm_std[i, ..., 0], cmap='hot')
+        im = axes[i, 3].imshow(y_ebm_std[i, ..., 0], cmap='viridis')
         axes[i, 3].set_title(f"Sample {i+1}: EBM Std Dev")
         fig.colorbar(im, ax=axes[i, 3])
 

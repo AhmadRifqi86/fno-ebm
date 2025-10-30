@@ -152,10 +152,11 @@ class ConvEBM(nn.Module):
             u: solution field (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
         Returns:
-            energy: scalar energy (batch,)
+            energy: scalar energy E(u,x) (batch,)
 
-        Note: Returns -E(u,x) following standard EBM convention where p(u) ∝ exp(f(u))
-        and f(u) = -E(u). This prevents sign confusion and aligns with literature.
+        Convention: Returns energy E(u,x) where p(u|x) ∝ exp(-E(u,x))
+        - Lower energy → higher probability (real data should have low energy)
+        - Higher energy → lower probability (generated samples should have high energy)
         """
         # Concatenate solution with coordinates
         combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
@@ -173,18 +174,17 @@ class ConvEBM(nn.Module):
         f_map = self.final_conv(features)  # (batch, 1, n_x, n_y)
 
         # Use global average pooling for aggregation (simple and stable)
-        f = self.pool(f_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+        energy = self.pool(f_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
 
         # COMMENTED OUT: Complex aggregation was causing training instability
-        # f = self.aggregation(f_map)  # (batch, 1)
-        # f = f.squeeze(-1)  # (batch,)
+        # energy = self.aggregation(f_map)  # (batch, 1)
+        # energy = energy.squeeze(-1)  # (batch,)
 
-        # Standard EBM convention: network outputs f(u,x) = -E(u,x)
-        # So energy E = -f
-        # But for compatibility and following standard practice:
-        # We return f directly (which is -E in standard notation)
-        # The loss function will work with this convention
-        return f
+        # Standard EBM convention: network outputs energy E(u,x)
+        # The probability distribution is: p(u|x) ∝ exp(-E(u,x))
+        # Lower energy = higher probability (data should have low energy)
+        # Higher energy = lower probability (random samples should have high energy)
+        return energy
 
 
 # ============================================================================
@@ -246,11 +246,17 @@ class SimpleFNO_EBM(nn.Module):
 
     def forward(self, u, x):
         """
+        Compute energy E(u,x) for the input solution field.
+
         Args:
             u: solution field (batch, n_x, n_y, 1)
             x: input coordinates (batch, n_x, n_y, 3)
         Returns:
-            energy: scalar energy (batch,)
+            energy: scalar energy E(u,x) (batch,)
+
+        Convention: p(u|x) ∝ exp(-E(u,x))
+        - Real data should have LOW energy
+        - Random samples should have HIGH energy
         """
         # Concatenate solution with coordinates
         combined = torch.cat([u, x], dim=-1)  # (batch, n_x, n_y, 4)
@@ -271,6 +277,7 @@ class SimpleFNO_EBM(nn.Module):
 
         # Global pooling to scalar energy
         energy = self.pool(energy_map).squeeze(-1).squeeze(-1).squeeze(-1)  # (batch,)
+        #energy *= -1
 
         return energy
 

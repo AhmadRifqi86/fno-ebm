@@ -531,7 +531,7 @@ class Trainer:
         # POSITIVE PHASE: Energy of real data (ground truth)
         # ========================================================================
         y_pos = y.detach()  # No gradient needed for positive samples
-        pos_energy = self.ebm_model(y_pos, x)  # (batch,)
+        pos_energy = -1.0 * self.ebm_model(y_pos, x)  # (batch,)
 
         # ========================================================================
         # NEGATIVE PHASE: Generate samples via Langevin MCMC
@@ -566,14 +566,14 @@ class Trainer:
         for step in range(self.config.mcmc_steps):
             y_neg.requires_grad_(True)
 
-            # Compute energy
-            neg_energy = self.ebm_model(y_neg, x)  # (batch,)
+            # Compute energy from EBM model
+            energy_neg = -1.0*self.ebm_model(y_neg, x)  # (batch,)
 
             # Compute gradient of energy w.r.t. y_neg
             # We use create_graph=False in training to save memory
             # (gradient is only used for sampling, not for backprop through sampling)
             grad_energy = torch.autograd.grad(
-                outputs=neg_energy.sum(),
+                outputs=energy_neg.sum(),
                 inputs=y_neg,
                 create_graph=False  # Don't backprop through MCMC
             )[0]
@@ -581,16 +581,17 @@ class Trainer:
             # Trace for debugging (sample every 10 steps)
             if trace_samples and step % 10 == 0:
                 with torch.no_grad():
-                    trace_info['energy_trajectory'].append(neg_energy.mean().item())
+                    trace_info['energy_trajectory'].append(energy_neg.mean().item())
                     trace_info['grad_norm_trajectory'].append(grad_energy.norm().item())
 
             # Langevin dynamics update:
             # y_t+1 = y_t - ε * ∇E(y_t) + √(2ε) * noise
             #
-            # This moves DOWN the energy landscape (toward lower energy = higher probability)
+            # This performs GRADIENT DESCENT on energy, moving samples toward LOWER energy
+            # (lower energy = higher probability under p(y) ∝ exp(-E(y)))
             with torch.no_grad():
-                # Gradient descent step (moves toward lower energy)
-                y_neg = y_neg - step_size * grad_energy
+                # Gradient descent step: move toward lower energy
+                y_neg = y_neg - step_size * grad_energy #need to check sign of y_neg and grad_energy
 
                 # Add Brownian noise (exploration)
                 if langevin:
@@ -601,24 +602,30 @@ class Trainer:
 
         # Final negative energy (after MCMC)
         y_neg.requires_grad_(True)
-        neg_energy = self.ebm_model(y_neg, x)
+        neg_energy = -1.0*self.ebm_model(y_neg, x)
 
         # ========================================================================
         # CONTRASTIVE DIVERGENCE LOSS
         # ========================================================================
-        # Loss = E[E(y_real)] - E[E(y_neg)]
-        # This encourages:
-        # - Low energy for real data (positive phase)
-        # - High energy for generated samples (negative phase)
-        # The energy gap should be POSITIVE and LARGE
+        # Goal: minimize energy on real data (E_pos should be LOW)
+        #       maximize energy on generated samples (E_neg should be HIGH)
+        #
+        # Standard CD loss: L = E_pos - E_neg
+        #
+        # When we minimize this loss:
+        # - E_pos decreases (real data gets lower energy)
+        # - E_neg increases (generated samples get higher energy)
+        #
+        # The energy gap (E_neg - E_pos) should be POSITIVE and LARGE
         cd_loss = pos_energy.mean() - neg_energy.mean()
+        #cd_loss = neg_energy.mean() - pos_energy.mean()
 
         # ========================================================================
         # REGULARIZATION (prevents energy divergence)
         # ========================================================================
         # Add L2 regularization on energy values to prevent them from growing unbounded
         # This is critical for stable training
-        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.01)
+        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.1)
         energy_reg = alpha_reg * (pos_energy.pow(2).mean() + neg_energy.pow(2).mean())
 
         # Total loss
@@ -695,7 +702,7 @@ class Trainer:
             score = -torch.autograd.grad(
                 outputs=energy.sum(),
                 inputs=y_noisy,
-                create_graph=True  # Need gradients for backprop
+                create_graph=True  # Need gradients for backprop, consider to set to False
             )[0]  # (batch, n_x, n_y, 1)
 
             # 4. Target score (points from noisy data back to clean data)
@@ -950,3 +957,9 @@ class Trainer:
         self.logger.info("Staged training completed")
 
 # ...existing code...
+
+
+#Original
+# cd_loss = pos_energy.mean() - neg_energy.mean()
+# return energy, gonna try return -energy
+# y_neg = y_neg - step_size * grad_energy + noise
