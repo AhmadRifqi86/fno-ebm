@@ -506,184 +506,255 @@ class Trainer:
 
         return total_loss.item(), data_loss.item(), physics_loss.item()
 
-    def train_step_ebm(self, x, y, langevin=True, use_anchor=None, trace_samples=False):
+    def train_step_ebm(self, x, y, langevin=True, trace_samples=False):
         """
-        FIXED EBM training - Following UvA Deep Energy Models Tutorial
+        EBM training with Contrastive Divergence using Langevin MCMC sampling.
 
-        CRITICAL FIXES from UvA tutorial:
-        1. NO create_graph=True during MCMC (was killing training!)
-        2. Random uniform initialization instead of corrupted data
-        3. Small noise added to positive samples
-        4. 60 MCMC steps instead of 200
+        Algorithm:
+        1. Positive phase: E_pos = E(y_real, x) - energy of real data
+        2. Negative phase: Sample y_neg using Langevin dynamics
+           - Initialize from RANDOM noise (high energy region)
+           - Update: y_t+1 = y_t - ε∇E(y_t, x) + √(2ε)z  (walks to lower energy)
+        3. Loss: E_pos - E_neg (maximize energy gap)
+        4. Regularization: Prevent energy values from diverging
 
         Args:
-            trace_samples: If True, collect detailed tracing information
+            x: input coordinates (batch, n_x, n_y, 3)
+            y: ground truth solution (batch, n_x, n_y, 1)
+            langevin: if True, use Langevin dynamics; else simple gradient descent
+            trace_samples: if True, return detailed trace info for debugging
+
+        Returns:
+            loss (float) or (loss, trace_info) if trace_samples=True
         """
-        batch_size = x.shape[0]
+        # ========================================================================
+        # POSITIVE PHASE: Energy of real data (ground truth)
+        # ========================================================================
+        y_pos = y.detach()  # No gradient needed for positive samples
+        pos_energy = self.ebm_model(y_pos, x)  # (batch,)
 
-        # STEP 1: Add small noise to positive samples (UvA trick!)
-        # Prevents overfitting to exact training data
-        small_noise = torch.randn_like(y) * 0.005
-        y_noisy = y + small_noise
-        y_noisy = torch.clamp(y_noisy, -3, 3)
+        # ========================================================================
+        # NEGATIVE PHASE: Generate samples via Langevin MCMC
+        # ========================================================================
+        # CRITICAL: Initialize from RANDOM noise, NOT from data
+        # This ensures we start in HIGH energy regions and walk down
 
-        # STEP 2: Compute positive energy (V_EBM only, no anchor during training)
-        pos_energy = -self.ebm_model(y_noisy, x)  # Fixed: y_noisy is u (solution), x is conditioning
-        #print(f"  Pos Energy (mean): {pos_energy.mean().item():.4f}")
-        # STEP 3: Initialize negative samples from buffer (PCD)
-        if self.use_pcd and len(self.replay_buffer) > 0 and np.random.random() > self.pcd_reinit_prob:
-            # Sample from buffer (95% of time)
-            buffer_indices = np.random.choice(
-                len(self.replay_buffer),
-                size=min(batch_size, len(self.replay_buffer)),
-                replace=False
-            )
-            y_neg = torch.stack([self.replay_buffer[i][1] for i in buffer_indices]).to(x.device)
+        # Get data statistics for proper initialization scale
+        y_mean = y.mean()
+        y_std = y.std()
 
-            # Pad if needed with random uniform (UvA style)
-            if y_neg.shape[0] < batch_size:
-                n_missing = batch_size - y_neg.shape[0]
-                y_neg_extra = torch.rand(n_missing, *y.shape[1:], device=x.device) * 2 - 1
-                y_neg = torch.cat([y_neg, y_neg_extra], dim=0)
-            init_source = "buffer"
-        else:
-            # Fresh initialization (5% of time): random uniform [-1, 1] (UvA style)
-            y_neg = torch.rand_like(y) * 2 - 1
-            init_source = "random"
+        # Initialize from random Gaussian noise scaled to data range
+        # This puts us in a high-energy region of the energy landscape
+        y_neg = torch.randn_like(y) * y_std + y_mean
+        y_neg = y_neg.detach()
 
-        # Store initial state for tracing
+        # Langevin dynamics parameters
+        step_size = self.config.mcmc_step_size
+        noise_scale = np.sqrt(2 * step_size) if langevin else 0.0
+
+        # Storage for tracing (debugging)
         if trace_samples:
-            y_neg_init = y_neg.clone().detach()
-            energy_trajectory = []
-            grad_norm_trajectory = []
+            trace_info = {
+                'init_source': 'random_noise',
+                'pos_stats': self._get_tensor_stats(y_pos),
+                'neg_init_stats': self._get_tensor_stats(y_neg),
+                'energy_trajectory': [],
+                'grad_norm_trajectory': []
+            }
 
-        # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
-        mcmc_steps = 60 #60  # UvA uses 60 during training (not 200!)
-        step_size = 0.001 #self.config.mcmc_step_size  #0.001)  # Cap step size to prevent explosion
-        grad_clip =  1.0 #0.1  # Reduced gradient clipping
-        noise_scale = np.sqrt(2 * step_size)  # Proper Langevin noise scale
-        
-        # Set EBM to eval mode during sampling to avoid batch norm issues
-        self.ebm_model.eval()
-        
-        y_neg = y_neg.detach()  # Start fresh, no gradients
-
-        for i in range(mcmc_steps):
-            # Clamp to reasonable bounds
-            y_neg = torch.clamp(y_neg, -3, 3)
-            
-            # Enable gradients for this step only
+        # Run Langevin MCMC to generate negative samples
+        for step in range(self.config.mcmc_steps):
             y_neg.requires_grad_(True)
 
             # Compute energy
-            neg_energy_for_grad = -self.ebm_model(y_neg, x)
+            neg_energy = self.ebm_model(y_neg, x)  # (batch,)
 
-            # CRITICAL FIX: NO create_graph=True!
-            # Only backprop to get gradients, don't keep computation graph
-            neg_grad = torch.autograd.grad(
-                neg_energy_for_grad.sum(),
-                y_neg,
-                retain_graph=False,
-                create_graph=False  # FIXED: Was True, killed training!
+            # Compute gradient of energy w.r.t. y_neg
+            # We use create_graph=False in training to save memory
+            # (gradient is only used for sampling, not for backprop through sampling)
+            grad_energy = torch.autograd.grad(
+                outputs=neg_energy.sum(),
+                inputs=y_neg,
+                create_graph=False  # Don't backprop through MCMC
             )[0]
 
-            # Track gradient norm before clipping
-            if trace_samples and i % 10 == 0:
+            # Trace for debugging (sample every 10 steps)
+            if trace_samples and step % 10 == 0:
                 with torch.no_grad():
-                    grad_norm_trajectory.append(neg_grad.norm().item())
-                    energy_trajectory.append(neg_energy_for_grad.mean().item())
+                    trace_info['energy_trajectory'].append(neg_energy.mean().item())
+                    trace_info['grad_norm_trajectory'].append(grad_energy.norm().item())
 
-            # Clip gradients to prevent explosion
-            grad_norm_before_clip = neg_grad.norm().item()
-            neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
-            grad_norm_after_clip = neg_grad.norm().item()
-            
-            # Debug print for first few steps
-            if trace_samples and i < 5:
-                print(f"    Step {i:2d}: Energy={neg_energy_for_grad.mean().item():.4f}, "
-                      f"GradNorm={grad_norm_before_clip:.4f}->{grad_norm_after_clip:.4f}")
-
-            # LANGEVIN UPDATE: Move against energy gradient + noise
+            # Langevin dynamics update:
+            # y_t+1 = y_t - ε * ∇E(y_t) + √(2ε) * noise
+            #
+            # This moves DOWN the energy landscape (toward lower energy = higher probability)
             with torch.no_grad():
+                # Gradient descent step (moves toward lower energy)
+                y_neg = y_neg - step_size * grad_energy
+
+                # Add Brownian noise (exploration)
                 if langevin:
                     noise = torch.randn_like(y_neg) * noise_scale
-                    # CRITICAL: Move AGAINST energy gradient (minus sign) to find LOW energy
-                    #y_neg = y_neg + step_size * neg_grad + noise
-                    y_neg = y_neg - step_size * neg_grad + noise
-                else:
-                    # Gradient descent without noise
-                    y_neg = y_neg - step_size * neg_grad
-                    #y_neg = y_neg + step_size * neg_grad
-                    
-                # Optional: Add more aggressive clamping if values go extreme
-                y_neg = torch.clamp(y_neg, -5, 5)
+                    y_neg = y_neg + noise
 
-            # Detach for next iteration
-            y_neg = y_neg.detach()
-        
-        # Set EBM back to train mode
-        self.ebm_model.train()
+                y_neg = y_neg.detach()
 
-        # STEP 5: Final negative energy
-        neg_energy = -self.ebm_model(y_neg, x)
-        #print(f"  Neg Energy (mean): {neg_energy.mean().item():.4f}")
-        # STEP 6: Update buffer
-        if self.use_pcd:
-            for i in range(batch_size):
-                self.replay_buffer.append((
-                    x[i].detach().cpu(),
-                    y_neg[i].detach().cpu()
-                ))
+        # Final negative energy (after MCMC)
+        y_neg.requires_grad_(True)
+        neg_energy = self.ebm_model(y_neg, x)
 
-            if len(self.replay_buffer) > self.pcd_buffer_size:
-                self.replay_buffer = self.replay_buffer[-self.pcd_buffer_size:]
+        # ========================================================================
+        # CONTRASTIVE DIVERGENCE LOSS
+        # ========================================================================
+        # Loss = E[E(y_real)] - E[E(y_neg)]
+        # This encourages:
+        # - Low energy for real data (positive phase)
+        # - High energy for generated samples (negative phase)
+        # The energy gap should be POSITIVE and LARGE
+        cd_loss = pos_energy.mean() - neg_energy.mean()
 
-        # STEP 7: Compute loss (UvA formula)
-        alpha = 0.08 # UvA default, set somewhere between 0.1 - 0.03
-        reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
-
-        # Contrastive divergence, maybe pos - neg
-        cd_loss = neg_energy.mean() - pos_energy.mean()
-        #cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
+        # ========================================================================
+        # REGULARIZATION (prevents energy divergence)
+        # ========================================================================
+        # Add L2 regularization on energy values to prevent them from growing unbounded
+        # This is critical for stable training
+        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.01)
+        energy_reg = alpha_reg * (pos_energy.pow(2).mean() + neg_energy.pow(2).mean())
 
         # Total loss
-        ebm_loss = reg_loss + cd_loss
+        total_loss = cd_loss + energy_reg
 
-        ebm_loss_scaled = ebm_loss / self.accumulation_steps
-        ebm_loss_scaled.backward()
+        # Backward pass
+        total_loss_scaled = total_loss / self.accumulation_steps
+        total_loss_scaled.backward()
 
-        # Return tracing info if requested
+        # ========================================================================
+        # TRACING (debugging)
+        # ========================================================================
         if trace_samples:
+            with torch.no_grad():
+                trace_info['neg_final_stats'] = self._get_tensor_stats(y_neg)
+                trace_info['pos_energy_mean'] = pos_energy.mean().item()
+                trace_info['neg_energy_mean'] = neg_energy.mean().item()
+                trace_info['energy_gap'] = (neg_energy.mean() - pos_energy.mean()).item()
+                trace_info['cd_loss'] = cd_loss.item()
+                trace_info['energy_reg'] = energy_reg.item()
+            return total_loss.item(), trace_info
+
+        return total_loss.item()
+
+    def train_step_ebm_scorematching(self, x, y, trace_score=False):
+        """
+        EBM training with Denoising Score Matching.
+
+        Algorithm (Denoising Score Matching):
+        1. Add noise to real data: y_noisy = y + σ * ε, where ε ~ N(0, I)
+        2. Compute score (gradient of log-density): s_θ(y_noisy) = -∇_y E(y_noisy, x)
+        3. Target score: s_target = -ε / σ  (points toward clean data)
+        4. Loss: ||s_θ(y_noisy) - s_target||²
+
+        This avoids MCMC sampling entirely, making training faster and more stable.
+        The learned energy E(y, x) implicitly defines: p(y|x) ∝ exp(-E(y, x))
+
+        Args:
+            x: input coordinates (batch, n_x, n_y, 3)
+            y: ground truth solution (batch, n_x, n_y, 1)
+            trace_score: if True, return detailed trace info for debugging
+
+        Returns:
+            loss (float) or (loss, trace_info) if trace_score=True
+        """
+        # ========================================================================
+        # DENOISING SCORE MATCHING
+        # ========================================================================
+        # Noise level (sigma) - can be fixed or annealed during training
+        # Multiple noise levels are often used (similar to NCSN), but we start simple
+        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.1, 0.5, 1.0])
+
+        total_loss = 0.0
+
+        if trace_score:
             trace_info = {
-                'init_source': init_source,
-                'pos_energy_mean': pos_energy.mean().item(),
-                'neg_energy_mean': neg_energy.mean().item(),
-                'energy_gap': (neg_energy - pos_energy).mean().item(),
-                'pos_stats': {
-                    'mean': y.mean().item(),
-                    'std': y.std().item(),
-                    'min': y.min().item(),
-                    'max': y.max().item()
-                },
-                'neg_init_stats': {
-                    'mean': y_neg_init.mean().item(),
-                    'std': y_neg_init.std().item(),
-                    'min': y_neg_init.min().item(),
-                    'max': y_neg_init.max().item()
-                },
-                'neg_final_stats': {
-                    'mean': y_neg.mean().item(),
-                    'std': y_neg.std().item(),
-                    'min': y_neg.min().item(),
-                    'max': y_neg.max().item()
-                },
-                'energy_trajectory': energy_trajectory,
-                'grad_norm_trajectory': grad_norm_trajectory
+                'sigma_levels': sigma_levels,
+                'score_losses': [],
+                'score_norms': [],
+                'target_score_norms': []
             }
-            return ebm_loss.item(), trace_info
 
-        return ebm_loss.item()
+        for sigma in sigma_levels:
+            # 1. Add noise to clean data
+            noise = torch.randn_like(y)
+            y_noisy = y + sigma * noise
+            y_noisy.requires_grad_(True)
 
+            # 2. Compute energy of noisy data
+            energy = self.ebm_model(y_noisy, x)  # (batch,)
+
+            # 3. Compute score: s_θ(y_noisy) = -∇_y E(y_noisy, x)
+            # This is the gradient of log-density
+            score = -torch.autograd.grad(
+                outputs=energy.sum(),
+                inputs=y_noisy,
+                create_graph=True  # Need gradients for backprop
+            )[0]  # (batch, n_x, n_y, 1)
+
+            # 4. Target score (points from noisy data back to clean data)
+            # Derived from: ∇_y log p(y_noisy | y_clean) = -noise / σ²
+            # But we use simplified version: -noise / σ (equivalent up to scaling)
+            target_score = -noise / sigma
+
+            # 5. Score matching loss (MSE between predicted and target score)
+            score_loss = torch.mean((score - target_score) ** 2)
+
+            total_loss += score_loss
+
+            # Tracing
+            if trace_score:
+                with torch.no_grad():
+                    trace_info['score_losses'].append(score_loss.item())
+                    trace_info['score_norms'].append(score.norm().item())
+                    trace_info['target_score_norms'].append(target_score.norm().item())
+
+        # Average over noise levels
+        total_loss = total_loss / len(sigma_levels)
+
+        # ========================================================================
+        # ADDITIONAL REGULARIZATION (optional)
+        # ========================================================================
+        # L2 regularization on energy magnitude (prevents unbounded energies)
+        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.01)
+
+        # Compute energy on clean data for regularization
+        with torch.no_grad():
+            y_clean = y.detach()
+            y_clean.requires_grad_(True)
+        energy_clean = self.ebm_model(y_clean, x)
+        energy_reg = alpha_reg * energy_clean.pow(2).mean()
+
+        # Total loss
+        total_loss_with_reg = total_loss + energy_reg
+
+        # Backward pass
+        total_loss_scaled = total_loss_with_reg / self.accumulation_steps
+        total_loss_scaled.backward()
+
+        if trace_score:
+            trace_info['total_score_loss'] = total_loss.item()
+            trace_info['energy_reg'] = energy_reg.item()
+            trace_info['total_loss'] = total_loss_with_reg.item()
+            return total_loss_with_reg.item(), trace_info
+
+        return total_loss_with_reg.item()
+
+    def _get_tensor_stats(self, tensor):
+        """Helper function to get statistics of a tensor for debugging"""
+        with torch.no_grad():
+            return {
+                'mean': tensor.mean().item(),
+                'std': tensor.std().item(),
+                'min': tensor.min().item(),
+                'max': tensor.max().item()
+            }
     def train_fno(self, num_epochs):
         """
         Train FNO model only.
