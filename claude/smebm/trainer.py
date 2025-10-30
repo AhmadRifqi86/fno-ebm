@@ -7,12 +7,11 @@ import logging
 from config import Config, Factory
 from customs import EarlyStopping, PhysicsLossFn
 import numpy as np
-from ebm import ConditionalEnergyWrapper
 
 # Import torchebm library
 try:
     from torchebm.samplers import LangevinDynamics as LangevinSampler
-    from torchebm.losses import ContrastiveDivergence
+    from torchebm.losses import ScoreMatching
     TORCHEBM_AVAILABLE = True
     print("Using torchebm library for EBM training")
 except ImportError:
@@ -226,10 +225,16 @@ class Trainer:
 
         # Create Contrastive Divergence loss
         # The EBM model is the energy function
-        self.cd_loss_fn = ContrastiveDivergence(
+        # self.cd_loss_fn = ContrastiveDivergence(
+        #     energy_function=self.ebm_model,
+        #     sampler=self.langevin_sampler,
+        #     k_steps=config.mcmc_steps  # Number of MCMC steps for negative sample generation
+        # )
+
+        self.cd_loss_fn = ScoreMatching(
             energy_function=self.ebm_model,
-            sampler=self.langevin_sampler,
-            k_steps=config.mcmc_steps  # Number of MCMC steps for negative sample generation
+            hessian_method="hutchinson",
+            hutchinson_samples=5
         )
 
         # Setup logging
@@ -439,20 +444,8 @@ class Trainer:
         y_noisy = y + small_noise
         y_noisy = torch.clamp(y_noisy, -3, 3)
 
-        # STEP 3: Create conditional sampler and loss for this batch
         
-
-        conditional_sampler = LangevinSampler(
-            energy_function=self.ebm_model,
-            step_size=self.config.mcmc_step_size,
-            noise_scale=np.sqrt(2 * self.config.mcmc_step_size)
-        )
-
-        cd_loss = ContrastiveDivergence(
-            energy_function=self.ebm_model,
-            sampler=conditional_sampler,
-            k_steps=self.config.mcmc_steps
-        )
+        cd_loss = self.cd_loss_fn
 
         # STEP 4: Compute contrastive divergence loss
         # Now the sampler will only update y (u), not x!

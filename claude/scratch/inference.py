@@ -55,7 +55,7 @@ def inference_deterministic(model: FNO_EBM, x, device='cuda'):
 
 
 def inference_probabilistic(model: FNO_EBM, x, num_samples=100, num_mcmc_steps=200,
-                           step_size=0.005, device='cuda'):
+                           step_size=0.0001, device='cuda'):
     """
     Probabilistic inference: sample from p(u|X) using Langevin dynamics
     

@@ -83,7 +83,7 @@ def main():
     #     in_channels=4,  # u + (x, y, a)
     #     hidden_channels=[64, 128, 128, 64]  # Convolutional channels
     # )
-    ebm_model = SimpleFNO_EBM(in_channels=1, fno_width=32, fno_layers=3)
+    ebm_model = SimpleFNO_EBM(in_channels=1, fno_width=16, fno_layers=3)
     
     # Combined model
     model = FNO_EBM(fno_model, ebm_model).to(config.device)

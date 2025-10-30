@@ -528,8 +528,8 @@ class Trainer:
         y_noisy = torch.clamp(y_noisy, -3, 3)
 
         # STEP 2: Compute positive energy (V_EBM only, no anchor during training)
-        pos_energy = self.ebm_model(y_noisy, x)  # Fixed: y_noisy is u (solution), x is conditioning
-
+        pos_energy = -self.ebm_model(y_noisy, x)  # Fixed: y_noisy is u (solution), x is conditioning
+        #print(f"  Pos Energy (mean): {pos_energy.mean().item():.4f}")
         # STEP 3: Initialize negative samples from buffer (PCD)
         if self.use_pcd and len(self.replay_buffer) > 0 and np.random.random() > self.pcd_reinit_prob:
             # Sample from buffer (95% of time)
@@ -559,21 +559,24 @@ class Trainer:
 
         # STEP 4: MCMC Sampling - CRITICAL FIX: NO create_graph!
         mcmc_steps = 60 #60  # UvA uses 60 during training (not 200!)
-        step_size = self.config.mcmc_step_size
-        grad_clip = 0.4 #0.4  #change to 0.1
+        step_size = 0.001 #self.config.mcmc_step_size  #0.001)  # Cap step size to prevent explosion
+        grad_clip =  1.0 #0.1  # Reduced gradient clipping
+        noise_scale = np.sqrt(2 * step_size)  # Proper Langevin noise scale
+        
+        # Set EBM to eval mode during sampling to avoid batch norm issues
+        self.ebm_model.eval()
+        
         y_neg = y_neg.detach()  # Start fresh, no gradients
 
         for i in range(mcmc_steps):
-            # Add small noise and clamp (UvA does this)
-            # noise_this_step = torch.randn_like(y_neg) * 0.005
-            # y_neg = y_neg + noise_this_step
+            # Clamp to reasonable bounds
             y_neg = torch.clamp(y_neg, -3, 3)
-            #y_neg = torch.clamp(y_neg, -10, 10)
+            
             # Enable gradients for this step only
             y_neg.requires_grad_(True)
 
-            # Compute energy, using only EBM should I use full equation 
-            neg_energy_for_grad = self.ebm_model(y_neg, x)
+            # Compute energy
+            neg_energy_for_grad = -self.ebm_model(y_neg, x)
 
             # CRITICAL FIX: NO create_graph=True!
             # Only backprop to get gradients, don't keep computation graph
@@ -590,24 +593,40 @@ class Trainer:
                     grad_norm_trajectory.append(neg_grad.norm().item())
                     energy_trajectory.append(neg_energy_for_grad.mean().item())
 
-            # Clip gradients
+            # Clip gradients to prevent explosion
+            grad_norm_before_clip = neg_grad.norm().item()
             neg_grad = torch.clamp(neg_grad, -grad_clip, grad_clip)
+            grad_norm_after_clip = neg_grad.norm().item()
+            
+            # Debug print for first few steps
+            if trace_samples and i < 5:
+                print(f"    Step {i:2d}: Energy={neg_energy_for_grad.mean().item():.4f}, "
+                      f"GradNorm={grad_norm_before_clip:.4f}->{grad_norm_after_clip:.4f}")
 
-            # Update (detach to break gradient flow)
+            # LANGEVIN UPDATE: Move against energy gradient + noise
             with torch.no_grad():
                 if langevin:
-                    #noise = torch.randn_like(y_neg) * noise_scale
-                    noise = torch.randn_like(y_neg) * np.sqrt(2 * step_size)
-                    #y_neg = y_neg - step_size * neg_grad + noise
+                    noise = torch.randn_like(y_neg) * noise_scale
+                    # CRITICAL: Move AGAINST energy gradient (minus sign) to find LOW energy
+                    #y_neg = y_neg + step_size * neg_grad + noise
                     y_neg = y_neg - step_size * neg_grad + noise
                 else:
+                    # Gradient descent without noise
                     y_neg = y_neg - step_size * neg_grad
+                    #y_neg = y_neg + step_size * neg_grad
+                    
+                # Optional: Add more aggressive clamping if values go extreme
+                y_neg = torch.clamp(y_neg, -5, 5)
 
+            # Detach for next iteration
             y_neg = y_neg.detach()
+        
+        # Set EBM back to train mode
+        self.ebm_model.train()
 
         # STEP 5: Final negative energy
-        neg_energy = self.ebm_model(y_neg, x)
-
+        neg_energy = -self.ebm_model(y_neg, x)
+        #print(f"  Neg Energy (mean): {neg_energy.mean().item():.4f}")
         # STEP 6: Update buffer
         if self.use_pcd:
             for i in range(batch_size):
@@ -624,8 +643,8 @@ class Trainer:
         reg_loss = alpha * (pos_energy ** 2 + neg_energy ** 2).mean()
 
         # Contrastive divergence, maybe pos - neg
-        #cd_loss = neg_energy.mean() - pos_energy.mean()
-        cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
+        cd_loss = neg_energy.mean() - pos_energy.mean()
+        #cd_loss = pos_energy.mean() - neg_energy.mean()  # FIXED: UvA style
 
         # Total loss
         ebm_loss = reg_loss + cd_loss
