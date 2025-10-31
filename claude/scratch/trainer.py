@@ -883,10 +883,10 @@ class Trainer:
 
             self.checkpoint(epoch, val_loss, 'ebm', is_best=is_best)
 
-            self.early_stopper_ebm(val_loss)
-            if self.early_stopper_ebm.early_stop:
-                self.logger.info("EARLY STOPPING TRIGGERED FOR EBM, NO IMPROVEMENT IN SEVERAL EPOCHS")
-                break
+            # self.early_stopper_ebm(val_loss)
+            # if self.early_stopper_ebm.early_stop:
+            #     self.logger.info("EARLY STOPPING TRIGGERED FOR EBM, NO IMPROVEMENT IN SEVERAL EPOCHS")
+            #     break
 
     def _print_trace_info(self, epoch, batch_idx, trace_info):
         """Print negative sampling trace information to terminal"""
