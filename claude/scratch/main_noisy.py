@@ -170,7 +170,7 @@ def main():
     # 6. Inference
     print("\n--- Running Inference ---")
     best_fno_path = os.path.join(config.checkpoint_dir, 'best_model_fno.pt')
-    best_ebm_path = os.path.join(config.checkpoint_dir, 'best_model_ebm.pt')
+    best_ebm_path = os.path.join(config.checkpoint_dir, 'current_ebm.pt')
 
     if os.path.exists(best_fno_path) and os.path.exists(best_ebm_path):
         # Load best models

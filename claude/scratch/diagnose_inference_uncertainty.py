@@ -96,21 +96,22 @@ print(f"Generating {num_samples} samples via MCMC...")
 samples_list = []
 model.eval()
 
-with torch.no_grad():
-    for i in range(num_samples):
-        # Import langevin_dynamics from inference
-        from inference import langevin_dynamics
+# Import langevin_dynamics from inference
+from inference import langevin_dynamics
 
-        u_sample = langevin_dynamics(
-            model, x_test,
-            num_steps=200,
-            step_size=0.005,
-            device=config.device
-        )
-        samples_list.append(u_sample.cpu())
+for i in range(num_samples):
+    # Note: langevin_dynamics needs gradients, so we can't use torch.no_grad()
+    u_sample = langevin_dynamics(
+        model, x_test,
+        num_steps=200,
+        step_size=0.005,
+        device=config.device
+    )
+    # Detach after sampling to save memory
+    samples_list.append(u_sample.detach().cpu())
 
-        if (i+1) % 10 == 0:
-            print(f"  Generated {i+1}/{num_samples} samples...")
+    if (i+1) % 10 == 0:
+        print(f"  Generated {i+1}/{num_samples} samples...")
 
 samples = torch.stack(samples_list, dim=0)  # (num_samples, batch, nx, ny, 1)
 print(f"\nSamples shape: {samples.shape}")

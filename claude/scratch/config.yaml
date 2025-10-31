@@ -1,13 +1,13 @@
 # Training Hyperparameters
 epochs: 150              # Total epochs (not used in staged training)
 fno_epochs: 50          # Stage 1: FNO training (increased to avoid early stopping)
-ebm_epochs: 20           # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
-patience: 30             # Early stopping patience (increased - was too aggressive)
+ebm_epochs: 50           # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
+patience: 50             # Early stopping patience (increased - was too aggressive)
 accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
 
 # Optimizer and Scheduler
 fno_learning_rate: 0.001
-ebm_learning_rate: 0.0001
+ebm_learning_rate: 0.001
 
 fno_optimizer_config:
   type: adam
@@ -16,9 +16,9 @@ fno_optimizer_config:
 
 ebm_optimizer_config:
   type: adam              # CHANGED: Use Adam (not AdamW) like UvA
-  lr: 0.0001             # Conservative LR for EBM stability
+  lr: 0.005              # Increased for score matching (needs to learn large gradients ~50k magnitude)
   weight_decay: 0.0      # NO weight decay (UvA doesn't use it)
-  betas: [0.0, 0.999]    # CRITICAL: beta1=0.0 (UvA trick for changing loss surface)
+  betas: [0.9, 0.999]    # Restored momentum for score matching (beta1=0.0 was for CD only)
 
 # fno_scheduler_config:
 #   type: cosine_annealing_warm_restarts_with_decay
@@ -35,8 +35,8 @@ fno_scheduler_config:
 
 ebm_scheduler_config:
   type: step_lr
-  step_size: 10          # Reduce LR every 10 epochs
-  gamma: 0.8             # Half the learning rate
+  step_size: 20          # Reduce LR every 20 epochs (less aggressive)
+  gamma: 0.9             # Smaller decay (was reducing too fast)
 
 # Model Parameters
 fno_modes: 16           # Fourier modes (increased for better representation)
@@ -60,7 +60,7 @@ pcd_reinit_prob: 0.05              # Probability of fresh initialization instead
 
 # EBM Training Stability (CRITICAL!)
 mcmc_grad_clip: 0.03               # Gradient clipping during MCMC sampling (prevents explosion), 0 = no clipping
-energy_reg_alpha: 0.1              # Energy regularization weight (prevents unbounded energy values), 0 = no reg
+energy_reg_alpha: 0.0              # Energy regularization disabled for score matching (need strong gradients)
 
 # Data and Paths
 data_dir: '../data'  # Data is in parent directory (claude/data/)

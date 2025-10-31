@@ -371,55 +371,56 @@ class Trainer:
     
     def validate_ebm(self):
         """
-        Validation step for the EBM.
-        Computes -(energy gap) = pos_energy - neg_energy on validation set.
+        Validation step for the EBM using Score Matching.
 
-        Metric interpretation:
-        - Energy gap = neg_energy - pos_energy (should be LARGE and POSITIVE)
-        - Validation loss = pos - neg = -(gap) (should be NEGATIVE and become MORE negative)
-        - Lower (more negative) validation loss = better separation = better model
+        Computes denoising score matching loss on validation set:
+        - Add noise to ground truth: y_noisy = y + σ * ε
+        - Compute predicted score: s_θ = -∇_y E(y_noisy, x)
+        - Target score: -ε / σ
+        - Loss: ||s_θ - target_score||²
 
-        Example:
-        - Good model: pos=1, neg=10 → gap=9 → val_loss=-9 (low, good!)
-        - Bad model:  pos=5, neg=6  → gap=1 → val_loss=-1 (high, bad!)
+        Lower validation loss = better score prediction = better model
         """
         self.ebm_model.eval()
         self.fno_model.eval()
         total_ebm_val_loss = 0
 
+        # Use the same noise levels as training
+        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.1, 0.5, 1.0])
+
         for x, y in self.ebm_val_loader:
             x, y = x.to(self.config.device), y.to(self.config.device)
 
-            # Pre-compute FNO predictions once
-            with torch.no_grad():
-                u_fno = self.fno_model(x)
+            batch_loss = 0.0
 
-            # Positive phase: energy of ground truth (no grad needed)
-            with torch.no_grad():
-                #pos_energy = self.model.energy(y, x, training=False, u_fno=u_fno)
-                pos_energy = self.ebm_model(y,x)
+            # Compute score matching loss for each noise level
+            for sigma in sigma_levels:
+                # Add noise to clean data
+                noise = torch.randn_like(y)
+                y_noisy = y + sigma * noise
+                y_noisy.requires_grad_(True)
 
-            # Negative phase (MCMC sampling - needs gradients)
-            # Initialize from FNO prediction for inference
-            y_neg = u_fno.clone().detach()
-            noise_scale = np.sqrt(2 * self.config.mcmc_step_size)
+                # Compute energy of noisy data
+                energy = self.ebm_model(y_noisy, x)
 
-            for _ in range(self.config.mcmc_steps):
-                y_neg.requires_grad_(True)
-                #neg_energy_for_grad = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
-                neg_energy_for_grad = self.ebm_model(y_neg, x)
-                neg_grad = torch.autograd.grad(neg_energy_for_grad.sum(), y_neg)[0]
+                # Compute score: s_θ(y_noisy) = -∇_y E(y_noisy, x)
+                score = -torch.autograd.grad(
+                    outputs=energy.sum(),
+                    inputs=y_noisy,
+                    create_graph=False  # No backprop in validation
+                )[0]
 
+                # Target score (points from noisy data back to clean data)
+                target_score = -noise / sigma
+
+                # Score matching loss (MSE between predicted and target score)
                 with torch.no_grad():
-                    noise = torch.randn_like(y_neg) * noise_scale
-                    y_neg = y_neg - self.config.mcmc_step_size * neg_grad + noise
-                    y_neg = y_neg.detach()
+                    score_loss = torch.mean((score - target_score) ** 2)
+                    batch_loss += score_loss.item()
 
-            with torch.no_grad():
-                #neg_energy = self.model.energy(y_neg, x, training=False, u_fno=u_fno)
-                neg_energy = self.ebm_model(y_neg, x)
-                ebm_loss = pos_energy.mean() - neg_energy.mean()
-                total_ebm_val_loss += ebm_loss.item()
+            # Average over noise levels
+            batch_loss = batch_loss / len(sigma_levels)
+            total_ebm_val_loss += batch_loss
 
         avg_ebm_val_loss = total_ebm_val_loss / len(self.ebm_val_loader)
         return avg_ebm_val_loss
@@ -676,8 +677,8 @@ class Trainer:
         # ========================================================================
         # Noise level (sigma) - can be fixed or annealed during training
         # Multiple noise levels are often used (similar to NCSN), but we start simple
-        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.1, 0.5, 1.0])
-
+        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.005, 0.02, 0.05])
+        #print(f"DEBUG: y stats - mean={y.mean():.4f}, std={y.std():.4f}, min={y.min():.4f}, max={y.max():.4f}")
         total_loss = 0.0
 
         if trace_score:
@@ -828,12 +829,12 @@ class Trainer:
 
     def train_ebm(self, num_epochs):
         """
-        Train EBM model only, with checkpointing and early stopping.
+        Train EBM model only using Score Matching, with checkpointing and early stopping.
 
         Uses ebm_train_loader (noisy data in dual-dataset mode, same as FNO otherwise).
         """
         mode_str = "noisy observations" if self.dual_dataset_mode else "same dataset as FNO"
-        self.logger.info(f"Starting EBM training on {mode_str}...")
+        self.logger.info(f"Starting EBM training with Score Matching on {mode_str}...")
         best_val_loss = float('inf')
 
         for epoch in range(num_epochs):
@@ -845,14 +846,14 @@ class Trainer:
                 x, y = x.to(self.config.device), y.to(self.config.device)
 
                 # Enable tracing for first batch of each epoch and every 50 batches
-                trace_samples = (batch_idx == 0) or (batch_idx % 50 == 0)
+                trace_score = (batch_idx == 0) or (batch_idx % 50 == 0)
 
-                if trace_samples:
-                    loss, trace_info = self.train_step_ebm(x, y, trace_samples=True)
+                if trace_score:
+                    loss, trace_info = self.train_step_ebm_scorematching(x, y, trace_score=True)
                     # Print trace information to terminal
-                    self._print_trace_info(epoch, batch_idx, trace_info)
+                    self._print_score_trace_info(epoch, batch_idx, trace_info)
                 else:
-                    loss = self.train_step_ebm(x, y, trace_samples=False)
+                    loss = self.train_step_ebm_scorematching(x, y, trace_score=False)
 
                 epoch_loss += loss
 
@@ -863,13 +864,13 @@ class Trainer:
                 loop.set_description(f"EBM Training Epoch [{epoch+1}/{num_epochs}]")
                 loop.set_postfix(ebm_loss=loss)
 
-            # EBM Validation (uses EBM val loader)
+            # EBM Validation (uses EBM val loader with score matching)
             val_loss = self.validate_ebm()
             avg_epoch_loss = epoch_loss / len(self.ebm_train_loader)
 
             self.logger.info(
                 f"EBM Epoch {epoch+1}: Train Loss={avg_epoch_loss:.4f}, "
-                f"Val Loss (Energy Gap)={val_loss:.4f}"
+                f"Val Loss (Score Matching)={val_loss:.4f}"
             )
 
             if self.ebm_scheduler:
@@ -936,6 +937,55 @@ class Trainer:
             self.logger.info("  ⚠ WARNING: Negative samples have very low variance")
         if abs(trace_info['neg_init_stats']['mean'] - trace_info['neg_final_stats']['mean']) < 0.05:
             self.logger.info("  ⚠ WARNING: MCMC sampling didn't change samples much (gradients too small?)")
+
+        self.logger.info("=" * 80)
+
+    def _print_score_trace_info(self, epoch, batch_idx, trace_info):
+        """Print score matching trace information to terminal"""
+        self.logger.info("=" * 80)
+        self.logger.info(f"SCORE MATCHING TRACE - Epoch {epoch}, Batch {batch_idx}")
+        self.logger.info("=" * 80)
+
+        # Noise levels used
+        self.logger.info(f"Noise Levels (σ): {trace_info['sigma_levels']}")
+
+        # Score losses per noise level
+        self.logger.info("\nSCORE LOSSES BY NOISE LEVEL:")
+        for i, (sigma, loss) in enumerate(zip(trace_info['sigma_levels'], trace_info['score_losses'])):
+            self.logger.info(f"  σ={sigma:5.2f}: Loss={loss:8.4f}")
+
+        # Score norms
+        self.logger.info("\nSCORE NORMS:")
+        for i, (sigma, score_norm, target_norm) in enumerate(
+            zip(trace_info['sigma_levels'],
+                trace_info['score_norms'],
+                trace_info['target_score_norms'])
+        ):
+            self.logger.info(
+                f"  σ={sigma:5.2f}: Predicted={score_norm:8.4f}, Target={target_norm:8.4f}"
+            )
+
+        # Total loss breakdown
+        self.logger.info("\nLOSS BREAKDOWN:")
+        self.logger.info(f"  Score Loss:      {trace_info['total_score_loss']:8.4f}")
+        self.logger.info(f"  Energy Reg:      {trace_info['energy_reg']:8.4f}")
+        self.logger.info(f"  Total Loss:      {trace_info['total_loss']:8.4f}")
+
+        # Diagnosis
+        self.logger.info("\nDIAGNOSIS:")
+        avg_score_loss = sum(trace_info['score_losses']) / len(trace_info['score_losses'])
+        if avg_score_loss > 10.0:
+            self.logger.info("  ⚠ WARNING: High score matching loss - model may need more training")
+        if trace_info['energy_reg'] > trace_info['total_score_loss']:
+            self.logger.info("  ⚠ WARNING: Energy regularization dominates loss - consider reducing alpha_reg")
+
+        # Check if scores are properly scaled
+        for i, (score_norm, target_norm) in enumerate(
+            zip(trace_info['score_norms'], trace_info['target_score_norms'])
+        ):
+            ratio = score_norm / (target_norm + 1e-8)
+            if ratio < 0.1 or ratio > 10.0:
+                self.logger.info(f"  ⚠ WARNING: Score norm mismatch at σ={trace_info['sigma_levels'][i]} (ratio={ratio:.2f})")
 
         self.logger.info("=" * 80)
 
