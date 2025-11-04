@@ -11,6 +11,7 @@ This module provides synthetic data generation for various PDEs with:
 from .darcy_flow import DarcyFlowGenerator
 from .burgers import BurgersGenerator
 from .poisson import PoissonGenerator
+from .reaction_diffusion import ReactionDiffusionGenerator
 from .noise_models import (
     add_gaussian_noise,
     add_heteroscedastic_noise,
@@ -22,6 +23,7 @@ __all__ = [
     'DarcyFlowGenerator',
     'BurgersGenerator',
     'PoissonGenerator',
+    'ReactionDiffusionGenerator',
     'add_gaussian_noise',
     'add_heteroscedastic_noise',
     'add_spatially_correlated_noise',

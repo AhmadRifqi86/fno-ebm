@@ -15,8 +15,13 @@ Or simply run with default parameters from config.yaml:
 
 import argparse
 import yaml
+import sys
 from pathlib import Path
-from dataset import DarcyFlowGenerator, BurgersGenerator, PoissonGenerator
+
+# Add parent directory to path to import from ../dataset/
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from dataset import DarcyFlowGenerator, BurgersGenerator, PoissonGenerator, ReactionDiffusionGenerator
 
 
 def load_config(config_path='config.yaml'):
@@ -196,10 +201,66 @@ def generate_poisson_data(config):
     print(f"  Test: {test_file}")
 
 
+def generate_reaction_diffusion_data(config):
+    """Generate Reaction-Diffusion dataset."""
+    print("\n=== Generating Reaction-Diffusion Dataset ===")
+
+    resolution = config.get('grid_size', 64)
+    complexity = config.get('complexity', 'medium')
+    seed = config.get('data_seed', 42)
+    n_train = config.get('n_train', 1000)
+    n_test = config.get('n_test', 200)
+    noise_type = config.get('noise_type', 'heteroscedastic')
+
+    # Get noise parameters
+    noise_params = {}
+    if noise_type == 'gaussian':
+        noise_params['noise_level'] = config.get('noise_level', 0.01)
+    elif noise_type == 'heteroscedastic':
+        noise_params['base_noise'] = config.get('base_noise', 0.001)
+        noise_params['scale_factor'] = config.get('scale_factor', 0.02)
+    elif noise_type == 'mixed':
+        noise_params['gaussian_level'] = config.get('gaussian_level', 0.005)
+        noise_params['hetero_scale'] = config.get('hetero_scale', 0.01)
+        noise_params['spatial_level'] = config.get('spatial_level', 0.003)
+        noise_params['correlation_length'] = config.get('mixed_correlation_length', 2.0)
+
+    # Create generators
+    gen_train = ReactionDiffusionGenerator(resolution=resolution, complexity=complexity, seed=seed)
+    gen_test = ReactionDiffusionGenerator(resolution=resolution, complexity=complexity, seed=seed + 10000)
+
+    # Generate datasets
+    X_train, U_train = gen_train.generate_dataset(
+        n_samples=n_train,
+        noise_type=noise_type,
+        noise_params=noise_params
+    )
+
+    X_test, U_test = gen_test.generate_dataset(
+        n_samples=n_test,
+        noise_type=noise_type,
+        noise_params=noise_params
+    )
+
+    # Save datasets
+    data_dir = Path(config.get('data_dir', './data'))
+    data_dir.mkdir(exist_ok=True)
+
+    train_file = data_dir / f"reaction_diffusion_{complexity}_{noise_type}_res{resolution}_train.npz"
+    test_file = data_dir / f"reaction_diffusion_{complexity}_{noise_type}_res{resolution}_val.npz"
+
+    gen_train.save_dataset(X_train, U_train, str(train_file))
+    gen_test.save_dataset(X_test, U_test, str(test_file))
+
+    print(f"\nDatasets saved:")
+    print(f"  Train: {train_file}")
+    print(f"  Test: {test_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate synthetic PDE datasets')
     parser.add_argument('--config', type=str, default='config.yaml', help='Path to config file')
-    parser.add_argument('--pde', type=str, choices=['darcy', 'burgers', 'poisson', 'all'],
+    parser.add_argument('--pde', type=str, choices=['darcy', 'burgers', 'poisson', 'reaction_diffusion', 'all'],
                         help='PDE type to generate (overrides config)')
     parser.add_argument('--complexity', type=str, choices=['simple', 'medium', 'hard'],
                         help='Complexity level (overrides config)')
@@ -234,12 +295,17 @@ def main():
         config['pde_type'] = 'poisson'
         generate_poisson_data(config)
 
+        config['pde_type'] = 'reaction_diffusion'
+        generate_reaction_diffusion_data(config)
+
     elif pde_type == 'darcy':
         generate_darcy_data(config)
     elif pde_type == 'burgers':
         generate_burgers_data(config)
     elif pde_type == 'poisson':
         generate_poisson_data(config)
+    elif pde_type == 'reaction_diffusion':
+        generate_reaction_diffusion_data(config)
     else:
         raise ValueError(f"Unknown PDE type: {pde_type}")
 

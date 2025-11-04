@@ -183,7 +183,7 @@ class Trainer:
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self.lambda_phys = config.lambda_phys  # Weight for physics loss
-        
+        print(f"DEBUG: lambda_phys = {self.lambda_phys}")
         self.early_stopper_fno = EarlyStopping(
             patience=config.patience, 
             verbose=True
@@ -696,7 +696,7 @@ class Trainer:
             y_noisy.requires_grad_(True)
 
             # 2. Compute energy of noisy data
-            energy = self.ebm_model(y_noisy, x)  # (batch,)
+            energy = self.ebm_model(y_noisy, x)  # (batch,), should I add noise_level as parameter?
 
             # 3. Compute score: s_θ(y_noisy) = -∇_y E(y_noisy, x)
             # This is the gradient of log-density

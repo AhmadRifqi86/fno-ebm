@@ -29,7 +29,7 @@ from pathlib import Path
 
 from config import Config
 from fno import FNO2d
-from ebm import SimpleFNO_EBM  # Using ConvEBM for spatial structure!
+from ebm import SimpleFNO_EBM, ConvEBM # Using ConvEBM for spatial structure!
 from trainer import Trainer, FNO_EBM
 from customs import DarcyPhysicsLoss
 from inference import inference_deterministic, inference_probabilistic
@@ -80,6 +80,7 @@ def main():
 
     # EBM model - Using ConvEBM for spatial structure
     ebm_model = SimpleFNO_EBM(in_channels=4, fno_width=32, fno_layers=3)
+    #ebm_model = ConvEBM(in_channels=4)
 
     # Combined model
     model = FNO_EBM(fno_model, ebm_model).to(config.device)
@@ -91,13 +92,14 @@ def main():
     print("\n--- Loading Noisy Dataset ---")
 
     data_dir = Path(config.data_dir) if hasattr(config, 'data_dir') else Path('../data')
+    pde_type = config.pde_type if hasattr(config, 'pde_type') else 'darcy'
     resolution = config.grid_size if hasattr(config, 'grid_size') else 64
     complexity = config.complexity if hasattr(config, 'complexity') else 'medium'
     noise_type = config.noise_type if hasattr(config, 'noise_type') else 'heteroscedastic'
 
     # Construct file paths for noisy dataset
-    noisy_train_file = data_dir / f"darcy_{complexity}_{noise_type}_res{resolution}_train.npz"
-    noisy_val_file = data_dir / f"darcy_{complexity}_{noise_type}_res{resolution}_val.npz"
+    noisy_train_file = data_dir / f"{pde_type}_{complexity}_{noise_type}_res{resolution}_train.npz"
+    noisy_val_file = data_dir / f"{pde_type}_{complexity}_{noise_type}_res{resolution}_val.npz"
 
     # Check if files exist
     if not noisy_train_file.exists() or not noisy_val_file.exists():
