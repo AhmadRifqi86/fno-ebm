@@ -28,7 +28,7 @@ import os
 from pathlib import Path
 
 from config import Config
-from fno import FNO2d
+from fno import FNO2d, FFNO2d
 from ebm import SimpleFNO_EBM, ConvEBM # Using ConvEBM for spatial structure!
 from trainer import Trainer, FNO_EBM
 from customs import DarcyPhysicsLoss
@@ -72,13 +72,21 @@ def main():
 
     # FNO model
     fno_dropout = getattr(config, 'fno_dropout', 0.1)  # Default 0.1 if not in config
-    fno_model = FNO2d(
-        modes1=config.fno_modes,
-        modes2=config.fno_modes,
-        width=config.fno_width,
-        num_layers=4,
-        dropout=fno_dropout
-    )
+    # fno_model = FNO2d(
+    #     modes1=config.fno_modes,
+    #     modes2=config.fno_modes,
+    #     width=config.fno_width,
+    #     num_layers=4,
+    #     dropout=fno_dropout
+    # )
+    fno_model = fno_model = FFNO2d(
+      modes1=config.fno_modes,      # Keep your current config
+      modes2=config.fno_modes,
+      width=config.fno_width,
+      num_layers=4,                  # Start with 4 layers like FNO2d
+      dropout=fno_dropout,
+      attention_reduction=0          # Start without attention
+  )
 
     # EBM model - Using ConvEBM for spatial structure
     ebm_model = SimpleFNO_EBM(in_channels=4, fno_width=32, fno_layers=3)
@@ -114,10 +122,31 @@ def main():
 
     # Load noisy datasets
     print(f"Loading noisy dataset from {data_dir}...")
-    train_dataset = PDEDataset.from_file(str(noisy_train_file), normalize_output=True)
-    val_dataset = PDEDataset.from_file(str(noisy_val_file), normalize_output=True)
+    train_dataset = PDEDataset.from_file(str(noisy_train_file), normalize_output=True, normalize_coords=True, normalize_input=True)
+    val_dataset = PDEDataset.from_file(str(noisy_val_file), normalize_output=True, normalize_coords=True, normalize_input=True)
 
-    print("✓ Dataset loaded (automatically normalized)")
+    print(f"\n=== DATA CHECK (PER-CHANNEL) ===")
+    print(f"X shape: {train_dataset.X.shape}")
+    print(f"U shape: {train_dataset.U.shape}")
+
+    # Check each input channel separately
+    print(f"\nInput channels:")
+    print(f"  Channel 0 (x coord): range=[{train_dataset.X[..., 0].min():.4f}, {train_dataset.X[..., 0].max():.4f}], mean={train_dataset.X[..., 0].mean():.4f}, std={train_dataset.X[..., 0].std():.4f}")
+    print(f"  Channel 1 (y coord): range=[{train_dataset.X[..., 1].min():.4f}, {train_dataset.X[..., 1].max():.4f}], mean={train_dataset.X[..., 1].mean():.4f}, std={train_dataset.X[..., 1].std():.4f}")
+
+    if train_dataset.X.shape[-1] > 2:
+        print(f"  Channel 2 (input field): range=[{train_dataset.X[..., 2].min():.4f}, {train_dataset.X[..., 2].max():.4f}], mean={train_dataset.X[..., 2].mean():.4f}, std={train_dataset.X[..., 2].std():.4f}")
+
+    print(f"\nOutput:")
+    print(f"  U: range=[{train_dataset.U.min():.4f}, {train_dataset.U.max():.4f}], mean={train_dataset.U.mean():.4f}, std={train_dataset.U.std():.4f}")
+
+    # Check normalization status
+    print(f"\nNormalization status:")
+    print(f"  normalize_coords: {train_dataset.normalize_coords}")
+    print(f"  normalize_input: {train_dataset.normalize_input}")
+    print(f"  normalize_output: {train_dataset.normalize_output}")
+
+    print("\n✓ Dataset loaded")
 
     # 3b. Create DataLoaders
     print("\n--- Creating DataLoaders ---")

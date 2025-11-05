@@ -829,58 +829,121 @@ class FactorizedSpectralConv2d(nn.Module):
 
     def forward(self, x):
         """
-        Factorized spectral convolution forward pass.
-
+        Factorized spectral convolution forward pass (efficient vectorized version).
+        
         Process:
         1. FFT to frequency domain
-        2. Apply separable 1D convolutions in x and y
+        2. Apply separable 1D convolutions in x and y (vectorized)
         3. IFFT back to spatial domain
         """
         batch_size = x.shape[0]
-
+        
         # Compute 2D FFT
         x_ft = torch.fft.rfft2(x, norm='ortho')
         x_ft = torch.stack([x_ft.real, x_ft.imag], dim=-1)
-
+        
         # Initialize output
         out_ft = torch.zeros(batch_size, self.out_channels,
                             x.size(-2), x.size(-1)//2 + 1, 2,
                             device=x.device)
-
-        # Apply factorized convolution
+        
         # Upper-left quadrant
         x_modes = x_ft[:, :, :self.modes1, :self.modes2]  # (batch, in_ch, modes1, modes2, 2)
-
-        # Factorize: convolve x-modes first, then y-modes
-        # Step 1: Convolve along x-dimension
-        temp = torch.zeros(batch_size, self.out_channels, self.modes1, self.modes2, 2,
-                          device=x.device)
-        for j in range(self.modes2):
-            temp[:, :, :, j, :] = self.compl_mul1d(x_modes[:, :, :, j, :], self.weights_x1)
-
-        # Step 2: Convolve along y-dimension
-        for i in range(self.modes1):
-            out_ft[:, :, i, :self.modes2, :] = self.compl_mul1d(
-                temp[:, :, i, :, :], self.weights_y
-            )
-
+        
+        # Vectorized factorization:
+        # Step 1: Convolve along x-dimension for all y-modes at once
+        # Reshape to merge y-modes into batch: (B*modes2, in_ch, modes1, 2)
+        x_reshaped = x_modes.permute(0, 3, 1, 2, 4).reshape(-1, self.in_channels, self.modes1, 2)
+        temp = self.compl_mul1d(x_reshaped, self.weights_x1)  # (B*modes2, out_ch, modes1, 2)
+        temp = temp.reshape(batch_size, self.modes2, self.out_channels, self.modes1, 2)
+        temp = temp.permute(0, 2, 3, 1, 4)  # (B, out_ch, modes1, modes2, 2)
+        
+        # Step 2: Convolve along y-dimension for all x-modes at once
+        # Reshape to merge x-modes into batch: (B*modes1, out_ch, modes2, 2)
+        temp_reshaped = temp.permute(0, 2, 1, 3, 4).reshape(-1, self.out_channels, self.modes2, 2)
+        out_modes = self.compl_mul1d(temp_reshaped, self.weights_y)  # (B*modes1, out_ch, modes2, 2)
+        out_modes = out_modes.reshape(batch_size, self.modes1, self.out_channels, self.modes2, 2)
+        out_modes = out_modes.permute(0, 2, 1, 3, 4)  # (B, out_ch, modes1, modes2, 2)
+        
+        out_ft[:, :, :self.modes1, :self.modes2, :] = out_modes
+        
         # Lower-left quadrant
         x_modes = x_ft[:, :, -self.modes1:, :self.modes2]
-        temp = torch.zeros(batch_size, self.out_channels, self.modes1, self.modes2, 2,
-                          device=x.device)
-        for j in range(self.modes2):
-            temp[:, :, :, j, :] = self.compl_mul1d(x_modes[:, :, :, j, :], self.weights_x2)
-
-        for i in range(self.modes1):
-            out_ft[:, :, -self.modes1 + i, :self.modes2, :] = self.compl_mul1d(
-                temp[:, :, i, :, :], self.weights_y
-            )
-
+        
+        # Step 1: x-dimension (vectorized)
+        x_reshaped = x_modes.permute(0, 3, 1, 2, 4).reshape(-1, self.in_channels, self.modes1, 2)
+        temp = self.compl_mul1d(x_reshaped, self.weights_x2)
+        temp = temp.reshape(batch_size, self.modes2, self.out_channels, self.modes1, 2)
+        temp = temp.permute(0, 2, 3, 1, 4)
+        
+        # Step 2: y-dimension (vectorized)
+        temp_reshaped = temp.permute(0, 2, 1, 3, 4).reshape(-1, self.out_channels, self.modes2, 2)
+        out_modes = self.compl_mul1d(temp_reshaped, self.weights_y)
+        out_modes = out_modes.reshape(batch_size, self.modes1, self.out_channels, self.modes2, 2)
+        out_modes = out_modes.permute(0, 2, 1, 3, 4)
+        
+        out_ft[:, :, -self.modes1:, :self.modes2, :] = out_modes
+        
         # Convert back to complex and IFFT
         out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
         x_out = torch.fft.irfft2(out_ft_complex, s=(x.size(-2), x.size(-1)), norm='ortho')
-
+        
         return x_out
+
+    # def forward(self, x):
+    #     """
+    #     Factorized spectral convolution forward pass.
+
+    #     Process:
+    #     1. FFT to frequency domain
+    #     2. Apply separable 1D convolutions in x and y
+    #     3. IFFT back to spatial domain
+    #     """
+    #     batch_size = x.shape[0]
+
+    #     # Compute 2D FFT
+    #     x_ft = torch.fft.rfft2(x, norm='ortho')
+    #     x_ft = torch.stack([x_ft.real, x_ft.imag], dim=-1)
+
+    #     # Initialize output
+    #     out_ft = torch.zeros(batch_size, self.out_channels,
+    #                         x.size(-2), x.size(-1)//2 + 1, 2,
+    #                         device=x.device)
+
+    #     # Apply factorized convolution
+    #     # Upper-left quadrant
+    #     x_modes = x_ft[:, :, :self.modes1, :self.modes2]  # (batch, in_ch, modes1, modes2, 2)
+
+    #     # Factorize: convolve x-modes first, then y-modes
+    #     # Step 1: Convolve along x-dimension
+    #     temp = torch.zeros(batch_size, self.out_channels, self.modes1, self.modes2, 2,
+    #                       device=x.device)
+    #     for j in range(self.modes2):
+    #         temp[:, :, :, j, :] = self.compl_mul1d(x_modes[:, :, :, j, :], self.weights_x1)
+
+    #     # Step 2: Convolve along y-dimension
+    #     for i in range(self.modes1):
+    #         out_ft[:, :, i, :self.modes2, :] = self.compl_mul1d(
+    #             temp[:, :, i, :, :], self.weights_y
+    #         )
+
+    #     # Lower-left quadrant
+    #     x_modes = x_ft[:, :, -self.modes1:, :self.modes2]
+    #     temp = torch.zeros(batch_size, self.out_channels, self.modes1, self.modes2, 2,
+    #                       device=x.device)
+    #     for j in range(self.modes2):
+    #         temp[:, :, :, j, :] = self.compl_mul1d(x_modes[:, :, :, j, :], self.weights_x2)
+
+    #     for i in range(self.modes1):
+    #         out_ft[:, :, -self.modes1 + i, :self.modes2, :] = self.compl_mul1d(
+    #             temp[:, :, i, :, :], self.weights_y
+    #         )
+
+    #     # Convert back to complex and IFFT
+    #     out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
+    #     x_out = torch.fft.irfft2(out_ft_complex, s=(x.size(-2), x.size(-1)), norm='ortho')
+
+    #     return x_out
 
 
 # ============================================================================

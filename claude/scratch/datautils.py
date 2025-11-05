@@ -26,23 +26,60 @@ class PDEDataset(Dataset):
         >>> u_pred_real = u_pred * dataset.u_std + dataset.u_mean
     """
 
-    def __init__(self, X: np.ndarray, U: np.ndarray, normalize_output: bool = True, normalize_input: bool = True):
+    def __init__(self, X: np.ndarray, U: np.ndarray, normalize_output: bool = True,
+                 normalize_input: bool = True, normalize_coords: bool = True):
         """
         Initialize dataset from numpy arrays.
 
         Args:
             X: Input data, shape (n_samples, nx, ny, in_channels)
-               First 2 channels: x,y coordinates (kept unnormalized)
+               First 2 channels: x,y coordinates
                Remaining channels: Physical fields (normalized to N(0,1))
             U: Output data, shape (n_samples, nx, ny, out_channels)
             normalize_output: If True, normalize U to zero mean, unit std
             normalize_input: If True, normalize input channels beyond x,y coords
+            normalize_coords: If True, normalize x,y coordinates to [-1, 1]
         """
         # Store original X shape
         self.n_samples, self.nx, self.ny, self.in_channels = X.shape
 
+        # ===== COORDINATE NORMALIZATION (NEW!) =====
+        self.normalize_coords = normalize_coords
+
+        if normalize_coords:
+            # Normalize first 2 channels (x, y coordinates) to [-1, 1]
+            X_coords = X[..., :2].copy()  # (n_samples, nx, ny, 2)
+
+            self.x_coord_min = X_coords[..., 0].min()
+            self.x_coord_max = X_coords[..., 0].max()
+            self.y_coord_min = X_coords[..., 1].min()
+            self.y_coord_max = X_coords[..., 1].max()
+
+            # Normalize to [-1, 1]
+            X_coords[..., 0] = 2 * (X_coords[..., 0] - self.x_coord_min) / (self.x_coord_max - self.x_coord_min) - 1
+            X_coords[..., 1] = 2 * (X_coords[..., 1] - self.y_coord_min) / (self.y_coord_max - self.y_coord_min) - 1
+
+            print(f"\nCoordinate normalization applied:")
+            print(f"  X coord: [{self.x_coord_min:.4f}, {self.x_coord_max:.4f}] → [-1, 1]")
+            print(f"  Y coord: [{self.y_coord_min:.4f}, {self.y_coord_max:.4f}] → [-1, 1]")
+            print(f"  Normalized X range: [{X_coords[..., 0].min():.4f}, {X_coords[..., 0].max():.4f}]")
+            print(f"  Normalized Y range: [{X_coords[..., 1].min():.4f}, {X_coords[..., 1].max():.4f}]")
+
+            # Replace coordinates in X
+            X = X.copy()
+            X[..., :2] = X_coords
+        else:
+            self.x_coord_min = None
+            self.x_coord_max = None
+            self.y_coord_min = None
+            self.y_coord_max = None
+
         # ===== INPUT NORMALIZATION (CRITICAL FIX!) =====
         self.normalize_input = normalize_input
+
+        print(f"\n[DEBUG] Input normalization check:")
+        print(f"  normalize_input={normalize_input}, in_channels={self.in_channels}")
+        print(f"  Condition (normalize_input and in_channels > 2) = {normalize_input and self.in_channels > 2}")
 
         if normalize_input and self.in_channels > 2:
             # Split coordinate channels from physical field channels
@@ -54,8 +91,8 @@ class PDEDataset(Dataset):
             self.x_fields_std = []
             X_fields_normalized = np.zeros_like(X_fields)
 
-            print(f"\nInput normalization applied:")
-            print(f"  Keeping channels 0,1 (coordinates) unnormalized: range [0,1]")
+            print(f"\nInput field normalization applied (channels 2+):")
+            print(f"  Note: Channels 0,1 (coordinates) already normalized to [-1,1]")
 
             for ch in range(X_fields.shape[-1]):
                 field = X_fields[..., ch]
@@ -135,7 +172,8 @@ class PDEDataset(Dataset):
         return X
 
     @classmethod
-    def from_file(cls, filepath: str, normalize_output: bool = True, normalize_input: bool = True):
+    def from_file(cls, filepath: str, normalize_output: bool = True,
+                  normalize_input: bool = True, normalize_coords: bool = True):
         """
         Load dataset from .npz file.
 
@@ -143,6 +181,7 @@ class PDEDataset(Dataset):
             filepath: Path to .npz file
             normalize_output: If True, normalize output to N(0,1)
             normalize_input: If True, normalize input channels beyond x,y coords to N(0,1)
+            normalize_coords: If True, normalize x,y coordinates to [-1, 1]
 
         Returns:
             PDEDataset instance
@@ -150,7 +189,8 @@ class PDEDataset(Dataset):
         data = np.load(filepath)
         X = data['X']
         U = data['U']
-        return cls(X, U, normalize_output=normalize_output, normalize_input=normalize_input)
+        return cls(X, U, normalize_output=normalize_output,
+                   normalize_input=normalize_input, normalize_coords=normalize_coords)
 
 
 def create_dataloaders(config):
