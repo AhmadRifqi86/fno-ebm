@@ -11,7 +11,7 @@ ebm_learning_rate: 0.001
 
 fno_optimizer_config:
   type: adam
-  lr: 0.0005             # Moderate LR for stable convergence, should be high?
+  lr: 0.0001             # Moderate LR for stable convergence, should be high?
   weight_decay: 0.001   # Light regularization (reduced from 0.01)
 
 ebm_optimizer_config:
@@ -41,7 +41,8 @@ ebm_scheduler_config:
 # Model Parameters
 fno_modes: 16           # Fourier modes (increased for better representation)
 fno_width: 96           # Hidden dimension (increased from 64)
-ebm_hidden_dim: 128      # EBM network width
+fno_dropout: 0.0        # Dropout rate for FNO (prevents overfitting on complex patterns)
+ebm_hidden_dim: 192      # EBM network width
 
 # Physics and MCMC
 lambda_phys: 0.0        # Physics loss weight (DISABLED - data has noise, let model learn from data), need to be small, i'll try 0.0001 or 0.00015

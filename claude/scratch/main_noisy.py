@@ -71,11 +71,13 @@ def main():
     print("\n--- Initializing Models ---")
 
     # FNO model
+    fno_dropout = getattr(config, 'fno_dropout', 0.1)  # Default 0.1 if not in config
     fno_model = FNO2d(
         modes1=config.fno_modes,
         modes2=config.fno_modes,
         width=config.fno_width,
-        num_layers=4
+        num_layers=4,
+        dropout=fno_dropout
     )
 
     # EBM model - Using ConvEBM for spatial structure
