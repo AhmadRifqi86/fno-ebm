@@ -11,8 +11,8 @@ ebm_learning_rate: 0.001
 
 fno_optimizer_config:
   type: adamw
-  lr: 0.002             # Moderate LR for stable convergence, should be high?
-  weight_decay: 0.04   # Light regularization (reduced from 0.01)
+  lr: 0.001             # Moderate LR for stable convergence, should be high?
+  weight_decay: 0.05   # Light regularization (reduced from 0.01)
   betas: [0.9, 0.999]
 
 ebm_optimizer_config:
@@ -31,8 +31,8 @@ ebm_optimizer_config:
 
 fno_scheduler_config:
   type: step_lr
-  step_size: 5          # Reduce LR every 10 epochs
-  gamma: 0.7 
+  step_size: 100         # Reduce LR every 10 epochs
+  gamma: 1.0 
 
 ebm_scheduler_config:
   type: step_lr
@@ -40,8 +40,8 @@ ebm_scheduler_config:
   gamma: 0.9             # Smaller decay (was reducing too fast)
 
 # Model Parameters
-fno_modes: 16           # Fourier modes (increased for better representation)
-fno_width: 64           # Hidden dimension (increased from 64)
+fno_modes: 12           # Fourier modes (increased for better representation)
+fno_width: 48           # Hidden dimension (increased from 64)
 fno_dropout: 0.25        # Dropout rate for FNO (prevents overfitting on complex patterns)
 ebm_hidden_dim: 192      # EBM network width
 
@@ -69,8 +69,8 @@ data_dir: '../data'  # Data is in parent directory (claude/data/)
 checkpoint_dir: './checkpoints'
 batch_size: 16           # Good for 64x64 on most GPUs
 grid_size: 64
-n_train: 1000
-n_test: 200
+n_train: 3000 #1000
+n_test: 400
 num_workers: 4
 save_data: true
 

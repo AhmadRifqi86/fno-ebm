@@ -102,7 +102,7 @@ class PDEDataset(Dataset):
                 self.x_fields_mean.append(mean)
                 self.x_fields_std.append(std)
 
-                X_fields_normalized[..., ch] = (field - mean) / std
+                X_fields_normalized[..., ch] = (field - mean) / (std + 1e-8)
 
                 print(f"  Channel {ch+2}: mean={mean:.6f}, std={std:.6f} → N(0,1)")
 
@@ -191,6 +191,120 @@ class PDEDataset(Dataset):
         U = data['U']
         return cls(X, U, normalize_output=normalize_output,
                    normalize_input=normalize_input, normalize_coords=normalize_coords)
+
+
+class AugmentedPDEDataset(Dataset):
+    """
+    Data augmentation wrapper for PDE datasets.
+
+    Applies random geometric transformations:
+    - Horizontal/vertical flips
+    - 90° rotations (0°, 90°, 180°, 270°)
+
+    These augmentations are valid for PDEs with spatial symmetry (most physical systems).
+    Effectively increases dataset size by 8× (2 flips × 4 rotations).
+
+    Example:
+        >>> base_dataset = PDEDataset.from_file('train.npz')
+        >>> augmented_dataset = AugmentedPDEDataset(base_dataset)
+        >>> # Now each sample is randomly flipped/rotated during training
+    """
+    def __init__(self, dataset, enable_flip=True, enable_rotation=True):
+        """
+        Initialize augmented dataset.
+
+        Args:
+            dataset: Base PDEDataset to wrap
+            enable_flip: Enable horizontal/vertical flipping (default: True)
+            enable_rotation: Enable 90° rotations (default: True)
+        """
+        self.dataset = dataset
+        self.enable_flip = enable_flip
+        self.enable_rotation = enable_rotation
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        """
+        Get augmented sample.
+
+        Returns:
+            x: Augmented input (n_x, n_y, 3)
+            u: Augmented output (n_x, n_y, 1)
+        """
+        # Get base sample
+        x, u = self.dataset[idx]
+
+        # Apply augmentations
+        if self.enable_flip:
+            # Random horizontal flip (50% chance)
+            if torch.rand(1) > 0.5:
+                x = torch.flip(x, [1])  # Flip along y-axis
+                u = torch.flip(u, [1])
+
+            # Random vertical flip (50% chance)
+            if torch.rand(1) > 0.5:
+                x = torch.flip(x, [0])  # Flip along x-axis
+                u = torch.flip(u, [0])
+
+        if self.enable_rotation:
+            # Random 90° rotation (0°, 90°, 180°, 270°)
+            k = torch.randint(0, 4, (1,)).item()
+            if k > 0:  # Only rotate if k > 0 (save computation)
+                x = torch.rot90(x, k, [0, 1])
+                u = torch.rot90(u, k, [0, 1])
+
+        # CRITICAL: Update coordinate channels after transformation!
+        # When we flip/rotate, the spatial coordinates must be updated too
+        x = self._update_coordinates(x, x.shape[0], x.shape[1])
+
+        return x, u
+
+    def _update_coordinates(self, x, nx, ny):
+        """
+        Regenerate coordinate channels after spatial transformation.
+
+        After flipping/rotating, the coordinate grid changes. We need to
+        regenerate channels 0,1 to match the new spatial layout.
+
+        Args:
+            x: Transformed input (n_x, n_y, 3)
+            nx, ny: Grid dimensions
+
+        Returns:
+            x: Input with updated coordinate channels
+        """
+        # Generate fresh coordinate grid
+        # Note: Coordinates are already normalized to [-1, 1] by PDEDataset
+        x_coords = torch.linspace(-1, 1, nx, device=x.device)
+        y_coords = torch.linspace(-1, 1, ny, device=x.device)
+        grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='ij')
+
+        # Replace coordinate channels (0, 1) with fresh grid
+        x_new = x.clone()
+        x_new[..., 0] = grid_x
+        x_new[..., 1] = grid_y
+        # Channel 2 (input field) stays as is - it was correctly transformed
+
+        return x_new
+
+    # Expose base dataset attributes
+    @property
+    def u_mean(self):
+        return self.dataset.u_mean
+
+    @property
+    def u_std(self):
+        return self.dataset.u_std
+
+    @property
+    def normalize_output(self):
+        return self.dataset.normalize_output
+
+    def denormalize(self, U_normalized):
+        """Delegate to base dataset"""
+        return self.dataset.denormalize(U_normalized)
 
 
 def create_dataloaders(config):

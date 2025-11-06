@@ -226,6 +226,7 @@ def generate_reaction_diffusion_data(config):
         noise_params['correlation_length'] = config.get('mixed_correlation_length', 2.0)
 
     # Create generators
+    print("Calling ReactionDiffusionGenerator")
     gen_train = ReactionDiffusionGenerator(resolution=resolution, complexity=complexity, seed=seed)
     gen_test = ReactionDiffusionGenerator(resolution=resolution, complexity=complexity, seed=seed + 10000)
 
