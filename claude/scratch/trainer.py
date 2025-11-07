@@ -5,7 +5,7 @@ import os
 from tqdm import tqdm
 import logging
 from config import Config, Factory
-from customs import EarlyStopping, PhysicsLossFn
+from customs import EarlyStopping, PhysicsLossFn, combined_ebm_loss
 import numpy as np
 
 #Abstract class for physics loss, the physics loss should have format: phy_loss(u, x), u for output, x for grid position
@@ -653,16 +653,15 @@ class Trainer:
 
     def train_step_ebm_scorematching(self, x, y, trace_score=False):
         """
-        EBM training with Denoising Score Matching.
+        EBM training with Enhanced Score Matching + Error-Aware Calibration.
 
-        Algorithm (Denoising Score Matching):
-        1. Add noise to real data: y_noisy = y + σ * ε, where ε ~ N(0, I)
-        2. Compute score (gradient of log-density): s_θ(y_noisy) = -∇_y E(y_noisy, x)
-        3. Target score: s_target = -ε / σ  (points toward clean data)
-        4. Loss: ||s_θ(y_noisy) - s_target||²
+        Combines:
+        1. Weighted multi-scale score matching (balanced learning across noise levels)
+        2. Error-aware calibration loss (teaches EBM to predict high uncertainty where FNO fails)
+        3. Energy regularization (prevents unbounded energies)
 
-        This avoids MCMC sampling entirely, making training faster and more stable.
-        The learned energy E(y, x) implicitly defines: p(y|x) ∝ exp(-E(y, x))
+        This produces spatially-structured uncertainty maps that correlate with FNO errors,
+        instead of uniform random noise.
 
         Args:
             x: input coordinates (batch, n_x, n_y, 3)
@@ -673,86 +672,68 @@ class Trainer:
             loss (float) or (loss, trace_info) if trace_score=True
         """
         # ========================================================================
-        # DENOISING SCORE MATCHING
+        # Get FNO predictions for calibration
         # ========================================================================
-        # Noise level (sigma) - can be fixed or annealed during training
-        # Multiple noise levels are often used (similar to NCSN), but we start simple
-        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.005, 0.02, 0.05])
-        #print(f"DEBUG: y stats - mean={y.mean():.4f}, std={y.std():.4f}, min={y.min():.4f}, max={y.max():.4f}")
-        total_loss = 0.0
-
-        if trace_score:
-            trace_info = {
-                'sigma_levels': sigma_levels,
-                'score_losses': [],
-                'score_norms': [],
-                'target_score_norms': []
-            }
-
-        for sigma in sigma_levels:
-            # 1. Add noise to clean data
-            noise = torch.randn_like(y)
-            y_noisy = y + sigma * noise
-            y_noisy.requires_grad_(True)
-
-            # 2. Compute energy of noisy data
-            energy = self.ebm_model(y_noisy, x)  # (batch,), should I add noise_level as parameter?
-
-            # 3. Compute score: s_θ(y_noisy) = -∇_y E(y_noisy, x)
-            # This is the gradient of log-density
-            score = -torch.autograd.grad(
-                outputs=energy.sum(),
-                inputs=y_noisy,
-                create_graph=True  # Need gradients for backprop,
-            )[0]  # (batch, n_x, n_y, 1)
-
-            # 4. Target score (points from noisy data back to clean data)
-            # Derived from: ∇_y log p(y_noisy | y_clean) = -noise / σ²
-            # But we use simplified version: -noise / σ (equivalent up to scaling)
-            target_score = -noise / sigma
-
-            # 5. Score matching loss (MSE between predicted and target score)
-            score_loss = torch.mean((score - target_score) ** 2)
-
-            total_loss += score_loss
-
-            # Tracing
-            if trace_score:
-                with torch.no_grad():
-                    trace_info['score_losses'].append(score_loss.item())
-                    trace_info['score_norms'].append(score.norm().item())
-                    trace_info['target_score_norms'].append(target_score.norm().item())
-
-        # Average over noise levels
-        total_loss = total_loss / len(sigma_levels)
-
-        # ========================================================================
-        # ADDITIONAL REGULARIZATION (optional)
-        # ========================================================================
-        # L2 regularization on energy magnitude (prevents unbounded energies)
-        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.01)
-
-        # Compute energy on clean data for regularization
         with torch.no_grad():
-            y_clean = y.detach()
-            y_clean.requires_grad_(True)
-        energy_clean = self.ebm_model(y_clean, x)
-        energy_reg = alpha_reg * energy_clean.pow(2).mean()
+            fno_output = self.fno_model(x)  # (batch, n_x, n_y, 1)
 
-        # Total loss
-        total_loss_with_reg = total_loss + energy_reg
+        # Prepare inputs for combined_ebm_loss
+        # u_clean: FNO output for score matching (we add noise to this)
+        # x_coords: Input coordinates
+        # fno_pred: FNO output for calibration (squeezed for error calculation)
+        # ground_truth: True solution for calibration
+        u_clean = fno_output  # (batch, n_x, n_y, 1)
+        x_coords = x  # (batch, n_x, n_y, 3)
+        fno_pred = fno_output.squeeze(-1) if fno_output.dim() == 4 else fno_output  # (batch, n_x, n_y)
+        ground_truth = y.squeeze(-1) if y.dim() == 4 else y  # (batch, n_x, n_y)
+
+        # ========================================================================
+        # Get hyperparameters from config
+        # ========================================================================
+        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.01, 0.02, 0.05])
+        weight_score = getattr(self.config, 'ebm_weight_score', 1.0)
+        weight_calibration = getattr(self.config, 'ebm_weight_calibration', 0.5)
+        energy_reg_weight = getattr(self.config, 'ebm_energy_reg', 0.001)
+
+        # ========================================================================
+        # COMBINED EBM LOSS (from customs.py)
+        # ========================================================================
+        loss, loss_dict = combined_ebm_loss(
+            ebm_model=self.ebm_model,
+            u_clean=u_clean,
+            x_coords=x_coords,
+            fno_pred=fno_pred,
+            ground_truth=ground_truth,
+            weight_score=weight_score,
+            weight_calibration=weight_calibration,
+            sigmas=sigma_levels,
+            energy_reg_weight=energy_reg_weight
+        )
 
         # Backward pass
-        total_loss_scaled = total_loss_with_reg / self.accumulation_steps
-        total_loss_scaled.backward()
+        loss_scaled = loss / self.accumulation_steps
+        loss_scaled.backward()
 
+        # ========================================================================
+        # TRACING (for debugging and monitoring)
+        # ========================================================================
         if trace_score:
-            trace_info['total_score_loss'] = total_loss.item()
-            trace_info['energy_reg'] = energy_reg.item()
-            trace_info['total_loss'] = total_loss_with_reg.item()
-            return total_loss_with_reg.item(), trace_info
+            # Reconstruct trace_info compatible with existing logging
+            trace_info = {
+                'sigma_levels': sigma_levels,
+                'score_losses': [loss_dict.get(f'score_loss_{s}', 0.0) for s in sigma_levels],
+                'score_norms': [0.0] * len(sigma_levels),  # Not provided by combined_ebm_loss
+                'target_score_norms': [0.0] * len(sigma_levels),  # Not provided
+                'total_score_loss': loss_dict['score'],
+                'energy_reg': loss_dict['energy_reg'],
+                'calibration_loss': loss_dict['calibration'],
+                'total_loss': loss_dict['total'],
+                'score_norm_ratio_0.01': loss_dict.get('score_norm_ratio_0.01', 0.0),
+                'score_norm_ratio_0.05': loss_dict.get('score_norm_ratio_0.05', 0.0),
+            }
+            return loss.item(), trace_info
 
-        return total_loss_with_reg.item()
+        return loss.item()
 
     def _get_tensor_stats(self, tensor):
         """Helper function to get statistics of a tensor for debugging"""
@@ -846,7 +827,7 @@ class Trainer:
                 x, y = x.to(self.config.device), y.to(self.config.device)
 
                 # Enable tracing for first batch of each epoch and every 50 batches
-                trace_score = (batch_idx == 0) or (batch_idx % 50 == 0)
+                trace_score = (batch_idx == 0) #or (batch_idx % 50 == 0)
 
                 if trace_score:
                     loss, trace_info = self.train_step_ebm_scorematching(x, y, trace_score=True)
@@ -941,9 +922,9 @@ class Trainer:
         self.logger.info("=" * 80)
 
     def _print_score_trace_info(self, epoch, batch_idx, trace_info):
-        """Print score matching trace information to terminal"""
+        """Print enhanced score matching trace information to terminal"""
         self.logger.info("=" * 80)
-        self.logger.info(f"SCORE MATCHING TRACE - Epoch {epoch}, Batch {batch_idx}")
+        self.logger.info(f"ENHANCED SCORE MATCHING TRACE - Epoch {epoch}, Batch {batch_idx}")
         self.logger.info("=" * 80)
 
         # Noise levels used
@@ -954,38 +935,44 @@ class Trainer:
         for i, (sigma, loss) in enumerate(zip(trace_info['sigma_levels'], trace_info['score_losses'])):
             self.logger.info(f"  σ={sigma:5.2f}: Loss={loss:8.4f}")
 
-        # Score norms
-        self.logger.info("\nSCORE NORMS:")
-        for i, (sigma, score_norm, target_norm) in enumerate(
-            zip(trace_info['sigma_levels'],
-                trace_info['score_norms'],
-                trace_info['target_score_norms'])
-        ):
-            self.logger.info(
-                f"  σ={sigma:5.2f}: Predicted={score_norm:8.4f}, Target={target_norm:8.4f}"
-            )
+        # Score norm ratios (key diagnostic for convergence)
+        self.logger.info("\nSCORE NORM RATIOS (should approach 1.0):")
+        if trace_info.get('score_norm_ratio_0.01', 0.0) > 0:
+            self.logger.info(f"  σ=0.01: Ratio={trace_info['score_norm_ratio_0.01']:.4f}")
+        if trace_info.get('score_norm_ratio_0.05', 0.0) > 0:
+            self.logger.info(f"  σ=0.05: Ratio={trace_info['score_norm_ratio_0.05']:.4f}")
 
         # Total loss breakdown
         self.logger.info("\nLOSS BREAKDOWN:")
-        self.logger.info(f"  Score Loss:      {trace_info['total_score_loss']:8.4f}")
-        self.logger.info(f"  Energy Reg:      {trace_info['energy_reg']:8.4f}")
-        self.logger.info(f"  Total Loss:      {trace_info['total_loss']:8.4f}")
+        self.logger.info(f"  Score Loss:         {trace_info['total_score_loss']:8.4f}")
+        self.logger.info(f"  Calibration Loss:   {trace_info.get('calibration_loss', 0.0):8.4f}")
+        self.logger.info(f"  Energy Reg:         {trace_info['energy_reg']:8.4f}")
+        self.logger.info(f"  Total Loss:         {trace_info['total_loss']:8.4f}")
 
         # Diagnosis
         self.logger.info("\nDIAGNOSIS:")
-        avg_score_loss = sum(trace_info['score_losses']) / len(trace_info['score_losses'])
+        avg_score_loss = sum(trace_info['score_losses']) / len(trace_info['score_losses']) if trace_info['score_losses'] else 0
         if avg_score_loss > 10.0:
             self.logger.info("  ⚠ WARNING: High score matching loss - model may need more training")
         if trace_info['energy_reg'] > trace_info['total_score_loss']:
-            self.logger.info("  ⚠ WARNING: Energy regularization dominates loss - consider reducing alpha_reg")
+            self.logger.info("  ⚠ WARNING: Energy regularization dominates loss - consider reducing ebm_energy_reg")
 
-        # Check if scores are properly scaled
-        for i, (score_norm, target_norm) in enumerate(
-            zip(trace_info['score_norms'], trace_info['target_score_norms'])
-        ):
-            ratio = score_norm / (target_norm + 1e-8)
-            if ratio < 0.1 or ratio > 10.0:
-                self.logger.info(f"  ⚠ WARNING: Score norm mismatch at σ={trace_info['sigma_levels'][i]} (ratio={ratio:.2f})")
+        # Check calibration loss
+        if trace_info.get('calibration_loss', 0.0) > trace_info['total_score_loss']:
+            self.logger.info("  ⚠ WARNING: Calibration loss dominates - consider reducing ebm_weight_calibration")
+
+        # Check score norm ratios (critical for convergence)
+        ratio_001 = trace_info.get('score_norm_ratio_0.01', 0.0)
+        ratio_005 = trace_info.get('score_norm_ratio_0.05', 0.0)
+
+        if ratio_001 > 0 and (ratio_001 < 0.5 or ratio_001 > 1.5):
+            self.logger.info(f"  ⚠ WARNING: Score norm mismatch at σ=0.01 (ratio={ratio_001:.2f}, should be ~1.0)")
+        if ratio_005 > 0 and (ratio_005 < 0.5 or ratio_005 > 1.5):
+            self.logger.info(f"  ⚠ WARNING: Score norm mismatch at σ=0.05 (ratio={ratio_005:.2f}, should be ~1.0)")
+
+        # Success indicators
+        if ratio_001 > 0.7 and ratio_001 < 1.3:
+            self.logger.info(f"  ✓ Good score matching convergence at σ=0.01 (ratio={ratio_001:.2f})")
 
         self.logger.info("=" * 80)
 
