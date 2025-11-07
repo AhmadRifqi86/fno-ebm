@@ -85,7 +85,7 @@ def main():
       width=config.fno_width,
       num_layers=4,                  # Start with 4 layers like FNO2d
       dropout=fno_dropout,
-      attention_reduction=0          # Start without attention
+      attention_reduction=4          # Start without attention
   )
 
     # EBM model - Using ConvEBM for spatial structure

@@ -703,7 +703,7 @@ class Trainer:
             score = -torch.autograd.grad(
                 outputs=energy.sum(),
                 inputs=y_noisy,
-                create_graph=True  # Need gradients for backprop, consider to set to False
+                create_graph=True  # Need gradients for backprop,
             )[0]  # (batch, n_x, n_y, 1)
 
             # 4. Target score (points from noisy data back to clean data)
