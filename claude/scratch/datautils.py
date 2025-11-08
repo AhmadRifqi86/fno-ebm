@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 from dataset import DarcyFlowGenerator, BurgersGenerator, PoissonGenerator
+import h5py
 
 
 class PDEDataset(Dataset):
@@ -173,22 +174,98 @@ class PDEDataset(Dataset):
 
     @classmethod
     def from_file(cls, filepath: str, normalize_output: bool = True,
-                  normalize_input: bool = True, normalize_coords: bool = True):
+                  normalize_input: bool = True, normalize_coords: bool = True,
+                  h5_input_key: str = 'nu', h5_output_key: str = 'tensor'):
         """
-        Load dataset from .npz file.
+        Load dataset from .npz or .h5/.hdf5 file.
 
         Args:
-            filepath: Path to .npz file
+            filepath: Path to .npz, .h5, or .hdf5 file
             normalize_output: If True, normalize output to N(0,1)
             normalize_input: If True, normalize input channels beyond x,y coords to N(0,1)
             normalize_coords: If True, normalize x,y coordinates to [-1, 1]
+            h5_input_key: Key for input data in HDF5 file (default: 'nu' for PDEBench)
+            h5_output_key: Key for output data in HDF5 file (default: 'tensor' for PDEBench)
 
         Returns:
             PDEDataset instance
+
+        Note:
+            For HDF5 files, the function expects the structure:
+            - Input: file[h5_input_key] with shape (n_samples, n_x, n_y) or (n_samples, n_x, n_y, n_channels)
+            - Output: file[h5_output_key] with shape (n_samples, n_x, n_y, n_timesteps) or similar
+
+            The function will automatically:
+            1. Generate coordinate grids for channels 0,1
+            2. Stack input data as channel 2
+            3. Select the last timestep from output (for time-dependent PDEs)
         """
-        data = np.load(filepath)
-        X = data['X']
-        U = data['U']
+        filepath = str(filepath)  # Ensure string path
+        file_ext = Path(filepath).suffix.lower()
+
+        if file_ext == '.npz':
+            # Load NPZ format
+            print(f"Loading NPZ file: {filepath}")
+            data = np.load(filepath)
+            X = data['X']
+            U = data['U']
+
+        elif file_ext in ['.h5', '.hdf5']:
+            # Load HDF5 format
+            print(f"Loading HDF5 file: {filepath}")
+            with h5py.File(filepath, 'r') as f:
+                print(f"Available keys in HDF5 file: {list(f.keys())}")
+
+                # Load input data
+                if h5_input_key in f:
+                    input_data = f[h5_input_key][:]  # Shape: (n_samples, n_x, n_y) or (n_samples, n_x, n_y, ...)
+                    print(f"  Input data '{h5_input_key}' shape: {input_data.shape}")
+                else:
+                    raise KeyError(f"Input key '{h5_input_key}' not found in HDF5 file. Available keys: {list(f.keys())}")
+
+                # Load output data
+                if h5_output_key in f:
+                    output_data = f[h5_output_key][:]  # Shape: (n_samples, n_x, n_y, n_t) for time-dependent
+                    print(f"  Output data '{h5_output_key}' shape: {output_data.shape}")
+                else:
+                    raise KeyError(f"Output key '{h5_output_key}' not found in HDF5 file. Available keys: {list(f.keys())}")
+
+            # Process input data
+            if input_data.ndim == 3:
+                # (n_samples, n_x, n_y) -> add channel dimension
+                input_data = input_data[..., np.newaxis]  # (n_samples, n_x, n_y, 1)
+
+            n_samples, n_x, n_y = input_data.shape[:3]
+
+            # Generate coordinate grids
+            x_coords = np.linspace(0, 1, n_x)
+            y_coords = np.linspace(0, 1, n_y)
+            grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+            # Create X with shape (n_samples, n_x, n_y, 3): [x_coord, y_coord, input_field]
+            X = np.zeros((n_samples, n_x, n_y, 3))
+            X[:, :, :, 0] = grid_x[np.newaxis, :, :]  # x coordinates
+            X[:, :, :, 1] = grid_y[np.newaxis, :, :]  # y coordinates
+            X[:, :, :, 2] = input_data[..., 0]         # input field (first channel if multiple)
+
+            print(f"  Generated X with coordinates: {X.shape}")
+
+            # Process output data
+            if output_data.ndim == 4:
+                # (n_samples, n_x, n_y, n_t) -> take last timestep
+                U = output_data[:, :, :, -1:] # (n_samples, n_x, n_y, 1)
+                print(f"  Selected last timestep from output: {U.shape}")
+            elif output_data.ndim == 3:
+                # (n_samples, n_x, n_y) -> add channel dimension
+                U = output_data[..., np.newaxis]  # (n_samples, n_x, n_y, 1)
+            else:
+                raise ValueError(f"Unexpected output data shape: {output_data.shape}")
+
+            print(f"  Final U shape: {U.shape}")
+
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}. Supported formats: .npz, .h5, .hdf5")
+
         return cls(X, U, normalize_output=normalize_output,
                    normalize_input=normalize_input, normalize_coords=normalize_coords)
 

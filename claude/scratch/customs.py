@@ -655,8 +655,8 @@ def combined_fno_loss(pred, target, weight_mse=1.0, weight_grad=0.1):
 
 
 def combined_ebm_loss(ebm_model, u_clean, x_coords, fno_pred, ground_truth,
-                      weight_score=1.0, weight_calibration=0.5,
-                      sigmas=[0.01, 0.02, 0.05], energy_reg_weight=0.001):
+                      weight_score=1.0, weight_calibration=0.0,
+                      sigmas=[0.01, 0.02, 0.05], energy_reg_weight=0.000):
     """
     Combined EBM loss with score matching and error-aware calibration.
 

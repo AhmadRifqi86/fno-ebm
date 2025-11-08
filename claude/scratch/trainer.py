@@ -692,8 +692,8 @@ class Trainer:
         # ========================================================================
         sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.01, 0.02, 0.05])
         weight_score = getattr(self.config, 'ebm_weight_score', 1.0)
-        weight_calibration = getattr(self.config, 'ebm_weight_calibration', 0.5)
-        energy_reg_weight = getattr(self.config, 'ebm_energy_reg', 0.001)
+        weight_calibration = getattr(self.config, 'ebm_weight_calibration', 0.0)
+        energy_reg_weight = getattr(self.config, 'ebm_energy_reg', 0.0)
 
         # ========================================================================
         # COMBINED EBM LOSS (from customs.py)

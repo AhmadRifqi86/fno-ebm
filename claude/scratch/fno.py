@@ -830,59 +830,64 @@ class FactorizedSpectralConv2d(nn.Module):
     def forward(self, x):
         """
         Factorized spectral convolution forward pass (efficient vectorized version).
-        
+
         Process:
         1. FFT to frequency domain
         2. Apply separable 1D convolutions in x and y (vectorized)
         3. IFFT back to spatial domain
         """
         batch_size = x.shape[0]
-        
+
         # Compute 2D FFT
         x_ft = torch.fft.rfft2(x, norm='ortho')
         x_ft = torch.stack([x_ft.real, x_ft.imag], dim=-1)
-        
+
+        # Calculate actual available frequency bins (handle small spatial sizes)
+        actual_modes1 = min(self.modes1, x.size(-2))
+        actual_modes2 = min(self.modes2, x.size(-1)//2 + 1)
+
         # Initialize output
         out_ft = torch.zeros(batch_size, self.out_channels,
                             x.size(-2), x.size(-1)//2 + 1, 2,
                             device=x.device)
-        
+
         # Upper-left quadrant
-        x_modes = x_ft[:, :, :self.modes1, :self.modes2]  # (batch, in_ch, modes1, modes2, 2)
-        
+        x_modes = x_ft[:, :, :actual_modes1, :actual_modes2]  # (batch, in_ch, actual_modes1, actual_modes2, 2)
+
         # Vectorized factorization:
         # Step 1: Convolve along x-dimension for all y-modes at once
-        # Reshape to merge y-modes into batch: (B*modes2, in_ch, modes1, 2)
-        x_reshaped = x_modes.permute(0, 3, 1, 2, 4).reshape(-1, self.in_channels, self.modes1, 2)
-        temp = self.compl_mul1d(x_reshaped, self.weights_x1)  # (B*modes2, out_ch, modes1, 2)
-        temp = temp.reshape(batch_size, self.modes2, self.out_channels, self.modes1, 2)
-        temp = temp.permute(0, 2, 3, 1, 4)  # (B, out_ch, modes1, modes2, 2)
-        
+        # Reshape to merge y-modes into batch: (B*actual_modes2, in_ch, actual_modes1, 2)
+        x_reshaped = x_modes.permute(0, 3, 1, 2, 4).reshape(-1, self.in_channels, actual_modes1, 2)
+        # Use only the relevant portion of weights
+        temp = self.compl_mul1d(x_reshaped, self.weights_x1[:, :, :actual_modes1, :])  # (B*actual_modes2, out_ch, actual_modes1, 2)
+        temp = temp.reshape(batch_size, actual_modes2, self.out_channels, actual_modes1, 2)
+        temp = temp.permute(0, 2, 3, 1, 4)  # (B, out_ch, actual_modes1, actual_modes2, 2)
+
         # Step 2: Convolve along y-dimension for all x-modes at once
-        # Reshape to merge x-modes into batch: (B*modes1, out_ch, modes2, 2)
-        temp_reshaped = temp.permute(0, 2, 1, 3, 4).reshape(-1, self.out_channels, self.modes2, 2)
-        out_modes = self.compl_mul1d(temp_reshaped, self.weights_y)  # (B*modes1, out_ch, modes2, 2)
-        out_modes = out_modes.reshape(batch_size, self.modes1, self.out_channels, self.modes2, 2)
-        out_modes = out_modes.permute(0, 2, 1, 3, 4)  # (B, out_ch, modes1, modes2, 2)
-        
-        out_ft[:, :, :self.modes1, :self.modes2, :] = out_modes
-        
+        # Reshape to merge x-modes into batch: (B*actual_modes1, out_ch, actual_modes2, 2)
+        temp_reshaped = temp.permute(0, 2, 1, 3, 4).reshape(-1, self.out_channels, actual_modes2, 2)
+        out_modes = self.compl_mul1d(temp_reshaped, self.weights_y[:, :, :actual_modes2, :])  # (B*actual_modes1, out_ch, actual_modes2, 2)
+        out_modes = out_modes.reshape(batch_size, actual_modes1, self.out_channels, actual_modes2, 2)
+        out_modes = out_modes.permute(0, 2, 1, 3, 4)  # (B, out_ch, actual_modes1, actual_modes2, 2)
+
+        out_ft[:, :, :actual_modes1, :actual_modes2, :] = out_modes
+
         # Lower-left quadrant
-        x_modes = x_ft[:, :, -self.modes1:, :self.modes2]
-        
+        x_modes = x_ft[:, :, -actual_modes1:, :actual_modes2]
+
         # Step 1: x-dimension (vectorized)
-        x_reshaped = x_modes.permute(0, 3, 1, 2, 4).reshape(-1, self.in_channels, self.modes1, 2)
-        temp = self.compl_mul1d(x_reshaped, self.weights_x2)
-        temp = temp.reshape(batch_size, self.modes2, self.out_channels, self.modes1, 2)
+        x_reshaped = x_modes.permute(0, 3, 1, 2, 4).reshape(-1, self.in_channels, actual_modes1, 2)
+        temp = self.compl_mul1d(x_reshaped, self.weights_x2[:, :, :actual_modes1, :])
+        temp = temp.reshape(batch_size, actual_modes2, self.out_channels, actual_modes1, 2)
         temp = temp.permute(0, 2, 3, 1, 4)
-        
+
         # Step 2: y-dimension (vectorized)
-        temp_reshaped = temp.permute(0, 2, 1, 3, 4).reshape(-1, self.out_channels, self.modes2, 2)
-        out_modes = self.compl_mul1d(temp_reshaped, self.weights_y)
-        out_modes = out_modes.reshape(batch_size, self.modes1, self.out_channels, self.modes2, 2)
+        temp_reshaped = temp.permute(0, 2, 1, 3, 4).reshape(-1, self.out_channels, actual_modes2, 2)
+        out_modes = self.compl_mul1d(temp_reshaped, self.weights_y[:, :, :actual_modes2, :])
+        out_modes = out_modes.reshape(batch_size, actual_modes1, self.out_channels, actual_modes2, 2)
         out_modes = out_modes.permute(0, 2, 1, 3, 4)
-        
-        out_ft[:, :, -self.modes1:, :self.modes2, :] = out_modes
+
+        out_ft[:, :, -actual_modes1:, :actual_modes2, :] = out_modes
         
         # Convert back to complex and IFFT
         out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
@@ -1430,7 +1435,7 @@ class UFFNO2d(nn.Module):
 
         in_ch = width
         for i in range(depth):
-            out_ch = width * (2 ** i)  # Double width at each level
+            out_ch = width * (2 ** (i + 1))  # Double width at each level
 
             # Reduce modes at deeper levels (fewer high-freq details)
             modes_x = max(modes1 // (2 ** i), 4)

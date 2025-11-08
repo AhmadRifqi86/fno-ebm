@@ -28,7 +28,7 @@ import os
 from pathlib import Path
 
 from config import Config
-from fno import FNO2d, FFNO2d
+from fno import UFFNO2d, FFNO2d
 from ebm import SimpleFNO_EBM, ConvEBM # Using ConvEBM for spatial structure!
 from trainer import Trainer, FNO_EBM
 from customs import DarcyPhysicsLoss
@@ -72,21 +72,21 @@ def main():
 
     # FNO model
     fno_dropout = getattr(config, 'fno_dropout', 0.1)  # Default 0.1 if not in config
-    # fno_model = FNO2d(
-    #     modes1=config.fno_modes,
-    #     modes2=config.fno_modes,
-    #     width=config.fno_width,
-    #     num_layers=4,
-    #     dropout=fno_dropout
+    fno_model = UFFNO2d(
+        modes1=config.fno_modes,
+        modes2=config.fno_modes,
+        width=config.fno_width,
+        depth=3,
+        dropout=fno_dropout
+    )
+    # fno_model = fno_model = FFNO2d(
+    #   modes1=config.fno_modes,      # Keep your current config
+    #   modes2=config.fno_modes,
+    #   width=config.fno_width,
+    #   num_layers=4,                  # Start with 4 layers like FNO2d
+    #   dropout=fno_dropout,
+    #   attention_reduction=4          # Start without attention
     # )
-    fno_model = fno_model = FFNO2d(
-      modes1=config.fno_modes,      # Keep your current config
-      modes2=config.fno_modes,
-      width=config.fno_width,
-      num_layers=4,                  # Start with 4 layers like FNO2d
-      dropout=fno_dropout,
-      attention_reduction=4          # Start without attention
-  )
 
     # EBM model - Using ConvEBM for spatial structure
     ebm_model = SimpleFNO_EBM(in_channels=4, fno_width=32, fno_layers=3)

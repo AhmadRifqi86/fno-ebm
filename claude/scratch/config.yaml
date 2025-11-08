@@ -1,8 +1,8 @@
 # Training Hyperparameters
 epochs: 150              # Total epochs (not used in staged training)
-fno_epochs: 200          # Stage 1: FNO training (increased to avoid early stopping)
-ebm_epochs: 200          # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
-patience: 30             # Early stopping patience (increased - was too aggressive)
+fno_epochs: 120          # Stage 1: FNO training (increased to avoid early stopping)
+ebm_epochs: 60          # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
+patience: 20             # Early stopping patience (increased - was too aggressive)
 accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
 
 # Optimizer and Scheduler
@@ -12,12 +12,12 @@ ebm_learning_rate: 0.001
 fno_optimizer_config:
   type: adamw
   lr: 0.001             # Moderate LR for stable convergence, should be high?
-  weight_decay: 0.05   # Light regularization (reduced from 0.01)
+  weight_decay: 0.02   # Light regularization (reduced from 0.01)
   betas: [0.9, 0.999]
 
 ebm_optimizer_config:
   type: adam              # CHANGED: Use Adam (not AdamW) like UvA
-  lr: 0.005              # Increased for score matching (needs to learn large gradients ~50k magnitude)
+  lr: 0.001             # Increased for score matching (needs to learn large gradients ~50k magnitude)
   weight_decay: 0.0      # NO weight decay (UvA doesn't use it)
   betas: [0.9, 0.999]    # Restored momentum for score matching (beta1=0.0 was for CD only)
 
@@ -31,18 +31,18 @@ ebm_optimizer_config:
 
 fno_scheduler_config:
   type: step_lr
-  step_size: 100         # Reduce LR every 10 epochs
-  gamma: 1.0 
+  step_size: 25         # Reduce LR every 10 epochs
+  gamma: 0.95 
 
 ebm_scheduler_config:
   type: step_lr
   step_size: 20          # Reduce LR every 20 epochs (less aggressive)
-  gamma: 0.9             # Smaller decay (was reducing too fast)
+  gamma: 1.0             # Smaller decay (was reducing too fast)
 
 # Model Parameters
 fno_modes: 12           # Fourier modes (increased for better representation)
 fno_width: 48           # Hidden dimension (increased from 64)
-fno_dropout: 0.25        # Dropout rate for FNO (prevents overfitting on complex patterns)
+fno_dropout: 0.15        # Dropout rate for FNO (prevents overfitting on complex patterns)
 ebm_hidden_dim: 192      # EBM network width
 
 # Physics and MCMC
