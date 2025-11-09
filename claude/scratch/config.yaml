@@ -1,6 +1,6 @@
 # Training Hyperparameters
 epochs: 150              # Total epochs (not used in staged training)
-fno_epochs: 120          # Stage 1: FNO training (increased to avoid early stopping)
+fno_epochs: 100          # Stage 1: FNO training (increased to avoid early stopping)
 ebm_epochs: 60          # Stage 2: EBM training (increased for better UQ), increase to 50 or 60
 patience: 20             # Early stopping patience (increased - was too aggressive)
 accumulation_steps: 2    # Gradient accumulation (effective batch = 16 * 2 = 32)
@@ -12,7 +12,7 @@ ebm_learning_rate: 0.001
 fno_optimizer_config:
   type: adamw
   lr: 0.001             # Moderate LR for stable convergence, should be high?
-  weight_decay: 0.02   # Light regularization (reduced from 0.01)
+  weight_decay: 0.01   # Light regularization (reduced from 0.01)
   betas: [0.9, 0.999]
 
 ebm_optimizer_config:
@@ -40,9 +40,9 @@ ebm_scheduler_config:
   gamma: 1.0             # Smaller decay (was reducing too fast)
 
 # Model Parameters
-fno_modes: 12           # Fourier modes (increased for better representation)
+fno_modes: 16           # Fourier modes (increased for better representation)
 fno_width: 48           # Hidden dimension (increased from 64)
-fno_dropout: 0.15        # Dropout rate for FNO (prevents overfitting on complex patterns)
+fno_dropout: 0.2        # Dropout rate for FNO (prevents overfitting on complex patterns)
 ebm_hidden_dim: 192      # EBM network width
 
 # Physics and MCMC

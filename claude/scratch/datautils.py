@@ -332,10 +332,8 @@ class AugmentedPDEDataset(Dataset):
                 x = torch.rot90(x, k, [0, 1])
                 u = torch.rot90(u, k, [0, 1])
 
-        # CRITICAL: Update coordinate channels after transformation!
-        # When we flip/rotate, the spatial coordinates must be updated too
-        x = self._update_coordinates(x, x.shape[0], x.shape[1])
-
+        # NOTE: Coordinate channels are automatically transformed by flip/rot90
+        # No need to regenerate - the transformations preserve spatial consistency
         return x, u
 
     def _update_coordinates(self, x, nx, ny):
@@ -382,6 +380,307 @@ class AugmentedPDEDataset(Dataset):
     def denormalize(self, U_normalized):
         """Delegate to base dataset"""
         return self.dataset.denormalize(U_normalized)
+
+
+class PDEBenchH5Loader:
+    """
+    Utility class for loading and inspecting PDEBench HDF5 datasets.
+
+    PDEBench datasets are stored as HDF5 files with temporal evolution data.
+    This class helps:
+    - Inspect file structure and shapes
+    - Extract single-step problems (t=0 → t=final)
+    - Convert to PDEDataset format for training
+
+    Example:
+        >>> loader = PDEBenchH5Loader('2d_diff_react_NA_NA.h5')
+        >>> loader.print_info()  # Shows file structure
+        >>> dataset = loader.to_dataset(input_t=0, output_t=-1)  # Extract initial→final
+    """
+
+    def __init__(self, filepath: str):
+        """
+        Initialize loader with HDF5 file path.
+
+        Args:
+            filepath: Path to PDEBench HDF5 file
+        """
+        self.filepath = filepath
+        self.file = None
+        self._open()
+
+    def _open(self):
+        """Open HDF5 file and cache reference."""
+        if self.file is None:
+            self.file = h5py.File(self.filepath, 'r')
+
+    def close(self):
+        """Close HDF5 file."""
+        if self.file is not None:
+            self.file.close()
+            self.file = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        self._open()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
+
+    def print_info(self):
+        """
+        Print comprehensive information about the HDF5 file structure.
+        Shows all keys, shapes, dtypes, and size estimates.
+        """
+        print("=" * 70)
+        print(f"PDEBench HDF5 File: {self.filepath}")
+        print("=" * 70)
+
+        # Get file size
+        file_size_gb = os.path.getsize(self.filepath) / (1024**3)
+        print(f"\nFile size: {file_size_gb:.2f} GB")
+
+        print("\nAvailable keys and shapes:")
+        print("-" * 70)
+
+        for key in self.file.keys():
+            data = self.file[key]
+            if isinstance(data, h5py.Dataset):
+                shape = data.shape
+                dtype = data.dtype
+                size_gb = np.prod(shape) * np.dtype(dtype).itemsize / (1024**3)
+                print(f"  '{key}':")
+                print(f"    Shape: {shape}")
+                print(f"    Dtype: {dtype}")
+                print(f"    Size: {size_gb:.3f} GB")
+
+                # Infer dimensions
+                if len(shape) == 4:
+                    print(f"    Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]}, n_timesteps={shape[3]})")
+                elif len(shape) == 3:
+                    print(f"    Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]})")
+                elif len(shape) == 5:
+                    print(f"    Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]}, n_timesteps={shape[3]}, n_fields={shape[4]})")
+
+        print("=" * 70)
+
+    def get_shape(self, key: str = None):
+        """
+        Get shape of a specific key or the first dataset found.
+
+        Args:
+            key: HDF5 key name. If None, uses first dataset found.
+
+        Returns:
+            tuple: Shape of the dataset
+        """
+        if key is None:
+            # Get first dataset key
+            key = list(self.file.keys())[0]
+
+        return self.file[key].shape
+
+    def peek_sample(self, key: str = None, sample_idx: int = 0, timestep: int = 0):
+        """
+        Load and return a single sample for inspection.
+
+        Args:
+            key: HDF5 key name. If None, uses first dataset found.
+            sample_idx: Which sample to load (default: 0)
+            timestep: Which timestep to load (default: 0, or all if no time dimension)
+
+        Returns:
+            np.ndarray: The requested sample
+        """
+        if key is None:
+            key = list(self.file.keys())[0]
+
+        data = self.file[key]
+
+        if len(data.shape) == 4:  # (n_samples, n_x, n_y, n_t)
+            sample = data[sample_idx, :, :, timestep]
+        elif len(data.shape) == 3:  # (n_samples, n_x, n_y)
+            sample = data[sample_idx, :, :]
+        else:
+            sample = data[sample_idx]
+
+        return sample
+
+    def to_dataset(self,
+                   key: str = None,
+                   input_t: int = 0,
+                   output_t: int = -1,
+                   num_samples: int = None,
+                   normalize_output: bool = True,
+                   normalize_input: bool = True,
+                   normalize_coords: bool = True):
+        """
+        Convert PDEBench HDF5 to PDEDataset for training.
+
+        Extracts single-step problem: uses solution at time input_t as input field,
+        and solution at time output_t as target output.
+
+        Args:
+            key: HDF5 key name. If None, uses first dataset found.
+            input_t: Timestep index to use as input (default: 0 = initial condition)
+            output_t: Timestep index to use as output (default: -1 = final state)
+            num_samples: Number of samples to load. If None, loads all.
+            normalize_output: Normalize output to N(0,1)
+            normalize_input: Normalize input fields to N(0,1)
+            normalize_coords: Normalize coordinates to [-1, 1]
+
+        Returns:
+            PDEDataset: Dataset ready for training
+        """
+        if key is None:
+            key = list(self.file.keys())[0]
+
+        data = self.file[key]
+        shape = data.shape
+
+        # Determine number of samples
+        n_total = shape[0]
+        if num_samples is None:
+            num_samples = n_total
+        else:
+            num_samples = min(num_samples, n_total)
+
+        print(f"\nLoading {num_samples} samples from '{key}'...")
+        print(f"  Full shape: {shape}")
+
+        # Load data based on dimensionality
+        if len(shape) == 4:  # (n_samples, n_x, n_y, n_t)
+            n_samples, n_x, n_y, n_t = shape
+
+            print(f"  Temporal data detected: {n_t} timesteps")
+            print(f"  Using t={input_t} as input, t={output_t} as output")
+
+            # Load input and output timesteps
+            input_field = data[:num_samples, :, :, input_t]   # (n_samples, n_x, n_y)
+            output_field = data[:num_samples, :, :, output_t]  # (n_samples, n_x, n_y)
+
+        elif len(shape) == 3:  # (n_samples, n_x, n_y) - steady state
+            n_samples, n_x, n_y = shape
+
+            print(f"  Steady-state data detected (no time dimension)")
+
+            # For steady-state, we need separate input/output data
+            # This typically means the file has different keys for input and output
+            # For now, we'll just use the data as output and create dummy input
+            # The user should provide proper input data separately
+            raise ValueError(
+                "Steady-state data detected. For Darcy flow and similar problems, "
+                "PDEBench typically has separate input (e.g., 'nu', 'coeff') and "
+                "output (e.g., 'tensor', 'sol') keys. Please specify both:\n"
+                "  loader.to_dataset_steady_state(input_key='nu', output_key='tensor')"
+            )
+
+        else:
+            raise ValueError(f"Unsupported data shape: {shape}")
+
+        # Generate coordinate grids
+        x_coords = np.linspace(0, 1, n_x)
+        y_coords = np.linspace(0, 1, n_y)
+        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+        # Create X with shape (n_samples, n_x, n_y, 3): [x_coord, y_coord, input_field]
+        X = np.zeros((num_samples, n_x, n_y, 3))
+        X[:, :, :, 0] = grid_x[np.newaxis, :, :]  # x coordinates
+        X[:, :, :, 1] = grid_y[np.newaxis, :, :]  # y coordinates
+        X[:, :, :, 2] = input_field                # input field
+
+        # Create U with shape (n_samples, n_x, n_y, 1)
+        U = output_field[..., np.newaxis]
+
+        print(f"  Created X: {X.shape}, U: {U.shape}")
+        print(f"  Input field range: [{input_field.min():.4f}, {input_field.max():.4f}]")
+        print(f"  Output field range: [{output_field.min():.4f}, {output_field.max():.4f}]")
+
+        # Convert to PDEDataset
+        return PDEDataset(X, U,
+                         normalize_output=normalize_output,
+                         normalize_input=normalize_input,
+                         normalize_coords=normalize_coords)
+
+    def to_dataset_steady_state(self,
+                                input_key: str,
+                                output_key: str,
+                                num_samples: int = None,
+                                normalize_output: bool = True,
+                                normalize_input: bool = True,
+                                normalize_coords: bool = True):
+        """
+        Convert steady-state PDEBench data (like Darcy flow) to PDEDataset.
+
+        For steady-state problems, input and output are typically in separate keys.
+
+        Args:
+            input_key: HDF5 key for input field (e.g., 'nu' for permeability)
+            output_key: HDF5 key for output field (e.g., 'tensor' for solution)
+            num_samples: Number of samples to load. If None, loads all.
+            normalize_output: Normalize output to N(0,1)
+            normalize_input: Normalize input fields to N(0,1)
+            normalize_coords: Normalize coordinates to [-1, 1]
+
+        Returns:
+            PDEDataset: Dataset ready for training
+        """
+        input_data = self.file[input_key]
+        output_data = self.file[output_key]
+
+        input_shape = input_data.shape
+        output_shape = output_data.shape
+
+        print(f"\nLoading steady-state data:")
+        print(f"  Input '{input_key}': {input_shape}")
+        print(f"  Output '{output_key}': {output_shape}")
+
+        # Determine number of samples
+        n_total = input_shape[0]
+        if num_samples is None:
+            num_samples = n_total
+        else:
+            num_samples = min(num_samples, n_total)
+
+        # Load data
+        if len(input_shape) == 3:  # (n_samples, n_x, n_y)
+            n_samples, n_x, n_y = input_shape
+            input_field = input_data[:num_samples, :, :]
+        else:
+            raise ValueError(f"Unexpected input shape: {input_shape}")
+
+        if len(output_shape) == 4:  # (n_samples, n_x, n_y, 1) or (n_samples, n_x, n_y, n_t)
+            output_field = output_data[:num_samples, :, :, -1]  # Take last timestep/channel
+        elif len(output_shape) == 3:  # (n_samples, n_x, n_y)
+            output_field = output_data[:num_samples, :, :]
+        else:
+            raise ValueError(f"Unexpected output shape: {output_shape}")
+
+        # Generate coordinate grids
+        x_coords = np.linspace(0, 1, n_x)
+        y_coords = np.linspace(0, 1, n_y)
+        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+        # Create X with shape (n_samples, n_x, n_y, 3)
+        X = np.zeros((num_samples, n_x, n_y, 3))
+        X[:, :, :, 0] = grid_x[np.newaxis, :, :]
+        X[:, :, :, 1] = grid_y[np.newaxis, :, :]
+        X[:, :, :, 2] = input_field
+
+        # Create U with shape (n_samples, n_x, n_y, 1)
+        U = output_field[..., np.newaxis]
+
+        print(f"  Created X: {X.shape}, U: {U.shape}")
+        print(f"  Input field range: [{input_field.min():.4f}, {input_field.max():.4f}]")
+        print(f"  Output field range: [{output_field.min():.4f}, {output_field.max():.4f}]")
+
+        # Convert to PDEDataset
+        return PDEDataset(X, U,
+                         normalize_output=normalize_output,
+                         normalize_input=normalize_input,
+                         normalize_coords=normalize_coords)
 
 
 def create_dataloaders(config):

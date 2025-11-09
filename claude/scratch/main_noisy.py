@@ -76,14 +76,14 @@ def main():
         modes1=config.fno_modes,
         modes2=config.fno_modes,
         width=config.fno_width,
-        depth=3,
+        depth=2,
         dropout=fno_dropout
     )
     # fno_model = fno_model = FFNO2d(
     #   modes1=config.fno_modes,      # Keep your current config
     #   modes2=config.fno_modes,
     #   width=config.fno_width,
-    #   num_layers=4,                  # Start with 4 layers like FNO2d
+    #   num_layers=6,                  # Start with 4 layers like FNO2d
     #   dropout=fno_dropout,
     #   attention_reduction=4          # Start without attention
     # )

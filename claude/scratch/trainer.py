@@ -653,6 +653,109 @@ class Trainer:
 
     def train_step_ebm_scorematching(self, x, y, trace_score=False):
         """
+        EBM training with Denoising Score Matching.
+
+        Algorithm (Denoising Score Matching):
+        1. Add noise to real data: y_noisy = y + σ * ε, where ε ~ N(0, I)
+        2. Compute score (gradient of log-density): s_θ(y_noisy) = -∇_y E(y_noisy, x)
+        3. Target score: s_target = -ε / σ  (points toward clean data)
+        4. Loss: ||s_θ(y_noisy) - s_target||²
+
+        This avoids MCMC sampling entirely, making training faster and more stable.
+        The learned energy E(y, x) implicitly defines: p(y|x) ∝ exp(-E(y, x))
+
+        Args:
+            x: input coordinates (batch, n_x, n_y, 3)
+            y: ground truth solution (batch, n_x, n_y, 1)
+            trace_score: if True, return detailed trace info for debugging
+
+        Returns:
+            loss (float) or (loss, trace_info) if trace_score=True
+        """
+        # ========================================================================
+        # DENOISING SCORE MATCHING
+        # ========================================================================
+        # Noise level (sigma) - can be fixed or annealed during training
+        # Multiple noise levels are often used (similar to NCSN), but we start simple
+        sigma_levels = getattr(self.config, 'score_matching_sigmas', [0.005, 0.02, 0.05])
+        #print(f"DEBUG: y stats - mean={y.mean():.4f}, std={y.std():.4f}, min={y.min():.4f}, max={y.max():.4f}")
+        total_loss = 0.0
+
+        if trace_score:
+            trace_info = {
+                'sigma_levels': sigma_levels,
+                'score_losses': [],
+                'score_norms': [],
+                'target_score_norms': []
+            }
+
+        for sigma in sigma_levels:
+            # 1. Add noise to clean data
+            noise = torch.randn_like(y)
+            y_noisy = y + sigma * noise
+            y_noisy.requires_grad_(True)
+
+            # 2. Compute energy of noisy data
+            energy = self.ebm_model(y_noisy, x)  # (batch,), should I add noise_level as parameter?
+
+            # 3. Compute score: s_θ(y_noisy) = -∇_y E(y_noisy, x)
+            # This is the gradient of log-density
+            score = -torch.autograd.grad(
+                outputs=energy.sum(),
+                inputs=y_noisy,
+                create_graph=True  # Need gradients for backprop,
+            )[0]  # (batch, n_x, n_y, 1)
+
+            # 4. Target score (points from noisy data back to clean data)
+            # Derived from: ∇_y log p(y_noisy | y_clean) = -noise / σ²
+            # But we use simplified version: -noise / σ (equivalent up to scaling)
+            target_score = -noise / sigma
+
+            # 5. Score matching loss (MSE between predicted and target score)
+            score_loss = torch.mean((score - target_score) ** 2)
+
+            total_loss += score_loss
+
+            # Tracing
+            if trace_score:
+                with torch.no_grad():
+                    trace_info['score_losses'].append(score_loss.item())
+                    trace_info['score_norms'].append(score.norm().item())
+                    trace_info['target_score_norms'].append(target_score.norm().item())
+
+        # Average over noise levels
+        total_loss = total_loss / len(sigma_levels)
+
+        # ========================================================================
+        # ADDITIONAL REGULARIZATION (optional)
+        # ========================================================================
+        # L2 regularization on energy magnitude (prevents unbounded energies)
+        alpha_reg = getattr(self.config, 'ebm_energy_reg', 0.01)
+
+        # Compute energy on clean data for regularization
+        with torch.no_grad():
+            y_clean = y.detach()
+            y_clean.requires_grad_(True)
+        energy_clean = self.ebm_model(y_clean, x)
+        energy_reg = alpha_reg * energy_clean.pow(2).mean()
+
+        # Total loss
+        total_loss_with_reg = total_loss + energy_reg
+
+        # Backward pass
+        total_loss_scaled = total_loss_with_reg / self.accumulation_steps
+        total_loss_scaled.backward()
+
+        if trace_score:
+            trace_info['total_score_loss'] = total_loss.item()
+            trace_info['energy_reg'] = energy_reg.item()
+            trace_info['total_loss'] = total_loss_with_reg.item()
+            return total_loss_with_reg.item(), trace_info
+
+        return total_loss_with_reg.item()
+
+    def train_step_ebm_scorematching_combined(self, x, y, trace_score=False):
+        """
         EBM training with Enhanced Score Matching + Error-Aware Calibration.
 
         Combines:
@@ -988,8 +1091,8 @@ class Trainer:
         self.train_fno(self.config.fno_epochs)
         
         # Stage 2: Train EBM
-        self.logger.info("Stage 2: Training EBM")
-        self.train_ebm(self.config.ebm_epochs)
+        # self.logger.info("Stage 2: Training EBM")
+        # self.train_ebm(self.config.ebm_epochs)
         
         self.logger.info("Staged training completed")
 
