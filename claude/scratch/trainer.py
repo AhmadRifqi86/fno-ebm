@@ -233,7 +233,7 @@ class Trainer:
             self.config.checkpoint_dir,
             f'current_{stage_type}.pt'
         )
-        torch.save(checkpoint, current_path)
+        # torch.save(checkpoint, current_path)  # Commented out to save disk space
 
         # Save best model if this is the best
         if is_best:
@@ -241,8 +241,8 @@ class Trainer:
                 self.config.checkpoint_dir,
                 f'best_model_{stage_type}.pt'
             )
-            torch.save(checkpoint, best_path)
-            self.logger.info(f"Saved best {stage_type.upper()} model (epoch {epoch}, val_loss={val_loss:.6f})")
+            # torch.save(checkpoint, best_path)  # Commented out to save disk space
+            self.logger.info(f"Best {stage_type.upper()} model checkpoint skipped (epoch {epoch}, val_loss={val_loss:.6f})")
 
     def resume(self):
         """
