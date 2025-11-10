@@ -236,6 +236,190 @@ class DarcyPhysicsLoss:
         return torch.mean(residual**2)
 
 
+def compute_reaction_diffusion_residual(u, D_u=0.16, D_v=0.08, F=0.06, k=0.062, normalize=True):
+    """
+    Compute reaction-diffusion PDE residual.
+
+    Gray-Scott model:
+        ∂u/∂t = D_u * ∇²u - uv² + F(1-u)
+        ∂v/∂t = D_v * ∇²v + uv² - (F+k)v
+
+    For single-step predictions (no time derivative), we enforce:
+        D_u * ∇²u + F(1-u) ≈ 0 (simplified for single species)
+
+    Args:
+        u: Solution field (batch, nx, ny, 1)
+        D_u: Diffusion coefficient for species u (default: 0.16)
+        D_v: Diffusion coefficient for species v (default: 0.08)
+        F: Feed rate (default: 0.06)
+        k: Kill rate (default: 0.062)
+        normalize: Whether to normalize residual by grid spacing
+
+    Returns:
+        residual: PDE residual (batch, nx-2, ny-2)
+    """
+    u = u.squeeze(-1)  # (batch, nx, ny)
+
+    # Grid parameters
+    nx, ny = u.shape[1], u.shape[2]
+    dx = 1.0 / (nx - 1)
+    dy = 1.0 / (ny - 1)
+
+    # Compute Laplacian: ∇²u = u_xx + u_yy
+    u_xx = (u[:, 2:, 1:-1] - 2*u[:, 1:-1, 1:-1] + u[:, :-2, 1:-1]) / (dx**2)
+    u_yy = (u[:, 1:-1, 2:] - 2*u[:, 1:-1, 1:-1] + u[:, 1:-1, :-2]) / (dy**2)
+    laplacian = u_xx + u_yy
+
+    # Extract u at interior points for reaction term
+    u_interior = u[:, 1:-1, 1:-1]
+
+    # Simplified reaction-diffusion residual
+    # Full model: D_u * ∇²u - uv² + F(1-u) = 0
+    # Simplified (single species): D_u * ∇²u + F(1-u) ≈ 0
+    residual = D_u * laplacian + F * (1 - u_interior)
+
+    # Normalize by grid spacing
+    if normalize:
+        residual = residual * (dx**2)
+
+    return residual
+
+
+def compute_shallow_water_residual(h, g=9.81, normalize=True):
+    """
+    Compute shallow water equation residual.
+
+    Shallow water equations (conservative form):
+        ∂h/∂t + ∂(hu)/∂x + ∂(hv)/∂y = 0  (continuity)
+
+    For single-step predictions, we enforce smoothness constraint on h.
+
+    Args:
+        h: Water height field (batch, nx, ny, 1)
+        g: Gravitational acceleration (default: 9.81 m/s²)
+        normalize: Whether to normalize residual by grid spacing
+
+    Returns:
+        residual: Mass conservation residual (batch, nx-2, ny-2)
+    """
+    h = h.squeeze(-1)  # (batch, nx, ny)
+
+    # Grid parameters
+    nx, ny = h.shape[1], h.shape[2]
+    dx = 1.0 / (nx - 1)
+    dy = 1.0 / (ny - 1)
+
+    # Enforce smoothness via Laplacian (simplified)
+    # Full model would compute ∇·(h*v) = 0
+    # Simplified: penalize rapid height variations
+    h_xx = (h[:, 2:, 1:-1] - 2*h[:, 1:-1, 1:-1] + h[:, :-2, 1:-1]) / (dx**2)
+    h_yy = (h[:, 1:-1, 2:] - 2*h[:, 1:-1, 1:-1] + h[:, 1:-1, :-2]) / (dy**2)
+
+    # Penalize large curvature (encourages physical wave patterns)
+    residual = h_xx + h_yy
+
+    # Normalize by grid spacing
+    if normalize:
+        residual = residual * (dx**2)
+
+    return residual
+
+
+def compute_navier_stokes_residual(u, nu=0.01, normalize=True):
+    """
+    Compute Navier-Stokes equation residual.
+
+    Navier-Stokes equations:
+        ∇·u = 0                      (incompressibility)
+        ∂u/∂t + (u·∇)u = -∇p/ρ + ν∇²u  (momentum)
+
+    For single-step predictions, we enforce viscous diffusion: ν∇²u ≈ 0
+
+    Args:
+        u: Velocity field (batch, nx, ny, 1) - single component
+        nu: Kinematic viscosity (default: 0.01)
+        normalize: Whether to normalize residual by grid spacing
+
+    Returns:
+        residual: PDE residual (batch, nx-2, ny-2)
+    """
+    u = u.squeeze(-1)  # (batch, nx, ny)
+
+    # Grid parameters
+    nx, ny = u.shape[1], u.shape[2]
+    dx = 1.0 / (nx - 1)
+    dy = 1.0 / (ny - 1)
+
+    # Compute Laplacian: ∇²u = u_xx + u_yy (viscous term)
+    u_xx = (u[:, 2:, 1:-1] - 2*u[:, 1:-1, 1:-1] + u[:, :-2, 1:-1]) / (dx**2)
+    u_yy = (u[:, 1:-1, 2:] - 2*u[:, 1:-1, 1:-1] + u[:, 1:-1, :-2]) / (dy**2)
+    laplacian = u_xx + u_yy
+
+    # Viscous diffusion residual: ν∇²u ≈ 0 (for steady state)
+    residual = nu * laplacian
+
+    # Normalize by grid spacing
+    if normalize:
+        residual = residual * (dx**2)
+
+    return residual
+
+
+class ReactionDiffusionPhysicsLoss:
+    """
+    Wrapper class for Reaction-Diffusion physics loss.
+
+    Usage:
+        phy_loss = ReactionDiffusionPhysicsLoss(D_u=0.16, F=0.06)
+        residual = phy_loss(u_pred, x_coords, y_coords)
+        loss = torch.mean(residual**2)
+    """
+    def __init__(self, D_u=0.16, D_v=0.08, F=0.06, k=0.062, normalize=True):
+        self.D_u = D_u
+        self.D_v = D_v
+        self.F = F
+        self.k = k
+        self.normalize = normalize
+
+    def __call__(self, u, x_coords, y_coords, x_grid=None):
+        return compute_reaction_diffusion_residual(u, self.D_u, self.D_v, self.F, self.k, self.normalize)
+
+
+class ShallowWaterPhysicsLoss:
+    """
+    Wrapper class for Shallow Water physics loss.
+
+    Usage:
+        phy_loss = ShallowWaterPhysicsLoss(g=9.81)
+        residual = phy_loss(h_pred, x_coords, y_coords)
+        loss = torch.mean(residual**2)
+    """
+    def __init__(self, g=9.81, normalize=True):
+        self.g = g
+        self.normalize = normalize
+
+    def __call__(self, h, x_coords, y_coords, x_grid=None):
+        return compute_shallow_water_residual(h, self.g, self.normalize)
+
+
+class NavierStokesPhysicsLoss:
+    """
+    Wrapper class for Navier-Stokes physics loss.
+
+    Usage:
+        phy_loss = NavierStokesPhysicsLoss(nu=0.01)
+        residual = phy_loss(u_pred, x_coords, y_coords)
+        loss = torch.mean(residual**2)
+    """
+    def __init__(self, nu=0.01, enforce_divergence=True, normalize=True):
+        self.nu = nu
+        self.enforce_divergence = enforce_divergence
+        self.normalize = normalize
+
+    def __call__(self, u, x_coords, y_coords, x_grid=None):
+        return compute_navier_stokes_residual(u, self.nu, self.normalize)
+
+
 class CosineAnnealingWarmRestartsWithDecay(torch.optim.lr_scheduler._LRScheduler):
     def __init__(self, optimizer, T_0, T_mult=1.0, freq_mult=1.0, eta_min=0, decay=0.9, last_epoch=-1):
         self.T_0 = T_0

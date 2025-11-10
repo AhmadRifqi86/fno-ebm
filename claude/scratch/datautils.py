@@ -433,6 +433,7 @@ class PDEBenchH5Loader:
         """
         Print comprehensive information about the HDF5 file structure.
         Shows all keys, shapes, dtypes, and size estimates.
+        Handles both datasets and groups (hierarchical structure).
         """
         print("=" * 70)
         print(f"PDEBench HDF5 File: {self.filepath}")
@@ -442,27 +443,36 @@ class PDEBenchH5Loader:
         file_size_gb = os.path.getsize(self.filepath) / (1024**3)
         print(f"\nFile size: {file_size_gb:.2f} GB")
 
-        print("\nAvailable keys and shapes:")
+        print("\nFile structure:")
         print("-" * 70)
 
-        for key in self.file.keys():
-            data = self.file[key]
-            if isinstance(data, h5py.Dataset):
-                shape = data.shape
-                dtype = data.dtype
-                size_gb = np.prod(shape) * np.dtype(dtype).itemsize / (1024**3)
-                print(f"  '{key}':")
-                print(f"    Shape: {shape}")
-                print(f"    Dtype: {dtype}")
-                print(f"    Size: {size_gb:.3f} GB")
+        def print_group(group, indent=0):
+            """Recursively print group/dataset structure"""
+            prefix = "  " * indent
+            for key in group.keys():
+                item = group[key]
+                if isinstance(item, h5py.Group):
+                    print(f"{prefix}Group: '{key}' (contains {len(item.keys())} items)")
+                    print_group(item, indent + 1)
+                elif isinstance(item, h5py.Dataset):
+                    shape = item.shape
+                    dtype = item.dtype
+                    size_gb = np.prod(shape) * np.dtype(dtype).itemsize / (1024**3)
+                    print(f"{prefix}Dataset: '{key}'")
+                    print(f"{prefix}  Shape: {shape}")
+                    print(f"{prefix}  Dtype: {dtype}")
+                    print(f"{prefix}  Size: {size_gb:.3f} GB")
 
-                # Infer dimensions
-                if len(shape) == 4:
-                    print(f"    Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]}, n_timesteps={shape[3]})")
-                elif len(shape) == 3:
-                    print(f"    Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]})")
-                elif len(shape) == 5:
-                    print(f"    Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]}, n_timesteps={shape[3]}, n_fields={shape[4]})")
+                    # Infer dimensions
+                    if len(shape) == 4:
+                        print(f"{prefix}  Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]}, n_timesteps={shape[3]})")
+                    elif len(shape) == 3:
+                        print(f"{prefix}  Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]})")
+                    elif len(shape) == 5:
+                        print(f"{prefix}  Inferred: (n_samples={shape[0]}, n_x={shape[1]}, n_y={shape[2]}, n_timesteps={shape[3]}, n_fields={shape[4]})")
+
+        # Start recursive printing from root
+        print_group(self.file)
 
         print("=" * 70)
 
