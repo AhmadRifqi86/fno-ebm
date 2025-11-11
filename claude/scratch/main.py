@@ -537,7 +537,8 @@ def run_single_experiment(config, data_path, experiment_dir):
             full_dataset = loader.to_dataset(
                 input_t=0, 
                 output_t=-1, 
-                num_samples=max_samples_needed
+                num_samples=max_samples_needed,
+                load_all_simulations=False
             )
 
             # Split data
@@ -936,19 +937,14 @@ def plot_experiment_results(results_df, experiment_dir, pde_type):
     os.makedirs(plot_dir, exist_ok=True)
 
     # 1. Model comparison (across all configs)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
 
-    model_stats = df.groupby('model_type').agg({'val_mse': 'mean', 'val_rel_l2': 'mean'}).reset_index()
+    model_stats = df.groupby('model_type').agg({'best_val_loss': 'mean'}).reset_index()
 
-    axes[0].bar(model_stats['model_type'], model_stats['val_mse'])
-    axes[0].set_ylabel('Validation MSE')
-    axes[0].set_title(f'{pde_type}: Model Comparison (MSE)')
-    axes[0].tick_params(axis='x', rotation=45)
-
-    axes[1].bar(model_stats['model_type'], model_stats['val_rel_l2'])
-    axes[1].set_ylabel('Validation Relative L2')
-    axes[1].set_title(f'{pde_type}: Model Comparison (Rel L2)')
-    axes[1].tick_params(axis='x', rotation=45)
+    ax.bar(model_stats['model_type'], model_stats['best_val_loss'])
+    ax.set_ylabel('Best Validation Loss')
+    ax.set_title(f'{pde_type}: Model Comparison')
+    ax.tick_params(axis='x', rotation=45)
 
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, '01_model_comparison.png'), dpi=150, bbox_inches='tight')
@@ -958,11 +954,11 @@ def plot_experiment_results(results_df, experiment_dir, pde_type):
     fig, ax = plt.subplots(figsize=(10, 6))
     for model_type in df['model_type'].unique():
         model_df = df[df['model_type'] == model_type]
-        mode_stats = model_df.groupby('modes')['val_rel_l2'].mean()
+        mode_stats = model_df.groupby('modes')['best_val_loss'].mean()
         ax.plot(mode_stats.index, mode_stats.values, marker='o', label=model_type)
 
     ax.set_xlabel('Fourier Modes')
-    ax.set_ylabel('Validation Relative L2')
+    ax.set_ylabel('Best Validation Loss')
     ax.set_title(f'{pde_type}: Effect of Fourier Modes')
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -973,11 +969,11 @@ def plot_experiment_results(results_df, experiment_dir, pde_type):
     fig, ax = plt.subplots(figsize=(10, 6))
     for model_type in df['model_type'].unique():
         model_df = df[df['model_type'] == model_type]
-        width_stats = model_df.groupby('width')['val_rel_l2'].mean()
+        width_stats = model_df.groupby('width')['best_val_loss'].mean()
         ax.plot(width_stats.index, width_stats.values, marker='s', label=model_type)
 
     ax.set_xlabel('Hidden Dimension Width')
-    ax.set_ylabel('Validation Relative L2')
+    ax.set_ylabel('Best Validation Loss')
     ax.set_title(f'{pde_type}: Effect of Width')
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -988,11 +984,11 @@ def plot_experiment_results(results_df, experiment_dir, pde_type):
     fig, ax = plt.subplots(figsize=(10, 6))
     for model_type in df['model_type'].unique():
         model_df = df[df['model_type'] == model_type]
-        pinn_stats = model_df.groupby('lambda_phys')['val_rel_l2'].mean()
+        pinn_stats = model_df.groupby('lambda_phys')['best_val_loss'].mean()
         ax.plot(pinn_stats.index, pinn_stats.values, marker='^', label=model_type)
 
     ax.set_xlabel('PINN Loss Weight (λ_phys)')
-    ax.set_ylabel('Validation Relative L2')
+    ax.set_ylabel('Best Validation Loss')
     ax.set_title(f'{pde_type}: Effect of PINN Loss')
     ax.set_xscale('log')
     ax.legend()
@@ -1001,19 +997,19 @@ def plot_experiment_results(results_df, experiment_dir, pde_type):
     plt.close()
 
     # 5. Parameters vs Performance
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for model_type in df['model_type'].unique():
-        model_df = df[df['model_type'] == model_type]
-        ax.scatter(model_df['n_params'], model_df['val_rel_l2'], label=model_type, alpha=0.6, s=100)
+    # fig, ax = plt.subplots(figsize=(10, 6))
+    # for model_type in df['model_type'].unique():
+    #     model_df = df[df['model_type'] == model_type]
+    #     ax.scatter(model_df['n_params'], model_df['best_val_loss'], label=model_type, alpha=0.6, s=100)
 
-    ax.set_xlabel('Number of Parameters')
-    ax.set_ylabel('Validation Relative L2')
-    ax.set_title(f'{pde_type}: Parameters vs Performance')
-    ax.set_xscale('log')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.savefig(os.path.join(plot_dir, '05_params_vs_performance.png'), dpi=150, bbox_inches='tight')
-    plt.close()
+    # ax.set_xlabel('Number of Parameters')
+    # ax.set_ylabel('Best Validation Loss')
+    # ax.set_title(f'{pde_type}: Parameters vs Performance')
+    # ax.set_xscale('log')
+    # ax.legend()
+    # ax.grid(True, alpha=0.3)
+    # plt.savefig(os.path.join(plot_dir, '05_params_vs_performance.png'), dpi=150, bbox_inches='tight')
+    # plt.close()
 
     print(f"\n✓ Plots saved to: {plot_dir}")
     print(f"  - Model comparison")

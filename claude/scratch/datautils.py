@@ -570,6 +570,41 @@ class PDEBenchH5Loader:
         print(f"Auto-selected data key: '{largest_key}' (size: {largest_size:,} elements)")
         return largest_key
 
+    def _get_all_data_keys(self):
+        """
+        Find ALL simulation data keys in the HDF5 file (e.g., '0000/data', '0001/data', etc.).
+
+        Returns:
+            list: List of all data key paths
+        """
+        def find_all_datasets(group, prefix=''):
+            """Recursively find all datasets in the HDF5 file."""
+            all_keys = []
+
+            for k in group.keys():
+                # Skip coordinate keys
+                if 'coordinate' in k.lower() or 'coord' in k.lower():
+                    continue
+
+                item = group[k]
+                full_key = f"{prefix}/{k}" if prefix else k
+
+                if isinstance(item, h5py.Dataset):
+                    # Found a dataset
+                    all_keys.append(full_key)
+                elif isinstance(item, h5py.Group):
+                    # Recursively search inside groups
+                    all_keys.extend(find_all_datasets(item, full_key))
+
+            return all_keys
+
+        all_keys = find_all_datasets(self.file)
+
+        if len(all_keys) == 0:
+            raise ValueError(f"No datasets found in HDF5 file. Available keys: {list(self.file.keys())}")
+
+        return all_keys
+
     def to_dataset(self,
                    key: str = None,
                    input_t: int = 0,
@@ -579,159 +614,130 @@ class PDEBenchH5Loader:
                    normalize_input: bool = True,
                    normalize_coords: bool = True,
                    temporal_augmentation: bool = False,
-                   num_temporal_splits: int = 2):
+                   num_temporal_splits: int = 2,
+                   load_all_simulations: bool = True):
         """
         Convert PDEBench HDF5 to PDEDataset for training.
 
-        Extracts single-step problem: uses solution at time input_t as input field,
-        and solution at time output_t as target output.
-
-        Temporal Augmentation:
-        When temporal_augmentation=True, creates multiple training pairs from each
-        trajectory by splitting it into num_temporal_splits segments. This effectively
-        multiplies your training data.
-
-        Example with num_temporal_splits=2:
-            Original: (t=0 → t=100) = 1 pair per sample
-            Augmented: (t=0 → t=50) + (t=50 → t=100) = 2 pairs per sample
+        **CRITICAL FIX**: Now loads ALL simulation runs by default (load_all_simulations=True)!
+        - Each group key (e.g., '0000/data', '0001/data', etc.) represents ONE simulation trajectory
+        - This concatenates all simulations to maximize training data
+        - Each simulation creates 1 sample pair (t=input_t → t=output_t)
 
         Args:
-            key: HDF5 key name. If None, auto-selects data key (ignoring coordinates).
+            key: HDF5 key name. If None, auto-selects or loads all keys.
             input_t: Timestep index to use as input (default: 0 = initial condition)
-                     Ignored when temporal_augmentation=True
             output_t: Timestep index to use as output (default: -1 = final state)
-                      Ignored when temporal_augmentation=True
-            num_samples: Number of samples to load. If None, loads all.
+            num_samples: Ignored when load_all_simulations=True (loads all simulations)
             normalize_output: Normalize output to N(0,1)
             normalize_input: Normalize input fields to N(0,1)
             normalize_coords: Normalize coordinates to [-1, 1]
             temporal_augmentation: If True, split trajectories into multiple pairs
             num_temporal_splits: Number of segments to split each trajectory into (2, 4, etc.)
+            load_all_simulations: If True, load ALL simulation groups and concatenate (default: True)
 
         Returns:
             PDEDataset: Dataset ready for training
         """
-        # Intelligently select data key
-        key = self._get_data_key(key)
-
-        data = self.file[key]
-        shape = data.shape
-
-        # Determine number of samples
-        n_total = shape[0]
-        if num_samples is None:
-            num_samples = n_total
+        # Get data key(s)
+        if load_all_simulations and key is None:
+            # Load ALL simulations
+            all_keys = self._get_all_data_keys()
+            print(f"\nLoading ALL {len(all_keys)} simulation groups...")
+            print(f"  Simulation keys: {all_keys[:5]}{'...' if len(all_keys) > 5 else ''}")
         else:
-            num_samples = min(num_samples, n_total)
+            # Load single simulation (original behavior)
+            all_keys = [self._get_data_key(key)]
+            print(f"\nLoading single simulation: '{all_keys[0]}'")
 
-        print(f"\nLoading {num_samples} samples from '{key}'...")
-        print(f"  Full shape: {shape}")
+        # Initialize lists to collect data from all simulations
+        all_input_fields = []
+        all_output_fields = []
+        n_x, n_y, n_t = None, None, None
 
-        # Load data based on dimensionality
-        if len(shape) == 4:  # (n_samples, n_x, n_y, n_t)
-            n_samples, n_x, n_y, n_t = shape
+        # Loop through all simulation keys and load data
+        for sim_idx, sim_key in enumerate(all_keys):
+            data = self.file[sim_key]
+            shape = data.shape
 
-            print(f"  Temporal data detected: {n_t} timesteps")
+            # Print info for first simulation
+            if sim_idx == 0:
+                print(f"  First simulation '{sim_key}' shape: {shape}")
 
-            if not temporal_augmentation:
-                # Standard mode: Single pair per sample
-                print(f"  Using t={input_t} as input, t={output_t} as output")
+                # Load data based on dimensionality
+                if len(shape) == 4:  # (n_traj, n_x, n_y, n_t)
+                    _, n_x, n_y, n_t = shape
+                    print(f"  Temporal data detected: {n_t} timesteps")
 
-                # Load input and output timesteps
-                input_field = data[:num_samples, :, :, input_t]   # (n_samples, n_x, n_y)
-                output_field = data[:num_samples, :, :, output_t]  # (n_samples, n_x, n_y)
+                    if not temporal_augmentation:
+                        print(f"  Using t={input_t} as input, t={output_t} as output")
+                        print(f"  Each simulation creates 1 sample pair")
+                    else:
+                        print(f"  Temporal augmentation ENABLED: {num_temporal_splits} splits per simulation")
+                        print(f"  Each simulation creates {num_temporal_splits} sample pairs")
 
-            else:
-                # Temporal augmentation: Split trajectories into multiple pairs
-                print(f"  Temporal augmentation ENABLED: {num_temporal_splits} splits per sample")
-                print(f"  This will multiply training data by {num_temporal_splits}x")
+                elif len(shape) == 3:  # (n_traj, n_x, n_y)
+                    raise ValueError(f"Steady-state data not supported with load_all_simulations=True. "
+                                   f"Use load_all_simulations=False for steady-state data.")
+                else:
+                    raise ValueError(f"Unsupported data shape: {shape}")
 
-                # Calculate segment length
-                segment_length = n_t // num_temporal_splits
+            # Extract data from this simulation
+            if len(shape) == 4:  # Temporal data
+                n_traj, n_x, n_y, n_t = shape
 
-                if segment_length < 2:
-                    raise ValueError(
-                        f"Cannot split {n_t} timesteps into {num_temporal_splits} segments. "
-                        f"Need at least {num_temporal_splits * 2} timesteps."
-                    )
+                if not temporal_augmentation:
+                    # Standard mode: Single pair per simulation trajectory
+                    # shape[0] is the number of trajectories in this simulation (usually 1)
+                    for traj_idx in range(n_traj):
+                        input_field = data[traj_idx, :, :, input_t]    # (n_x, n_y)
+                        output_field = data[traj_idx, :, :, output_t]  # (n_x, n_y)
 
-                # Collect all temporal pairs
-                input_list = []
-                output_list = []
+                        all_input_fields.append(input_field)
+                        all_output_fields.append(output_field)
+                else:
+                    # Temporal augmentation: Split each trajectory into multiple pairs
+                    segment_length = n_t // num_temporal_splits
 
-                for seg in range(num_temporal_splits):
-                    t_start = seg * segment_length
-                    t_end = (seg + 1) * segment_length if seg < num_temporal_splits - 1 else n_t
+                    if segment_length < 2:
+                        raise ValueError(
+                            f"Cannot split {n_t} timesteps into {num_temporal_splits} segments. "
+                            f"Need at least {num_temporal_splits * 2} timesteps."
+                        )
 
-                    print(f"    Segment {seg+1}/{num_temporal_splits}: t={t_start} → t={t_end-1} (Δt={t_end-1-t_start})")
+                    for traj_idx in range(n_traj):
+                        for seg in range(num_temporal_splits):
+                            t_start = seg * segment_length
+                            t_end = (seg + 1) * segment_length if seg < num_temporal_splits - 1 else n_t
 
-                    # Extract input (beginning of segment) and output (end of segment)
-                    seg_input = data[:num_samples, :, :, t_start]    # (num_samples, n_x, n_y)
-                    seg_output = data[:num_samples, :, :, t_end - 1] # (num_samples, n_x, n_y)
+                            seg_input = data[traj_idx, :, :, t_start]       # (n_x, n_y)
+                            seg_output = data[traj_idx, :, :, t_end - 1]    # (n_x, n_y)
 
-                    input_list.append(seg_input)
-                    output_list.append(seg_output)
+                            all_input_fields.append(seg_input)
+                            all_output_fields.append(seg_output)
 
-                # Stack all segments: (num_splits * num_samples, n_x, n_y)
-                input_field = np.concatenate(input_list, axis=0)
-                output_field = np.concatenate(output_list, axis=0)
+        # Stack all fields: (total_samples, n_x, n_y)
+        input_field = np.stack(all_input_fields, axis=0)
+        output_field = np.stack(all_output_fields, axis=0)
 
-                # Update num_samples to reflect augmented dataset size
-                num_samples = num_samples * num_temporal_splits
-                print(f"  Augmented dataset size: {num_samples} pairs (from {shape[0]} original samples)")
-
-        elif len(shape) == 3:  # (n_samples, n_x, n_y) - steady state
-            n_samples_orig, n_x, n_y = shape
-
-            print(f"  Steady-state data detected (no time dimension)")
-
-            # For steady-state Darcy flow, we treat it as:
-            # - Split samples into input-output pairs
-            # - Use first half as input, second half as output
-            # OR use same sample as both input and output (identity mapping for autoencoder-like setup)
-
-            # Check if there's a permeability/coefficient key
-            all_keys = list(self.file.keys())
-            input_keys = [k for k in all_keys if any(name in k.lower() for name in ['nu', 'coeff', 'perm', 'input'])]
-
-            if len(input_keys) > 0:
-                # Found separate input data
-                input_key = input_keys[0]
-                print(f"  Found input data key: '{input_key}'")
-                input_data = self.file[input_key]
-                input_field = input_data[:num_samples, :, :] if len(input_data.shape) == 3 else input_data[:num_samples, :, :, 0]
-                output_field = data[:num_samples, :, :]
-            else:
-                # No separate input found - use the data itself split into pairs
-                # Use alternate samples: even indices as input, odd indices as output
-                print(f"  WARNING: No separate input data found. Using alternate samples.")
-                print(f"  Creating pairs: (sample[2i] → sample[2i+1])")
-
-                num_pairs = num_samples // 2
-                input_indices = np.arange(0, num_pairs * 2, 2)
-                output_indices = np.arange(1, num_pairs * 2, 2)
-
-                input_field = data[input_indices, :, :]
-                output_field = data[output_indices, :, :]
-                num_samples = num_pairs
-
-                print(f"  Created {num_samples} pairs from {shape[0]} samples")
-
-        else:
-            raise ValueError(f"Unsupported data shape: {shape}")
+        total_samples = input_field.shape[0]
+        print(f"\n  Total samples collected: {total_samples}")
+        print(f"    From {len(all_keys)} simulations")
+        if temporal_augmentation:
+            print(f"    With {num_temporal_splits}x temporal augmentation")
 
         # Generate coordinate grids
         x_coords = np.linspace(0, 1, n_x)
         y_coords = np.linspace(0, 1, n_y)
         grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
 
-        # Create X with shape (n_samples, n_x, n_y, 3): [x_coord, y_coord, input_field]
-        X = np.zeros((num_samples, n_x, n_y, 3))
+        # Create X with shape (total_samples, n_x, n_y, 3): [x_coord, y_coord, input_field]
+        X = np.zeros((total_samples, n_x, n_y, 3))
         X[:, :, :, 0] = grid_x[np.newaxis, :, :]  # x coordinates
         X[:, :, :, 1] = grid_y[np.newaxis, :, :]  # y coordinates
         X[:, :, :, 2] = input_field                # input field
 
-        # Create U with shape (n_samples, n_x, n_y, 1)
+        # Create U with shape (total_samples, n_x, n_y, 1)
         U = output_field[..., np.newaxis]
 
         print(f"  Created X: {X.shape}, U: {U.shape}")
