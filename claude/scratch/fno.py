@@ -1026,7 +1026,7 @@ class FFNO2d(nn.Module):
     - 57% improvement on airfoil flow
     - Can scale to 24 layers (vs 4 in standard FNO)
     """
-    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, attention_reduction=4):
+    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, attention_reduction=4, pre_ln=False):
         """
         Args:
             modes1, modes2: Number of Fourier modes
@@ -1035,6 +1035,7 @@ class FFNO2d(nn.Module):
             dropout: Dropout rate
             use_attention: Enable channel attention (Squeeze-and-Excitation)
             attention_reduction: Bottleneck reduction for attention (higher = fewer params)
+            pre_ln: Use Pre-LN (True) or Post-LN (False). Pre-LN more stable for deep nets.
         """
         super().__init__()
 
@@ -1044,6 +1045,7 @@ class FFNO2d(nn.Module):
         self.num_layers = num_layers
         self.dropout = dropout
         self.use_attention = False if (attention_reduction is None or attention_reduction==0) else True
+        self.pre_ln = pre_ln
 
         # Input projection
         self.fc0 = nn.Linear(3, self.width)
@@ -1102,34 +1104,46 @@ class FFNO2d(nn.Module):
         for i in range(self.num_layers):
             x_res = x
 
-            # Factorized spectral convolution
-            x1 = self.conv_layers[i](x)
+            if self.pre_ln:
+                # Pre-LN: LayerNorm → spectral/local → combine → gelu → residual
+                x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+                x = self.norm_layers[i](x)
+                x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
 
-            # Local convolution
-            x2 = self.w_layers[i](x)
+                x1 = self.conv_layers[i](x)
+                x2 = self.w_layers[i](x)
+                x = x1 + x2
 
-            # Combine paths
-            x = x1 + x2
+                if self.use_attention:
+                    x = self.attention_layers[i](x)
 
-            # Channel attention (optional): learn which Fourier modes are important
-            if self.use_attention:
-                x = self.attention_layers[i](x)
+                if i < self.num_layers - 1:
+                    x = F.gelu(x)
 
-            # Activation
-            if i < self.num_layers - 1:
-                x = F.gelu(x)
+                x = x + x_res
 
-            # Improved residual: add back input with layer norm
-            x = x + x_res
+                if i < self.num_layers - 1:
+                    x = self.dropout_layers[i](x)
+            else:
+                # Post-LN: spectral/local → combine → LayerNorm → gelu → residual
+                x1 = self.conv_layers[i](x)
+                x2 = self.w_layers[i](x)
+                x = x1 + x2
 
-            # Normalize for stable deep training
-            x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
-            x = self.norm_layers[i](x)
-            x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+                x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+                x = self.norm_layers[i](x)
+                x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
 
-            # Dropout
-            if i < self.num_layers - 1:
-                x = self.dropout_layers[i](x)
+                if self.use_attention:
+                    x = self.attention_layers[i](x)
+
+                if i < self.num_layers - 1:
+                    x = F.gelu(x)
+
+                x = x + x_res
+
+                if i < self.num_layers - 1:
+                    x = self.dropout_layers[i](x)
 
         # Project to output
         x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
