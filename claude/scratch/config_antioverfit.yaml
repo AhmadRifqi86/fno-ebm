@@ -1,0 +1,98 @@
+# Anti-Overfitting Configuration for FNO Training
+# Problem: 25M parameters with only 2-4k samples = severe overfitting
+# Solution: Reduce model capacity + increase regularization + use all data
+
+# ============================================================================
+# CRITICAL CHANGES TO PREVENT OVERFITTING
+# ============================================================================
+
+# 1. REDUCE MODEL CAPACITY (most important!)
+fno_modes: 8              # Reduced from 16 (reduces parameters by ~4x in spectral layers)
+fno_width: 32             # Reduced from 48 (reduces parameters by ~2x)
+fno_depth: 2              # Reduced from 3 for UFNO (reduces layers)
+fno_dropout: 0.3          # Increased from 0.1-0.2 (stronger regularization)
+
+# 2. INCREASE REGULARIZATION
+fno_optimizer_config:
+  type: adamw
+  lr: 0.001              # Keep moderate LR
+  weight_decay: 0.1      # Increased from 0.01 (10x stronger regularization)
+  betas: [0.9, 0.999]
+
+# 3. USE ALL AVAILABLE DATA
+n_train: 8000            # Use 8k out of 10k samples (increased from 2-4k)
+n_test: 2000             # Remaining 2k for test
+batch_size: 32           # Increased from 16 (better gradient estimates)
+
+# 4. ENABLE PHYSICS REGULARIZATION
+lambda_phys: 0.001       # Add physics-based regularization
+
+# 5. TRAINING STABILITY
+fno_epochs: 150          # More epochs with smaller model
+patience: 30             # More patience for smaller LR to work
+accumulation_steps: 1    # Disable accumulation (batch_size already 32)
+
+# 6. LEARNING RATE SCHEDULING
+fno_scheduler_config:
+  type: reduce_on_plateau
+  mode: min
+  factor: 0.5            # Reduce LR by half
+  patience: 10           # After 10 epochs without improvement
+  min_lr: 0.00001
+
+# EBM config (unchanged)
+ebm_learning_rate: 0.001
+ebm_epochs: 60
+ebm_optimizer_config:
+  type: adam
+  lr: 0.001
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+ebm_scheduler_config:
+  type: step_lr
+  step_size: 20
+  gamma: 1.0
+
+ebm_hidden_dim: 128      # Reduced from 192
+
+# MCMC parameters
+mcmc_steps: 60
+mcmc_step_size: 0.0005
+use_anchor_in_ebm_training: false
+sigma_squared_train: 100.0
+sigma_squared_inference: 1.0
+
+# PCD parameters
+use_pcd: false
+pcd_buffer_size: 1000
+pcd_reinit_prob: 0.05
+
+# EBM stability
+mcmc_grad_clip: 0.03
+energy_reg_alpha: 0.0
+
+# Data and paths
+data_dir: '../data'
+checkpoint_dir: './checkpoints'
+grid_size: 64
+num_workers: 4
+save_data: true
+
+# Dataset generation
+data_seed: 42
+train_test_split: 0.8
+pde_type: 'reaction_diffusion'
+complexity: 'medium'
+noise_type: 'heteroscedastic'
+base_noise: 0.001
+scale_factor: 0.02
+
+# ============================================================================
+# EXPECTED RESULTS WITH THESE CHANGES
+# ============================================================================
+# - Model parameters: ~1-2M (down from 25M)
+# - Parameters per sample: ~125-250 (down from 4,700)
+# - Better generalization with stronger regularization
+# - Uses 4x more training data
+# ============================================================================

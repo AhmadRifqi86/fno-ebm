@@ -358,7 +358,7 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
             modes1=config.fno_modes,
             modes2=config.fno_modes,
             width=config.fno_width,
-            num_layers=6,
+            num_layers=4,
             dropout=config.fno_dropout
         )
     elif model_type == 'UFNO':
@@ -457,7 +457,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                 if model_type in ['UFNO', 'UFFNO']:
                     depth_options = depth_list
                 else:
-                    depth_options = [4]  # Default depth for non-U architectures
+                    depth_options = [3]  # Default depth for non-U architectures
 
                 for depth in depth_options:
                     for lambda_phys in pinn_constants:
@@ -472,11 +472,22 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'fno_dropout': 0.1,
                             'batch_size': 32,
                             'learning_rate': 0.001,
-                            'fno_learning_rate': 0.005,
+                            'fno_optimizer_config': {
+                                'type': 'adamw',
+                                'lr': 0.001,             # Moderate LR for stable convergence, should be high?
+                                'weight_decay': 0.05,   # Light regularization (reduced from 0.01)
+                                'betas': [0.9, 0.95]
+                            },
+                            'fno_scheduler_config': {
+                                'type': 'cosine_annealing_warm_restarts',
+                                'T_0': 25,
+                                'T_mult': 1,
+                                'eta_min': 1e-6
+                            },
                             'ebm_learning_rate': 0.0001,
-                            'fno_epochs': 5, #100
+                            'fno_epochs': 100, #100
                             'patience': 20,
-                            'train_samples': 4000,
+                            'train_samples': 8000,
                             'val_samples': 500,
                             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
                         }

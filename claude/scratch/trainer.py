@@ -459,9 +459,17 @@ class Trainer:
             val_loss = self.validate()
 
             if self.fno_scheduler:
-                self.fno_scheduler.step()
+                # ReduceLROnPlateau requires metric, other schedulers don't
+                if isinstance(self.fno_scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.fno_scheduler.step(val_loss)
+                else:
+                    self.fno_scheduler.step()
             if self.ebm_scheduler:
-                self.ebm_scheduler.step()
+                # ReduceLROnPlateau requires metric, other schedulers don't
+                if isinstance(self.ebm_scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.ebm_scheduler.step(val_loss)
+                else:
+                    self.ebm_scheduler.step()
             
             # Log metrics
             self.logger.info(
@@ -896,7 +904,11 @@ class Trainer:
             )
 
             if self.fno_scheduler:
-                self.fno_scheduler.step()
+                # ReduceLROnPlateau requires metric, other schedulers don't
+                if isinstance(self.fno_scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.fno_scheduler.step(val_loss)
+                else:
+                    self.fno_scheduler.step()
 
             # Save checkpoint every epoch
             is_best = val_loss < best_val_loss
@@ -959,7 +971,11 @@ class Trainer:
             )
 
             if self.ebm_scheduler:
-                self.ebm_scheduler.step()
+                # ReduceLROnPlateau requires metric, other schedulers don't
+                if isinstance(self.ebm_scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    self.ebm_scheduler.step(val_loss)
+                else:
+                    self.ebm_scheduler.step()
 
             # Save checkpoint every epoch
             is_best = val_loss < best_val_loss
