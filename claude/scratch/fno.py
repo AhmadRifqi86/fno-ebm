@@ -1122,7 +1122,10 @@ class FFNO2d(nn.Module):
             # Improved residual: add back input with layer norm
             x = x + x_res
 
-            
+            # Normalize for stable deep training
+            x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+            x = self.norm_layers[i](x)
+            x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
 
             # Dropout
             if i < self.num_layers - 1:
