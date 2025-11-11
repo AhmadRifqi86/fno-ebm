@@ -607,146 +607,76 @@ class PDEBenchH5Loader:
 
     def to_dataset(self,
                    key: str = None,
-                   input_t: int = 0,
-                   output_t: int = -1,
-                   num_samples: int = None,
+                   time_step: int = 1,
+                   pairs_per_sim: int = None,
                    normalize_output: bool = True,
                    normalize_input: bool = True,
                    normalize_coords: bool = True,
-                   temporal_augmentation: bool = False,
-                   num_temporal_splits: int = 2,
                    load_all_simulations: bool = True):
         """
-        Convert PDEBench HDF5 to PDEDataset for training.
+        Convert PDEBench HDF5 to PDEDataset using autoregressive consecutive pairs.
 
-        **CRITICAL FIX**: Now loads ALL simulation runs by default (load_all_simulations=True)!
-        - Each group key (e.g., '0000/data', '0001/data', etc.) represents ONE simulation trajectory
-        - This concatenates all simulations to maximize training data
-        - Each simulation creates 1 sample pair (t=input_t → t=output_t)
+        Creates training pairs from consecutive timesteps: (t, t+step) for all t.
+        This is the standard approach used in FNO papers for temporal PDEs.
 
         Args:
-            key: HDF5 key name. If None, auto-selects or loads all keys.
-            input_t: Timestep index to use as input (default: 0 = initial condition)
-            output_t: Timestep index to use as output (default: -1 = final state)
-            num_samples: Ignored when load_all_simulations=True (loads all simulations)
+            key: HDF5 key name. If None, loads all simulation groups.
+            time_step: Timestep delta for prediction (default: 1 for t→t+1)
+            pairs_per_sim: Max pairs to extract per simulation (default: None = all pairs)
             normalize_output: Normalize output to N(0,1)
             normalize_input: Normalize input fields to N(0,1)
             normalize_coords: Normalize coordinates to [-1, 1]
-            temporal_augmentation: If True, split trajectories into multiple pairs
-            num_temporal_splits: Number of segments to split each trajectory into (2, 4, etc.)
-            load_all_simulations: If True, load ALL simulation groups and concatenate (default: True)
+            load_all_simulations: If True, load ALL simulation groups (default: True)
 
         Returns:
-            PDEDataset: Dataset ready for training
+            PDEDataset: Dataset with consecutive timestep pairs
         """
-        # Get data key(s)
-        if load_all_simulations and key is None:
-            # Load ALL simulations
-            all_keys = self._get_all_data_keys()
-            print(f"\nLoading ALL {len(all_keys)} simulation groups...")
-            print(f"  Simulation keys: {all_keys[:5]}{'...' if len(all_keys) > 5 else ''}")
-        else:
-            # Load single simulation (original behavior)
-            all_keys = [self._get_data_key(key)]
-            print(f"\nLoading single simulation: '{all_keys[0]}'")
+        # Get simulation keys
+        all_keys = self._get_all_data_keys() if (load_all_simulations and key is None) else [self._get_data_key(key)]
 
-        # Initialize lists to collect data from all simulations
+        print(f"\nLoading {len(all_keys)} simulation(s) with consecutive pairs (t → t+{time_step})...")
+
         all_input_fields = []
         all_output_fields = []
-        n_x, n_y, n_t = None, None, None
 
-        # Loop through all simulation keys and load data
         for sim_idx, sim_key in enumerate(all_keys):
-            data = self.file[sim_key]
-            shape = data.shape
+            data = self.file[sim_key][:]  # (n_t, n_x, n_y, n_fields)
+            n_t, n_x, n_y, n_fields = data.shape
 
-            # Print info for first simulation
             if sim_idx == 0:
-                print(f"  First simulation '{sim_key}' shape: {shape}")
+                max_pairs = n_t - time_step
+                actual_pairs = pairs_per_sim if pairs_per_sim else max_pairs
+                print(f"  Shape: {data.shape} → {actual_pairs} pairs per simulation (max: {max_pairs})")
 
-                # Load data based on dimensionality
-                if len(shape) == 4:  # (n_t, n_x, n_y, n_fields)
-                    n_t, n_x, n_y, n_fields = shape
-                    print(f"  Temporal data detected: {n_t} timesteps, {n_fields} fields")
+            # Create consecutive pairs: (t, t+step) for t in [0, n_t-step)
+            max_t = n_t - time_step
+            indices = range(max_t) if not pairs_per_sim else np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
 
-                    if not temporal_augmentation:
-                        print(f"  Using t={input_t} as input, t={output_t} as output")
-                        print(f"  Each simulation creates 1 sample pair")
-                    else:
-                        print(f"  Temporal augmentation ENABLED: {num_temporal_splits} splits per simulation")
-                        print(f"  Each simulation creates {num_temporal_splits} sample pairs")
+            for t in indices:
+                all_input_fields.append(data[t, :, :, 0])
+                all_output_fields.append(data[t + time_step, :, :, 0])
 
-                elif len(shape) == 3:  # (n_t, n_x, n_y)
-                    raise ValueError(f"Steady-state data not supported with load_all_simulations=True. "
-                                   f"Use load_all_simulations=False for steady-state data.")
-                else:
-                    raise ValueError(f"Unsupported data shape: {shape}")
+        # Stack to (total_samples, n_x, n_y)
+        input_field = np.stack(all_input_fields, axis=0).astype(np.float32)
+        output_field = np.stack(all_output_fields, axis=0).astype(np.float32)
 
-            # Extract data from this simulation
-            if len(shape) == 4:  # Temporal data: (n_t, n_x, n_y, n_fields)
-                n_t, n_x, n_y, n_fields = shape
-
-                if not temporal_augmentation:
-                    # Standard mode: ONE sample per simulation (input_t → output_t)
-                    # Use field 0 for input field
-                    input_field = data[input_t, :, :, 0]    # (n_x, n_y)
-                    output_field = data[output_t, :, :, 0]  # (n_x, n_y)
-
-                    all_input_fields.append(input_field)
-                    all_output_fields.append(output_field)
-                else:
-                    # Temporal augmentation: Split trajectory into multiple pairs
-                    segment_length = n_t // num_temporal_splits
-
-                    if segment_length < 2:
-                        raise ValueError(
-                            f"Cannot split {n_t} timesteps into {num_temporal_splits} segments. "
-                            f"Need at least {num_temporal_splits * 2} timesteps."
-                        )
-
-                    for seg in range(num_temporal_splits):
-                        t_start = seg * segment_length
-                        t_end = (seg + 1) * segment_length if seg < num_temporal_splits - 1 else n_t
-
-                        seg_input = data[t_start, :, :, 0]       # (n_x, n_y)
-                        seg_output = data[t_end - 1, :, :, 0]    # (n_x, n_y)
-
-                        all_input_fields.append(seg_input)
-                        all_output_fields.append(seg_output)
-
-        # Stack all fields: (total_samples, n_x, n_y)
-        input_field = np.stack(all_input_fields, axis=0)
-        output_field = np.stack(all_output_fields, axis=0)
-
-        total_samples = input_field.shape[0]
-        print(f"\n  Total samples collected: {total_samples}")
-        print(f"    From {len(all_keys)} simulations")
-        if temporal_augmentation:
-            print(f"    With {num_temporal_splits}x temporal augmentation")
+        print(f"  Total samples: {len(all_input_fields)} from {len(all_keys)} simulations")
 
         # Generate coordinate grids
         x_coords = np.linspace(0, 1, n_x)
         y_coords = np.linspace(0, 1, n_y)
         grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
 
-        # Create X with shape (total_samples, n_x, n_y, 3): [x_coord, y_coord, input_field]
-        X = np.zeros((total_samples, n_x, n_y, 3))
-        X[:, :, :, 0] = grid_x[np.newaxis, :, :]  # x coordinates
-        X[:, :, :, 1] = grid_y[np.newaxis, :, :]  # y coordinates
-        X[:, :, :, 2] = input_field                # input field
+        # Create X: (samples, n_x, n_y, 3)
+        X = np.zeros((len(all_input_fields), n_x, n_y, 3), dtype=np.float32)
+        X[:, :, :, 0] = grid_x[np.newaxis, :, :]
+        X[:, :, :, 1] = grid_y[np.newaxis, :, :]
+        X[:, :, :, 2] = input_field
 
-        # Create U with shape (total_samples, n_x, n_y, 1)
         U = output_field[..., np.newaxis]
 
-        print(f"  Created X: {X.shape}, U: {U.shape}")
-        print(f"  Input field range: [{input_field.min():.4f}, {input_field.max():.4f}]")
-        print(f"  Output field range: [{output_field.min():.4f}, {output_field.max():.4f}]")
-
-        # Convert to PDEDataset
-        return PDEDataset(X, U,
-                         normalize_output=normalize_output,
-                         normalize_input=normalize_input,
-                         normalize_coords=normalize_coords)
+        return PDEDataset(X, U, normalize_output=normalize_output,
+                         normalize_input=normalize_input, normalize_coords=normalize_coords)
 
     def to_dataset_steady_state(self,
                                 input_key: str,

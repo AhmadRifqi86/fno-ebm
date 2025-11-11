@@ -902,6 +902,7 @@ class Trainer:
             is_best = val_loss < best_val_loss
             if is_best:
                 best_val_loss = val_loss
+                self.best_val_loss = val_loss
 
             self.checkpoint(epoch, val_loss, 'fno', is_best=is_best)
 
@@ -964,6 +965,7 @@ class Trainer:
             is_best = val_loss < best_val_loss
             if is_best:
                 best_val_loss = val_loss
+                self.best_val_loss = val_loss
 
             self.checkpoint(epoch, val_loss, 'ebm', is_best=is_best)
 

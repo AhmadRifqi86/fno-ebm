@@ -474,7 +474,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'learning_rate': 0.001,
                             'fno_learning_rate': 0.005,
                             'ebm_learning_rate': 0.0001,
-                            'fno_epochs': 100,
+                            'fno_epochs': 5, #100
                             'patience': 20,
                             'train_samples': 4000,
                             'val_samples': 500,
@@ -531,15 +531,7 @@ def run_single_experiment(config, data_path, experiment_dir):
         # Load data
         log("Loading data...")
         with PDEBenchH5Loader(data_path) as loader:
-            # Calculate samples needed
-            max_samples_needed = config['train_samples'] + config['val_samples'] + 200
-            
-            full_dataset = loader.to_dataset(
-                input_t=0, 
-                output_t=-1, 
-                num_samples=max_samples_needed,
-                load_all_simulations=True
-            )
+            full_dataset = loader.to_dataset(time_step=1, pairs_per_sim=10, load_all_simulations=True)
 
             # Split data
             n_total = len(full_dataset)
@@ -586,7 +578,7 @@ def run_single_experiment(config, data_path, experiment_dir):
                 modes1=config['fno_modes'],
                 modes2=config['fno_modes'],
                 width=config['fno_width'],
-                num_layers=6,
+                num_layers=4,
                 dropout=config['fno_dropout']
             )
         elif model_type == 'UFNO':
