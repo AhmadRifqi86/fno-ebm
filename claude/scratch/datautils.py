@@ -582,16 +582,16 @@ class PDEBenchH5Loader:
             all_keys = []
 
             for k in group.keys():
-                # Skip coordinate keys
-                if 'coordinate' in k.lower() or 'coord' in k.lower():
-                    continue
-
                 item = group[k]
                 full_key = f"{prefix}/{k}" if prefix else k
 
                 if isinstance(item, h5py.Dataset):
-                    # Found a dataset
-                    all_keys.append(full_key)
+                    # Skip coordinate/grid keys by checking full path
+                    if any(skip in full_key.lower() for skip in ['coordinate', 'coord', 'grid', '/t', '/x', '/y']):
+                        continue
+                    # Only include 'data' datasets
+                    if 'data' in full_key.lower():
+                        all_keys.append(full_key)
                 elif isinstance(item, h5py.Group):
                     # Recursively search inside groups
                     all_keys.extend(find_all_datasets(item, full_key))
@@ -665,9 +665,9 @@ class PDEBenchH5Loader:
                 print(f"  First simulation '{sim_key}' shape: {shape}")
 
                 # Load data based on dimensionality
-                if len(shape) == 4:  # (n_traj, n_x, n_y, n_t)
-                    _, n_x, n_y, n_t = shape
-                    print(f"  Temporal data detected: {n_t} timesteps")
+                if len(shape) == 4:  # (n_t, n_x, n_y, n_fields)
+                    n_t, n_x, n_y, n_fields = shape
+                    print(f"  Temporal data detected: {n_t} timesteps, {n_fields} fields")
 
                     if not temporal_augmentation:
                         print(f"  Using t={input_t} as input, t={output_t} as output")
@@ -676,27 +676,26 @@ class PDEBenchH5Loader:
                         print(f"  Temporal augmentation ENABLED: {num_temporal_splits} splits per simulation")
                         print(f"  Each simulation creates {num_temporal_splits} sample pairs")
 
-                elif len(shape) == 3:  # (n_traj, n_x, n_y)
+                elif len(shape) == 3:  # (n_t, n_x, n_y)
                     raise ValueError(f"Steady-state data not supported with load_all_simulations=True. "
                                    f"Use load_all_simulations=False for steady-state data.")
                 else:
                     raise ValueError(f"Unsupported data shape: {shape}")
 
             # Extract data from this simulation
-            if len(shape) == 4:  # Temporal data
-                n_traj, n_x, n_y, n_t = shape
+            if len(shape) == 4:  # Temporal data: (n_t, n_x, n_y, n_fields)
+                n_t, n_x, n_y, n_fields = shape
 
                 if not temporal_augmentation:
-                    # Standard mode: Single pair per simulation trajectory
-                    # shape[0] is the number of trajectories in this simulation (usually 1)
-                    for traj_idx in range(n_traj):
-                        input_field = data[traj_idx, :, :, input_t]    # (n_x, n_y)
-                        output_field = data[traj_idx, :, :, output_t]  # (n_x, n_y)
+                    # Standard mode: ONE sample per simulation (input_t → output_t)
+                    # Use field 0 for input field
+                    input_field = data[input_t, :, :, 0]    # (n_x, n_y)
+                    output_field = data[output_t, :, :, 0]  # (n_x, n_y)
 
-                        all_input_fields.append(input_field)
-                        all_output_fields.append(output_field)
+                    all_input_fields.append(input_field)
+                    all_output_fields.append(output_field)
                 else:
-                    # Temporal augmentation: Split each trajectory into multiple pairs
+                    # Temporal augmentation: Split trajectory into multiple pairs
                     segment_length = n_t // num_temporal_splits
 
                     if segment_length < 2:
@@ -705,16 +704,15 @@ class PDEBenchH5Loader:
                             f"Need at least {num_temporal_splits * 2} timesteps."
                         )
 
-                    for traj_idx in range(n_traj):
-                        for seg in range(num_temporal_splits):
-                            t_start = seg * segment_length
-                            t_end = (seg + 1) * segment_length if seg < num_temporal_splits - 1 else n_t
+                    for seg in range(num_temporal_splits):
+                        t_start = seg * segment_length
+                        t_end = (seg + 1) * segment_length if seg < num_temporal_splits - 1 else n_t
 
-                            seg_input = data[traj_idx, :, :, t_start]       # (n_x, n_y)
-                            seg_output = data[traj_idx, :, :, t_end - 1]    # (n_x, n_y)
+                        seg_input = data[t_start, :, :, 0]       # (n_x, n_y)
+                        seg_output = data[t_end - 1, :, :, 0]    # (n_x, n_y)
 
-                            all_input_fields.append(seg_input)
-                            all_output_fields.append(seg_output)
+                        all_input_fields.append(seg_input)
+                        all_output_fields.append(seg_output)
 
         # Stack all fields: (total_samples, n_x, n_y)
         input_field = np.stack(all_input_fields, axis=0)

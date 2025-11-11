@@ -470,9 +470,9 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'fno_depth': depth,
                             'lambda_phys': lambda_phys,
                             'fno_dropout': 0.1,
-                            'batch_size': 16,
+                            'batch_size': 32,
                             'learning_rate': 0.001,
-                            'fno_learning_rate': 0.001,
+                            'fno_learning_rate': 0.005,
                             'ebm_learning_rate': 0.0001,
                             'fno_epochs': 100,
                             'patience': 20,
@@ -538,7 +538,7 @@ def run_single_experiment(config, data_path, experiment_dir):
                 input_t=0, 
                 output_t=-1, 
                 num_samples=max_samples_needed,
-                load_all_simulations=False
+                load_all_simulations=True
             )
 
             # Split data
