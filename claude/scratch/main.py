@@ -590,7 +590,8 @@ def run_single_experiment(config, data_path, experiment_dir):
                 modes2=config['fno_modes'],
                 width=config['fno_width'],
                 num_layers=4,
-                dropout=config['fno_dropout']
+                dropout=config['fno_dropout'],
+                pre_ln=False,
             )
         elif model_type == 'UFNO':
             fno_model = UFNO2d(

@@ -39,13 +39,14 @@ class SpectralConv2d(nn.Module):
         self.modes1 = modes1  # Number of Fourier modes (x-direction)
         self.modes2 = modes2  # Number of Fourier modes (y-direction)
 
-        self.scale = 1 / (in_channels * out_channels)
+        # Xavier initialization scaled by 1/sqrt(modes) for spectral domain
+        scale = (1 / (in_channels * out_channels)) * (1 / (modes1 * modes2)**0.5)
         self.weights1 = nn.Parameter(
-            self.scale * torch.rand(in_channels, out_channels,
+            scale * torch.randn(in_channels, out_channels,
                                    self.modes1, self.modes2, 2)
         )
         self.weights2 = nn.Parameter(
-            self.scale * torch.rand(in_channels, out_channels,
+            scale * torch.randn(in_channels, out_channels,
                                    self.modes1, self.modes2, 2)
         )
 
@@ -127,6 +128,24 @@ class FNO2d(nn.Module):
         self.fc1 = nn.Linear(self.width, 128)
         self.dropout_out = nn.Dropout(dropout)
         self.fc2 = nn.Linear(128, 1)
+
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights for FNO layers"""
+        # Kaiming init for lifting/projection layers (followed by GELU)
+        nn.init.kaiming_normal_(self.fc0.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='linear')
+        nn.init.zeros_(self.fc0.bias)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+
+        # Kaiming init for local convolutions
+        for w_layer in self.w_layers:
+            nn.init.kaiming_normal_(w_layer.weight, nonlinearity='linear')
+            nn.init.zeros_(w_layer.bias)
 
     def forward(self, x):
         """
@@ -801,20 +820,21 @@ class FactorizedSpectralConv2d(nn.Module):
         self.modes1 = modes1
         self.modes2 = modes2
 
-        self.scale = 1 / (in_channels * out_channels)
+        # Xavier init scaled by 1/sqrt(modes) * 1/sqrt(2) for factorization
+        scale = (1 / (in_channels * out_channels)) * (1 / (modes1 * modes2)**0.5) * (1 / 2**0.5)
 
         # Factorized weights: separate for each dimension
         # W_x: weights for x-direction modes
         self.weights_x1 = nn.Parameter(
-            self.scale * torch.rand(in_channels, out_channels, self.modes1, 2)
+            scale * torch.randn(in_channels, out_channels, self.modes1, 2)
         )
         self.weights_x2 = nn.Parameter(
-            self.scale * torch.rand(in_channels, out_channels, self.modes1, 2)
+            scale * torch.randn(in_channels, out_channels, self.modes1, 2)
         )
 
         # W_y: weights for y-direction modes
         self.weights_y = nn.Parameter(
-            self.scale * torch.rand(in_channels, out_channels, self.modes2, 2)
+            scale * torch.randn(in_channels, out_channels, self.modes2, 2)
         )
 
     def compl_mul1d(self, input, weights):
@@ -1089,6 +1109,32 @@ class FFNO2d(nn.Module):
         self.dropout_out = nn.Dropout(dropout)
         self.fc2 = nn.Linear(128, 1)
 
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights for FFNO layers"""
+        # Kaiming init for lifting/projection layers (followed by GELU)
+        nn.init.kaiming_normal_(self.fc0.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='linear')
+        nn.init.zeros_(self.fc0.bias)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+
+        # Kaiming init for local convolutions
+        for w_layer in self.w_layers:
+            nn.init.kaiming_normal_(w_layer.weight, nonlinearity='linear')
+            nn.init.zeros_(w_layer.bias)
+
+        # Kaiming init for attention layers if present
+        if self.use_attention:
+            for attn_layer in self.attention_layers:
+                nn.init.kaiming_normal_(attn_layer.fc1.weight, nonlinearity='linear')
+                nn.init.kaiming_normal_(attn_layer.fc2.weight, nonlinearity='linear')
+                nn.init.zeros_(attn_layer.fc1.bias)
+                nn.init.zeros_(attn_layer.fc2.bias)
+
     def forward(self, x):
         """
         x: (batch, n_x, n_y, 3) - input with coordinates
@@ -1280,6 +1326,33 @@ class UFNO2d(nn.Module):
         self.fc1 = nn.Linear(width, 128)
         self.dropout_out = nn.Dropout(dropout)
         self.fc2 = nn.Linear(128, 1)
+
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights for UFNO layers"""
+        # Kaiming init for lifting/projection layers
+        nn.init.kaiming_normal_(self.fc0.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='linear')
+        nn.init.zeros_(self.fc0.bias)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+
+        # Kaiming init for downsample and upsample layers
+        for layer in self.downsample_layers:
+            nn.init.kaiming_normal_(layer.weight, nonlinearity='linear')
+            nn.init.zeros_(layer.bias)
+
+        for layer in self.upsample_layers:
+            nn.init.kaiming_normal_(layer.weight, nonlinearity='linear')
+            nn.init.zeros_(layer.bias)
+
+        # Identity-like init for skip connections (preserve signal)
+        for layer in self.skip_connections:
+            nn.init.kaiming_normal_(layer.weight, nonlinearity='linear')
+            nn.init.zeros_(layer.bias)
 
     def forward(self, x):
         """
@@ -1516,6 +1589,33 @@ class UFFNO2d(nn.Module):
         self.fc1 = nn.Linear(width, 128)
         self.dropout_out = nn.Dropout(dropout)
         self.fc2 = nn.Linear(128, 1)
+
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights for UFFNO layers"""
+        # Kaiming init for lifting/projection layers
+        nn.init.kaiming_normal_(self.fc0.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='linear')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='linear')
+        nn.init.zeros_(self.fc0.bias)
+        nn.init.zeros_(self.fc1.bias)
+        nn.init.zeros_(self.fc2.bias)
+
+        # Kaiming init for downsample and upsample layers
+        for layer in self.downsample_layers:
+            nn.init.kaiming_normal_(layer.weight, nonlinearity='linear')
+            nn.init.zeros_(layer.bias)
+
+        for layer in self.upsample_layers:
+            nn.init.kaiming_normal_(layer.weight, nonlinearity='linear')
+            nn.init.zeros_(layer.bias)
+
+        # Kaiming init for skip connections
+        for layer in self.skip_connections:
+            nn.init.kaiming_normal_(layer.weight, nonlinearity='linear')
+            nn.init.zeros_(layer.bias)
 
     def forward(self, x):
         """
