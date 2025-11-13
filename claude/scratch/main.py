@@ -471,7 +471,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'lambda_phys': lambda_phys,
                             'fno_dropout': 0.15,
                             'batch_size': 32,
-                            'learning_rate': 0.001,
+                            'learning_rate': 0.005,
                             'fno_optimizer_config': {
                                 'type': 'adamw',
                                 'lr': 0.002,             # Moderate LR for stable convergence, should be high?

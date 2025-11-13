@@ -30,6 +30,33 @@ except ImportError:
 # Base FNO Components
 # ============================================================================
 
+def get_fourier_positional_encoding(x_coords, y_coords, num_frequencies=10):
+    """
+    Generate Fourier positional encodings for 2D coordinates.
+
+    Args:
+        x_coords: (batch, n_x, n_y) normalized x coordinates [-1, 1]
+        y_coords: (batch, n_x, n_y) normalized y coordinates [-1, 1]
+        num_frequencies: number of frequency components (default: 10)
+
+    Returns:
+        encoding: (batch, n_x, n_y, 4*num_frequencies)
+                  [cos(2πk·x), sin(2πk·x), cos(2πk·y), sin(2πk·y)] for k=1..num_frequencies
+    """
+    import math
+    encodings = []
+
+    for k in range(1, num_frequencies + 1):
+        # Encode x coordinates
+        encodings.append(torch.cos(2 * math.pi * k * x_coords))
+        encodings.append(torch.sin(2 * math.pi * k * x_coords))
+        # Encode y coordinates
+        encodings.append(torch.cos(2 * math.pi * k * y_coords))
+        encodings.append(torch.sin(2 * math.pi * k * y_coords))
+
+    return torch.stack(encodings, dim=-1)  # (batch, n_x, n_y, 4*num_frequencies)
+
+
 class SpectralConv2d(nn.Module):
     """Spectral convolution layer in Fourier space"""
     def __init__(self, in_channels, out_channels, modes1, modes2):
@@ -93,7 +120,7 @@ class SpectralConv2d(nn.Module):
 
 class FNO2d(nn.Module):
     """Fourier Neural Operator for 2D problems"""
-    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0):
+    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, num_pos_frequencies=10):
         super().__init__()
 
         self.modes1 = modes1
@@ -101,9 +128,12 @@ class FNO2d(nn.Module):
         self.width = width
         self.num_layers = num_layers
         self.dropout = dropout
+        self.num_pos_frequencies = num_pos_frequencies
 
-        # Input projection
-        self.fc0 = nn.Linear(3, self.width)  # (x, y, input_field)
+        # Input projection: (x, y, input_field) + Fourier positional encodings
+        # Fourier encoding adds 4*num_pos_frequencies channels
+        input_dim = 3 + 4 * num_pos_frequencies  # e.g., 3 + 40 = 43
+        self.fc0 = nn.Linear(input_dim, self.width)
         self.dropout0 = nn.Dropout(dropout)
 
         # Fourier layers
@@ -124,10 +154,10 @@ class FNO2d(nn.Module):
             for _ in range(self.num_layers)
         ])
 
-        # Output projection
-        self.fc1 = nn.Linear(self.width, 128)
+        # Output projection: width → width → 1 (no bottleneck)
+        self.fc1 = nn.Linear(self.width, self.width)
         self.dropout_out = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(128, 1)
+        self.fc2 = nn.Linear(self.width, 1)
 
         # Initialize weights
         self._init_weights()
@@ -152,6 +182,20 @@ class FNO2d(nn.Module):
         x: (batch, n_x, n_y, 3) where last dim is (x_coord, y_coord, input_field)
         returns: (batch, n_x, n_y, 1) - the solution field
         """
+        batch_size, n_x, n_y, _ = x.shape
+
+        # Extract coordinates
+        x_coords = x[..., 0]  # (batch, n_x, n_y)
+        y_coords = x[..., 1]  # (batch, n_x, n_y)
+
+        # Generate Fourier positional encodings
+        pos_encoding = get_fourier_positional_encoding(
+            x_coords, y_coords, num_frequencies=self.num_pos_frequencies
+        )  # (batch, n_x, n_y, 4*num_pos_frequencies)
+
+        # Concatenate: [x, y, input_field, fourier_encodings]
+        x = torch.cat([x, pos_encoding], dim=-1)  # (batch, n_x, n_y, 3 + 4*num_pos_frequencies)
+
         # Lift to higher dimension
         x = self.fc0(x)  # (batch, n_x, n_y, width)
         x = self.dropout0(x)
@@ -166,9 +210,9 @@ class FNO2d(nn.Module):
                 x = F.gelu(x)
                 x = self.dropout_layers[i](x)
 
-        # Project to output
+        # Project to output (no bottleneck)
         x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
-        x = self.fc1(x)
+        x = self.fc1(x)  # (batch, n_x, n_y, width)
         x = F.gelu(x)
         x = self.dropout_out(x)
         x = self.fc2(x)  # (batch, n_x, n_y, 1)
@@ -1046,7 +1090,7 @@ class FFNO2d(nn.Module):
     - 57% improvement on airfoil flow
     - Can scale to 24 layers (vs 4 in standard FNO)
     """
-    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, attention_reduction=4, pre_ln=False):
+    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, attention_reduction=4, pre_ln=False, num_pos_frequencies=10):
         """
         Args:
             modes1, modes2: Number of Fourier modes
@@ -1056,6 +1100,7 @@ class FFNO2d(nn.Module):
             use_attention: Enable channel attention (Squeeze-and-Excitation)
             attention_reduction: Bottleneck reduction for attention (higher = fewer params)
             pre_ln: Use Pre-LN (True) or Post-LN (False). Pre-LN more stable for deep nets.
+            num_pos_frequencies: Number of frequency components for positional encoding (default: 10)
         """
         super().__init__()
 
@@ -1066,9 +1111,12 @@ class FFNO2d(nn.Module):
         self.dropout = dropout
         self.use_attention = False if (attention_reduction is None or attention_reduction==0) else True
         self.pre_ln = pre_ln
+        self.num_pos_frequencies = num_pos_frequencies
 
-        # Input projection
-        self.fc0 = nn.Linear(3, self.width)
+        # Input projection: (x, y, input_field) + Fourier positional encodings
+        # Fourier encoding adds 4*num_pos_frequencies channels
+        input_dim = 3 + 4 * num_pos_frequencies  # e.g., 3 + 40 = 43
+        self.fc0 = nn.Linear(input_dim, self.width)
         self.dropout0 = nn.Dropout(dropout)
 
         # Factorized Fourier layers
@@ -1104,10 +1152,10 @@ class FFNO2d(nn.Module):
             for _ in range(self.num_layers)
         ])
 
-        # Output projection
-        self.fc1 = nn.Linear(self.width, 128)
+        # Output projection: width → width → 1 (no bottleneck)
+        self.fc1 = nn.Linear(self.width, self.width)
         self.dropout_out = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(128, 1)
+        self.fc2 = nn.Linear(self.width, 1)
 
         # Initialize weights
         self._init_weights()
@@ -1140,6 +1188,18 @@ class FFNO2d(nn.Module):
         x: (batch, n_x, n_y, 3) - input with coordinates
         returns: (batch, n_x, n_y, 1) - predicted solution
         """
+        # Extract coordinates
+        x_coords = x[..., 0]  # (batch, n_x, n_y)
+        y_coords = x[..., 1]  # (batch, n_x, n_y)
+
+        # Generate Fourier positional encodings
+        pos_encoding = get_fourier_positional_encoding(
+            x_coords, y_coords, num_frequencies=self.num_pos_frequencies
+        )  # (batch, n_x, n_y, 4*num_pos_frequencies)
+
+        # Concatenate: [x, y, input_field, fourier_encodings]
+        x = torch.cat([x, pos_encoding], dim=-1)  # (batch, n_x, n_y, 3 + 4*num_pos_frequencies)
+
         # Lift to higher dimension
         x = self.fc0(x)  # (batch, n_x, n_y, width)
         x = self.dropout0(x)
@@ -1322,10 +1382,10 @@ class UFNO2d(nn.Module):
             nn.Dropout(dropout) for _ in range(depth * 2 + 1)
         ])
 
-        # Output projection
-        self.fc1 = nn.Linear(width, 128)
+        # Output projection: width → width → 1 (no bottleneck)
+        self.fc1 = nn.Linear(width, width)
         self.dropout_out = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(128, 1)
+        self.fc2 = nn.Linear(width, 1)
 
         # Initialize weights
         self._init_weights()
@@ -1585,10 +1645,10 @@ class UFFNO2d(nn.Module):
             nn.Dropout(dropout) for _ in range(depth * 2 + 1)
         ])
 
-        # Output projection
-        self.fc1 = nn.Linear(width, 128)
+        # Output projection: width → width → 1 (no bottleneck)
+        self.fc1 = nn.Linear(width, width)
         self.dropout_out = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(128, 1)
+        self.fc2 = nn.Linear(width, 1)
 
         # Initialize weights
         self._init_weights()
