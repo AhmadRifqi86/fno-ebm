@@ -1176,18 +1176,18 @@ class FFNO2d(nn.Module):
                 x2 = self.w_layers[i](x)
                 x = x1 + x2
 
-                x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
-                x = self.norm_layers[i](x)
-                x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
-
                 if self.use_attention:
                     x = self.attention_layers[i](x)
 
                 if i < self.num_layers - 1:
                     x = F.gelu(x)
-
+                
                 x = x + x_res
 
+                x = x.permute(0, 2, 3, 1)  # (batch, n_x, n_y, width)
+                x = self.norm_layers[i](x)
+                x = x.permute(0, 3, 1, 2)  # (batch, width, n_x, n_y)
+                
                 if i < self.num_layers - 1:
                     x = self.dropout_layers[i](x)
 
