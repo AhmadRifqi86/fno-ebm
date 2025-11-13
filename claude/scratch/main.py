@@ -469,7 +469,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'fno_width': width,
                             'fno_depth': depth,
                             'lambda_phys': lambda_phys,
-                            'fno_dropout': 0.0,
+                            'fno_dropout': 0.15,
                             'batch_size': 32,
                             'learning_rate': 0.001,
                             'fno_optimizer_config': {
@@ -480,7 +480,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             },
                             'fno_scheduler_config': {
                                 'type': 'cosine_annealing_warm_restarts',
-                                'T_0': 25,
+                                'T_0': 50,
                                 'T_mult': 1,
                                 'eta_min': 1e-6
                             },
