@@ -169,12 +169,6 @@ def compute_darcy_residual(u, x_grid, a_field=None):
     # ========================================================================
     # Normalize residual to prevent physics loss from dominating
     # ========================================================================
-    # Problem: Finite differences create O(1/dx²) ≈ 4000x amplification
-    # Solution: Normalize by characteristic scales
-
-    # Normalize by grid spacing squared (cancels out 1/dx² from derivatives)
-    residual = residual * (dx**2)
-
     # Normalize by mean permeability (cancels out permeability magnitude)
     mean_permeability = torch.mean(torch.abs(a_field)) + 1e-8
     residual = residual / mean_permeability

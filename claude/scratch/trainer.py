@@ -182,6 +182,7 @@ class Trainer:
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
+        self.best_rel_l2 = float('inf')
         self.lambda_phys = config.lambda_phys  # Weight for physics loss
         print(f"DEBUG: lambda_phys = {self.lambda_phys}")
         self.early_stopper_fno = EarlyStopping(
@@ -341,33 +342,39 @@ class Trainer:
     
     def validate(self):
         """
-        Validation step including physics loss
+        Validation step including physics loss and relative L2 error
         """
         self.fno_model.eval()
         self.ebm_model.eval()
         total_val_loss = 0
-        
+        total_rel_l2 = 0
+
         with torch.no_grad():
             for x, y in self.fno_val_loader:
                 x, y = x.to(self.config.device), y.to(self.config.device)
                 fno_output = self.fno_model(x)
-                
+
                 # Data loss
                 data_loss = self.fno_criterion(fno_output, y)
-                
+
                 # Physics loss
                 x_coords = x[..., 0].requires_grad_(True)
                 y_coords = x[..., 1].requires_grad_(True)
                 # Pass full x_grid for Darcy physics loss
                 residual = self.phy_loss_fn(fno_output, x_coords, y_coords, x_grid=x)
                 physics_loss = torch.mean(residual**2)
-                
+
                 # Total validation loss
                 val_loss = data_loss + self.lambda_phys * physics_loss
                 total_val_loss += val_loss.item()
-                
+
+                # Relative L2 error
+                rel_l2 = torch.norm(fno_output - y) / torch.norm(y)
+                total_rel_l2 += rel_l2.item()
+
         avg_val_loss = total_val_loss / len(self.fno_val_loader)
-        return avg_val_loss
+        avg_rel_l2 = total_rel_l2 / len(self.fno_val_loader)
+        return avg_val_loss, avg_rel_l2
     
     def validate_ebm(self):
         """
@@ -890,7 +897,7 @@ class Trainer:
                     phys=f"{physics_loss:.4f}"
                 )
 
-            val_loss = self.validate()
+            val_loss, rel_l2 = self.validate()
             avg_total_loss = epoch_total_loss / len(self.fno_train_loader)
             avg_data_loss = epoch_data_loss / len(self.fno_train_loader)
             avg_physics_loss = epoch_physics_loss / len(self.fno_train_loader)
@@ -900,7 +907,8 @@ class Trainer:
                 f"Total={avg_total_loss:.6f}, "
                 f"Data={avg_data_loss:.6f}, "
                 f"Physics={avg_physics_loss:.6f}, "
-                f"Val={val_loss:.6f}"
+                f"Val={val_loss:.6f}, "
+                f"RelL2={rel_l2:.6f}"
             )
 
             if self.fno_scheduler:
@@ -915,6 +923,9 @@ class Trainer:
             if is_best:
                 best_val_loss = val_loss
                 self.best_val_loss = val_loss
+
+            if rel_l2 < self.best_rel_l2:
+                self.best_rel_l2 = rel_l2
 
             self.checkpoint(epoch, val_loss, 'fno', is_best=is_best)
 

@@ -431,6 +431,9 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
     print(f"Logs saved to: logs/")
     print(f"\n{'='*80}\n")
 
+# scheduler = StepLR(optimizer, step_size=10, gamma=0.95)
+# scheduler = ExponentialLR(optimizer, gamma=0.95)
+# scheduler = CosineAnnealingLR(optimizer, T_max=100, eta_min=1e-5,)
 
 def generate_experiment_configs(pde_type, model_types, modes_list, width_list, depth_list, pinn_constants):
     """
@@ -469,20 +472,18 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'fno_width': width,
                             'fno_depth': depth,
                             'lambda_phys': lambda_phys,
-                            'fno_dropout': 0.15,
+                            'fno_dropout': 0.1,
                             'batch_size': 32,
                             'learning_rate': 0.005,
                             'fno_optimizer_config': {
                                 'type': 'adamw',
-                                'lr': 0.002,             # Moderate LR for stable convergence, should be high?
-                                'weight_decay': 0.002,   # Light regularization (reduced from 0.01)
-                                'betas': [0.9, 0.95]
+                                'lr': 0.001,             # Moderate LR for stable convergence, should be high?
+                                'weight_decay': 0.001,   # Light regularization (reduced from 0.01)
+                                'betas': [0.9, 0.999]
                             },
-                            'fno_scheduler_config': {
-                                'type': 'cosine_annealing_warm_restarts',
-                                'T_0': 50,
-                                'T_mult': 1,
-                                'eta_min': 1e-6
+                            'fno_scheduler_config': { #tomorrow: Change this to steplr
+                                'type': 'exponential_lr',
+                                'gamma': 0.97
                             },
                             'ebm_learning_rate': 0.0001,
                             'fno_epochs': 100, #100
