@@ -460,7 +460,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                 if model_type in ['UFNO', 'UFFNO']:
                     depth_options = depth_list
                 else:
-                    depth_options = [6]  # Default depth for non-U architectures
+                    depth_options = [4]  # Default depth for non-U architectures
 
                 for depth in depth_options:
                     for lambda_phys in pinn_constants:
@@ -488,8 +488,8 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'ebm_learning_rate': 0.0001,
                             'fno_epochs': 100, #100
                             'patience': 20,
-                            'train_samples': 8000,
-                            'val_samples': 500,
+                            'train_samples': 24000, #Do i need to increase this?
+                            'val_samples': 1000,
                             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
                         }
                         configs.append(config)
@@ -543,7 +543,7 @@ def run_single_experiment(config, data_path, experiment_dir):
         # Load data
         log("Loading data...")
         with PDEBenchH5Loader(data_path) as loader:
-            full_dataset = loader.to_dataset(time_step=1, pairs_per_sim=10, load_all_simulations=True)
+            full_dataset = loader.to_dataset(time_step=10, pairs_per_sim=25, load_all_simulations=True, batch_size=100)
 
             # Split data
             n_total = len(full_dataset)

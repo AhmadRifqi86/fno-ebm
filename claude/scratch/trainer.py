@@ -368,8 +368,15 @@ class Trainer:
                 val_loss = data_loss + self.lambda_phys * physics_loss
                 total_val_loss += val_loss.item()
 
-                # Relative L2 error
-                rel_l2 = torch.norm(fno_output - y) / torch.norm(y)
+                # Relative L2 error (FIXED: compute on denormalized/original scale)
+                # Denormalize predictions and ground truth to original scale
+                # Handle Subset wrapper (access underlying dataset)
+                dataset = self.fno_val_loader.dataset
+                if hasattr(dataset, 'dataset'):  # Subset wrapper
+                    dataset = dataset.dataset
+                y_denorm = dataset.denormalize(y)
+                pred_denorm = dataset.denormalize(fno_output)
+                rel_l2 = torch.norm(pred_denorm - y_denorm) / torch.norm(y_denorm)
                 total_rel_l2 += rel_l2.item()
 
         avg_val_loss = total_val_loss / len(self.fno_val_loader)
