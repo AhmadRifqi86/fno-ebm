@@ -553,8 +553,8 @@ def run_single_experiment(config, data_path, experiment_dir):
 
             # Split data
             n_total = len(full_dataset)
-            n_train = min(config['train_samples'], int(0.8 * n_total))
-            n_val = min(config['val_samples'], int(0.1 * n_total))
+            n_train = min(config['train_samples'], int(0.95 * n_total))
+            n_val = min(config['val_samples'], int(0.025 * n_total))
 
             indices = np.random.RandomState(seed=42).permutation(n_total)
             train_idx = indices[:n_train]
