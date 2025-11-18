@@ -460,7 +460,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                 if model_type in ['UFNO', 'UFFNO']:
                     depth_options = depth_list
                 else:
-                    depth_options = [4]  # Default depth for non-U architectures
+                    depth_options = [8]  # Default depth for non-U architectures
 
                 for depth in depth_options:
                     for lambda_phys in pinn_constants:

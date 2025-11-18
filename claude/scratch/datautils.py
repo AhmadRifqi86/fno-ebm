@@ -612,7 +612,8 @@ class PDEBenchH5Loader:
                    normalize_output: bool = True,
                    normalize_input: bool = True,
                    normalize_coords: bool = True,
-                   load_all_simulations: bool = True):
+                   load_all_simulations: bool = True,
+                   batch_size: int = 100):
         """
         Convert PDEBench HDF5 to PDEDataset using autoregressive consecutive pairs.
 
@@ -627,6 +628,7 @@ class PDEBenchH5Loader:
             normalize_input: Normalize input fields to N(0,1)
             normalize_coords: Normalize coordinates to [-1, 1]
             load_all_simulations: If True, load ALL simulation groups (default: True)
+            batch_size: Process simulations in batches to reduce memory usage (default: 100)
 
         Returns:
             PDEDataset: Dataset with consecutive timestep pairs
@@ -635,32 +637,43 @@ class PDEBenchH5Loader:
         all_keys = self._get_all_data_keys() if (load_all_simulations and key is None) else [self._get_data_key(key)]
 
         print(f"\nLoading {len(all_keys)} simulation(s) with consecutive pairs (t → t+{time_step})...")
+        print(f"  Processing in batches of {batch_size} simulations to reduce memory usage")
 
-        all_input_fields = []
-        all_output_fields = []
+        # First pass: determine array dimensions and total samples
+        first_sim = self.file[all_keys[0]][:]
+        n_t, n_x, n_y, _ = first_sim.shape
+        max_pairs = n_t - time_step
+        actual_pairs = pairs_per_sim if pairs_per_sim else max_pairs
+        total_samples = len(all_keys) * actual_pairs
 
-        for sim_idx, sim_key in enumerate(all_keys):
-            data = self.file[sim_key][:]  # (n_t, n_x, n_y, n_fields)
-            n_t, n_x, n_y, n_fields = data.shape
+        print(f"  Shape: {first_sim.shape} → {actual_pairs} pairs per simulation (max: {max_pairs})")
+        print(f"  Pre-allocating arrays for {total_samples} samples ({total_samples * n_x * n_y * 4 / 1e9:.2f} GB)...")
 
-            if sim_idx == 0:
-                max_pairs = n_t - time_step
-                actual_pairs = pairs_per_sim if pairs_per_sim else max_pairs
-                print(f"  Shape: {data.shape} → {actual_pairs} pairs per simulation (max: {max_pairs})")
+        # Pre-allocate arrays to avoid memory spike during stacking
+        input_field = np.zeros((total_samples, n_x, n_y), dtype=np.float32)
+        output_field = np.zeros((total_samples, n_x, n_y), dtype=np.float32)
 
-            # Create consecutive pairs: (t, t+step) for t in [0, n_t-step)
-            max_t = n_t - time_step
-            indices = range(max_t) if not pairs_per_sim else np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
+        # Process simulations in batches to avoid memory overflow
+        sample_idx = 0
+        for batch_start in range(0, len(all_keys), batch_size):
+            batch_end = min(batch_start + batch_size, len(all_keys))
+            batch_keys = all_keys[batch_start:batch_end]
 
-            for t in indices:
-                all_input_fields.append(data[t, :, :, 0])
-                all_output_fields.append(data[t + time_step, :, :, 0])
+            print(f"  Processing batch {batch_start//batch_size + 1}/{(len(all_keys)-1)//batch_size + 1} (simulations {batch_start}-{batch_end-1})")
 
-        # Stack to (total_samples, n_x, n_y)
-        input_field = np.stack(all_input_fields, axis=0).astype(np.float32)
-        output_field = np.stack(all_output_fields, axis=0).astype(np.float32)
+            for sim_key in batch_keys:
+                data = self.file[sim_key][:]  # (n_t, n_x, n_y, n_fields)
 
-        print(f"  Total samples: {len(all_input_fields)} from {len(all_keys)} simulations")
+                # Create consecutive pairs: (t, t+step) for t in [0, n_t-step)
+                max_t = n_t - time_step
+                indices = range(max_t) if not pairs_per_sim else np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
+
+                for t in indices:
+                    input_field[sample_idx] = data[t, :, :, 0]
+                    output_field[sample_idx] = data[t + time_step, :, :, 0]
+                    sample_idx += 1
+
+        print(f"  Total samples loaded: {sample_idx} from {len(all_keys)} simulations")
 
         # Generate coordinate grids
         x_coords = np.linspace(0, 1, n_x)
@@ -668,7 +681,7 @@ class PDEBenchH5Loader:
         grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
 
         # Create X: (samples, n_x, n_y, 3)
-        X = np.zeros((len(all_input_fields), n_x, n_y, 3), dtype=np.float32)
+        X = np.zeros((total_samples, n_x, n_y, 3), dtype=np.float32)
         X[:, :, :, 0] = grid_x[np.newaxis, :, :]
         X[:, :, :, 1] = grid_y[np.newaxis, :, :]
         X[:, :, :, 2] = input_field
