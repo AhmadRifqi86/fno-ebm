@@ -59,12 +59,13 @@ def get_fourier_positional_encoding(x_coords, y_coords, num_frequencies=10):
 
 class SpectralConv2d(nn.Module):
     """Spectral convolution layer in Fourier space"""
-    def __init__(self, in_channels, out_channels, modes1, modes2):
+    def __init__(self, in_channels, out_channels, modes1, modes2, spectral_dropout=0.0):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.modes1 = modes1  # Number of Fourier modes (x-direction)
         self.modes2 = modes2  # Number of Fourier modes (y-direction)
+        self.spectral_dropout = spectral_dropout
 
         # Xavier initialization scaled by 1/sqrt(modes) for spectral domain
         scale = (1 / (in_channels * out_channels)) * (1 / (modes1 * modes2)**0.5)
@@ -106,6 +107,10 @@ class SpectralConv2d(nn.Module):
             self.compl_mul2d(x_ft[:, :, -self.modes1:, :self.modes2],
                            self.weights2)
 
+        # Apply spectral dropout (only during training)
+        if self.training and self.spectral_dropout > 0:
+            out_ft = F.dropout(out_ft, p=self.spectral_dropout, training=True)
+
         # Convert back to complex
         out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
 
@@ -120,7 +125,7 @@ class SpectralConv2d(nn.Module):
 
 class FNO2d(nn.Module):
     """Fourier Neural Operator for 2D problems"""
-    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, num_pos_frequencies=10):
+    def __init__(self, modes1, modes2, width=64, num_layers=4, dropout=0.0, num_pos_frequencies=10, spectral_dropout=0.0):
         super().__init__()
 
         self.modes1 = modes1
@@ -138,7 +143,7 @@ class FNO2d(nn.Module):
 
         # Fourier layers
         self.conv_layers = nn.ModuleList([
-            SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+            SpectralConv2d(self.width, self.width, self.modes1, self.modes2, spectral_dropout=spectral_dropout)
             for _ in range(self.num_layers)
         ])
 
@@ -857,12 +862,13 @@ class FactorizedSpectralConv2d(nn.Module):
 
     Key for data-limited scenarios (e.g., 1000 training samples).
     """
-    def __init__(self, in_channels, out_channels, modes1, modes2):
+    def __init__(self, in_channels, out_channels, modes1, modes2, spectral_dropout=0.0):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.modes1 = modes1
         self.modes2 = modes2
+        self.spectral_dropout = spectral_dropout
 
         # Xavier init scaled by 1/sqrt(modes) * 1/sqrt(2) for factorization
         scale = (1 / (in_channels * out_channels)) * (1 / (modes1 * modes2)**0.5) * (1 / 2**0.5)
@@ -952,11 +958,15 @@ class FactorizedSpectralConv2d(nn.Module):
         out_modes = out_modes.permute(0, 2, 1, 3, 4)
 
         out_ft[:, :, -actual_modes1:, :actual_modes2, :] = out_modes
-        
+
+        # Apply spectral dropout (only during training)
+        if self.training and self.spectral_dropout > 0:
+            out_ft = F.dropout(out_ft, p=self.spectral_dropout, training=True)
+
         # Convert back to complex and IFFT
         out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])
         x_out = torch.fft.irfft2(out_ft_complex, s=(x.size(-2), x.size(-1)), norm='ortho')
-        
+
         return x_out
 
     # def forward(self, x):

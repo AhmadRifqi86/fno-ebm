@@ -185,6 +185,10 @@ class Trainer:
         self.best_rel_l2 = float('inf')
         self.lambda_phys = config.lambda_phys  # Weight for physics loss
         print(f"DEBUG: lambda_phys = {self.lambda_phys}")
+
+        # Gradient clipping
+        self.fno_grad_clip = getattr(config, 'fno_grad_clip', None)
+        self.ebm_grad_clip = getattr(config, 'ebm_grad_clip', None)
         self.early_stopper_fno = EarlyStopping(
             patience=config.patience, 
             verbose=True
@@ -894,6 +898,8 @@ class Trainer:
                 epoch_physics_loss += physics_loss
 
                 if (batch_idx + 1) % self.accumulation_steps == 0:
+                    if self.fno_grad_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(self.fno_model.parameters(), self.fno_grad_clip)
                     self.fno_optimizer.step()  #apply gradient update
                     self.fno_optimizer.zero_grad()  #reset gradient to zero
 
@@ -973,6 +979,8 @@ class Trainer:
                 epoch_loss += loss
 
                 if (batch_idx + 1) % self.accumulation_steps == 0:
+                    if self.ebm_grad_clip is not None:
+                        torch.nn.utils.clip_grad_norm_(self.ebm_model.parameters(), self.ebm_grad_clip)
                     self.ebm_optimizer.step()
                     self.ebm_optimizer.zero_grad()
 

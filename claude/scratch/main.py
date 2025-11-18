@@ -201,7 +201,8 @@ def create_baseline_config(pde_type: str, model_type: str, use_pinn: bool = Fals
         'fno_width': 48,
         'fno_depth': 3 if model_type in ['UFNO', 'UFFNO'] else 4,
         'fno_dropout': 0.1,
-        
+        'fno_spectral_dropout': 0.0,  # Spectral dropout for Fourier modes (use 0.15 for large models)
+
         # Training config
         'batch_size': 16,
         'epochs': 100,
@@ -351,7 +352,8 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
             modes2=config.fno_modes,
             width=config.fno_width,
             num_layers=4,
-            dropout=config.fno_dropout
+            dropout=config.fno_dropout,
+            spectral_dropout=getattr(config, 'fno_spectral_dropout', 0.0)
         )
     elif model_type == 'FFNO':
         fno_model = FFNO2d(
@@ -359,7 +361,8 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
             modes2=config.fno_modes,
             width=config.fno_width,
             num_layers=4,
-            dropout=config.fno_dropout
+            dropout=config.fno_dropout,
+            spectral_dropout=getattr(config, 'fno_spectral_dropout', 0.0)
         )
     elif model_type == 'UFNO':
         fno_model = UFNO2d(
@@ -367,7 +370,8 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
             modes2=config.fno_modes,
             width=config.fno_width,
             depth=config.fno_depth,
-            dropout=config.fno_dropout
+            dropout=config.fno_dropout,
+            spectral_dropout=getattr(config, 'fno_spectral_dropout', 0.0)
         )
     elif model_type == 'UFFNO':
         fno_model = UFFNO2d(
@@ -375,7 +379,8 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
             modes2=config.fno_modes,
             width=config.fno_width,
             depth=config.fno_depth,
-            dropout=config.fno_dropout
+            dropout=config.fno_dropout,
+            spectral_dropout=getattr(config, 'fno_spectral_dropout', 0.0)
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -473,6 +478,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'fno_depth': depth,
                             'lambda_phys': lambda_phys,
                             'fno_dropout': 0.1,
+                            'fno_spectral_dropout': 0.1,
                             'batch_size': 32,
                             'learning_rate': 0.005,
                             'fno_optimizer_config': {
