@@ -386,7 +386,62 @@ class Trainer:
         avg_val_loss = total_val_loss / len(self.fno_val_loader)
         avg_rel_l2 = total_rel_l2 / len(self.fno_val_loader)
         return avg_val_loss, avg_rel_l2
-    
+
+    def visualize_validation(self, epoch, num_samples=3):
+        """Visualize validation predictions (ground truth vs FNO prediction)"""
+        import matplotlib.pyplot as plt
+        import os
+
+        vis_dir = os.path.join(self.config.checkpoint_dir, 'visualizations')
+        os.makedirs(vis_dir, exist_ok=True)
+
+        self.fno_model.eval()
+        x, y_true = next(iter(self.fno_val_loader))
+        x, y_true = x.to(self.config.device), y.to(self.config.device)
+
+        with torch.no_grad():
+            y_pred = self.fno_model(x)
+
+            # Denormalize
+            dataset = self.fno_val_loader.dataset
+            if hasattr(dataset, 'dataset'):
+                dataset = dataset.dataset
+            y_true_denorm = dataset.denormalize(y_true).cpu().numpy()
+            y_pred_denorm = dataset.denormalize(y_pred).cpu().numpy()
+
+        num_samples = min(num_samples, y_true.shape[0])
+        fig, axes = plt.subplots(num_samples, 3, figsize=(12, 4*num_samples))
+        if num_samples == 1:
+            axes = [axes]
+
+        for i in range(num_samples):
+            # Ground truth
+            im0 = axes[i, 0].imshow(y_true_denorm[i, ..., 0], cmap='viridis', origin='lower')
+            axes[i, 0].set_title(f'Sample {i+1}: Ground Truth')
+            fig.colorbar(im0, ax=axes[i, 0])
+            axes[i, 0].axis('off')
+
+            # Prediction
+            im1 = axes[i, 1].imshow(y_pred_denorm[i, ..., 0], cmap='viridis', origin='lower')
+            axes[i, 1].set_title(f'Sample {i+1}: Prediction')
+            fig.colorbar(im1, ax=axes[i, 1])
+            axes[i, 1].axis('off')
+
+            # Error
+            error = np.abs(y_pred_denorm[i, ..., 0] - y_true_denorm[i, ..., 0])
+            im2 = axes[i, 2].imshow(error, cmap='hot', origin='lower')
+            axes[i, 2].set_title(f'Sample {i+1}: Absolute Error')
+            fig.colorbar(im2, ax=axes[i, 2])
+            axes[i, 2].axis('off')
+
+        plt.suptitle(f'Validation Results - Epoch {epoch}', fontsize=14, y=1.0)
+        plt.tight_layout()
+
+        fig_path = os.path.join(vis_dir, f'val_epoch_{epoch:04d}.png')
+        plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        self.logger.info(f"Validation visualization saved to {fig_path}")
+
     def validate_ebm(self):
         """
         Validation step for the EBM using Score Matching.
@@ -946,6 +1001,10 @@ class Trainer:
             if self.early_stopper_fno.early_stop:
                 self.logger.info("EARLY STOPPING FNO TRIGGERED, NO IMPROVEMENT IN SEVERAL EPOCHS")
                 break
+
+        # Visualize predictions after training completes
+        self.logger.info("Training completed, generating validation visualizations...")
+        self.visualize_validation(epoch, num_samples=3)
 
 
     def train_ebm(self, num_epochs):

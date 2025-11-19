@@ -465,7 +465,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                 if model_type in ['UFNO', 'UFFNO']:
                     depth_options = depth_list
                 else:
-                    depth_options = [8]  # Default depth for non-U architectures
+                    depth_options = [6]  # Default depth for non-U architectures
 
                 for depth in depth_options:
                     for lambda_phys in pinn_constants:
@@ -477,8 +477,8 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             'fno_width': width,
                             'fno_depth': depth,
                             'lambda_phys': lambda_phys,
-                            'fno_dropout': 0.1,
-                            'fno_spectral_dropout': 0.1,
+                            'fno_dropout': 0.05,
+                            'fno_spectral_dropout': 0.05,
                             'batch_size': 32,
                             'learning_rate': 0.005,
                             'fno_optimizer_config': {
@@ -491,6 +491,16 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                                 'type': 'exponential_lr',
                                 'gamma': 0.97
                             },
+                            # 'fno_scheduler_config': {
+                            #     'type': 'cosine_annealing',
+                            #     'T_max': 100,
+                            #     'eta_min': 1e-6
+                            # },
+                            # 'fno_scheduler_config': {
+                            #     'type': 'step_lr',
+                            #     'step_size': 5,
+                            #     'gamma': 0.97
+                            # },
                             'ebm_learning_rate': 0.0001,
                             'fno_epochs': 100, #100
                             'patience': 20,
