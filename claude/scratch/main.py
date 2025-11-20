@@ -465,7 +465,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                 if model_type in ['UFNO', 'UFFNO']:
                     depth_options = depth_list
                 else:
-                    depth_options = [6]  # Default depth for non-U architectures
+                    depth_options = [5]  # Default depth for non-U architectures
 
                 for depth in depth_options:
                     for lambda_phys in pinn_constants:
@@ -489,7 +489,7 @@ def generate_experiment_configs(pde_type, model_types, modes_list, width_list, d
                             },
                             'fno_scheduler_config': { #tomorrow: Change this to steplr
                                 'type': 'exponential_lr',
-                                'gamma': 0.97
+                                'gamma': 0.9 #change to 0.95 and 0.9 later
                             },
                             # 'fno_scheduler_config': {
                             #     'type': 'cosine_annealing',

@@ -9,6 +9,127 @@ from dataset import DarcyFlowGenerator, BurgersGenerator, PoissonGenerator
 import h5py
 
 
+class LazyPDEDataset(Dataset):
+    """
+    Lazy-loading dataset for PDE problems - loads data on-the-fly from HDF5.
+    Memory-efficient for large datasets with dense temporal sampling.
+
+    Only stores HDF5 file handle and metadata, loads individual samples during __getitem__.
+    """
+    def __init__(self, hdf5_file, sim_keys, time_step, pairs_per_sim, n_x, n_y,
+                 normalize_output=True, normalize_input=True, normalize_coords=True, consecutive=True):
+        self.file = hdf5_file
+        self.sim_keys = sim_keys
+        self.time_step = time_step
+        self.pairs_per_sim = pairs_per_sim
+        self.n_x = n_x
+        self.n_y = n_y
+        self.consecutive = consecutive
+
+        # Build index: (sim_idx, time_idx) for each sample
+        self.index = []
+        for sim_idx, key in enumerate(sim_keys):
+            n_t = self.file[key].shape[0]
+            max_t = n_t - time_step
+
+            # Choose sampling strategy
+            if not pairs_per_sim:
+                indices = range(max_t)  # All pairs
+            elif consecutive:
+                # Dense training: first N consecutive pairs [t0→t1, t1→t2, ...]
+                indices = range(min(pairs_per_sim, max_t))
+            else:
+                # Sparse sampling: evenly spaced across timeline
+                indices = np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
+
+            for t in indices:
+                self.index.append((sim_idx, int(t)))
+
+        # Coordinate grid (computed once, reused for all samples)
+        x_coords = np.linspace(0, 1, n_x)
+        y_coords = np.linspace(0, 1, n_y)
+        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+        self.grid_x = torch.FloatTensor(grid_x)
+        self.grid_y = torch.FloatTensor(grid_y)
+
+        # Normalization flags
+        self.normalize_output = normalize_output
+        self.normalize_input = normalize_input
+        self.normalize_coords = normalize_coords
+        self.input_mean = None
+        self.input_std = None
+        self.output_mean = None
+        self.output_std = None
+
+        # Compute normalization stats by sampling
+        if normalize_input or normalize_output:
+            self._compute_normalization_stats()
+
+    def _compute_normalization_stats(self, sample_size=1000):
+        """Compute normalization statistics by sampling (avoids loading all data)"""
+        sample_indices = np.random.choice(len(self), min(sample_size, len(self)), replace=False)
+
+        input_samples = []
+        output_samples = []
+
+        for idx in sample_indices:
+            sim_idx, t = self.index[idx]
+            data = self.file[self.sim_keys[sim_idx]][t:t+self.time_step+1, :, :, 0]  # Load only needed timesteps
+            input_samples.append(data[0])
+            output_samples.append(data[-1])
+
+        if self.normalize_input:
+            input_stack = np.stack(input_samples)
+            self.input_mean = float(input_stack.mean())
+            self.input_std = float(input_stack.std()) + 1e-8
+
+        if self.normalize_output:
+            output_stack = np.stack(output_samples)
+            self.output_mean = float(output_stack.mean())
+            self.output_std = float(output_stack.std()) + 1e-8
+
+        print(f"\nLazy dataset normalization stats (from {len(sample_indices)} samples):")
+        if self.normalize_input:
+            print(f"  Input: mean={self.input_mean:.4f}, std={self.input_std:.4f}")
+        if self.normalize_output:
+            print(f"  Output: mean={self.output_mean:.4f}, std={self.output_std:.4f}")
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        sim_idx, t = self.index[idx]
+
+        # Load ONLY the required timesteps from HDF5 (lazy loading!)
+        data = self.file[self.sim_keys[sim_idx]][t:t+self.time_step+1, :, :, 0]
+        input_field = data[0]
+        output_field = data[-1]
+
+        # Normalize input field
+        if self.normalize_input and self.input_mean is not None:
+            input_field = (input_field - self.input_mean) / self.input_std
+
+        # Build input X: [grid_x, grid_y, input_field]
+        X = torch.stack([self.grid_x, self.grid_y, torch.FloatTensor(input_field)], dim=-1)
+
+        # Normalize coordinates to [-1, 1]
+        if self.normalize_coords:
+            X[..., :2] = X[..., :2] * 2 - 1
+
+        # Normalize output
+        U = torch.FloatTensor(output_field).unsqueeze(-1)
+        if self.normalize_output and self.output_mean is not None:
+            U = (U - self.output_mean) / self.output_std
+
+        return X, U
+
+    def denormalize(self, U):
+        """Denormalize output back to original scale"""
+        if self.normalize_output and self.output_mean is not None:
+            return U * self.output_std + self.output_mean
+        return U
+
+
 class PDEDataset(Dataset):
     """
     PyTorch Dataset wrapper for synthetic PDE data with normalization.
@@ -690,6 +811,62 @@ class PDEBenchH5Loader:
 
         return PDEDataset(X, U, normalize_output=normalize_output,
                          normalize_input=normalize_input, normalize_coords=normalize_coords)
+
+    def to_dataset_lazy(self,
+                        key: str = None,
+                        time_step: int = 1,
+                        pairs_per_sim: int = None,
+                        normalize_output: bool = True,
+                        normalize_input: bool = True,
+                        normalize_coords: bool = True,
+                        load_all_simulations: bool = True,
+                        consecutive: bool = True):
+        """
+        Create lazy-loading dataset (memory-efficient for dense temporal data).
+
+        DOES NOT load all data into RAM - loads samples on-the-fly during training.
+        Perfect for dense training (time_step=1) with limited RAM.
+
+        Args:
+            key: HDF5 key name. If None, loads all simulation groups.
+            time_step: Timestep delta for prediction (default: 1 for t→t+1)
+            pairs_per_sim: Max pairs per simulation (use lower value to save memory)
+            normalize_output, normalize_input, normalize_coords: Normalization flags
+            load_all_simulations: If True, use ALL simulations (just indexes them, not loads)
+            consecutive: If True, take first N consecutive pairs [t0→t1, t1→t2, ...] for dense training.
+                        If False, sample evenly across timeline [t0, t49, t95, ...] for sparse sampling.
+
+        Returns:
+            LazyPDEDataset: Memory-efficient dataset with on-the-fly loading
+        """
+        # Get simulation keys (just stores keys, doesn't load data)
+        all_keys = self._get_all_data_keys() if (load_all_simulations and key is None) else [self._get_data_key(key)]
+
+        # Get dimensions from first simulation
+        first_sim_shape = self.file[all_keys[0]].shape
+        n_t, n_x, n_y, _ = first_sim_shape
+
+        sampling_mode = "CONSECUTIVE (dense)" if consecutive else "SPARSE (linspace)"
+        print(f"\nCreating LAZY dataset (memory-efficient):")
+        print(f"  Simulations: {len(all_keys)}")
+        print(f"  Temporal resolution: t → t+{time_step}")
+        print(f"  Pairs per sim: {pairs_per_sim if pairs_per_sim else n_t - time_step}")
+        print(f"  Sampling mode: {sampling_mode}")
+        print(f"  Grid size: {n_x}×{n_y}")
+        print(f"  Memory usage: MINIMAL (loads data on-the-fly)")
+
+        return LazyPDEDataset(
+            hdf5_file=self.file,
+            sim_keys=all_keys,
+            time_step=time_step,
+            pairs_per_sim=pairs_per_sim,
+            n_x=n_x,
+            n_y=n_y,
+            normalize_output=normalize_output,
+            normalize_input=normalize_input,
+            normalize_coords=normalize_coords,
+            consecutive=consecutive
+        )
 
     def to_dataset_steady_state(self,
                                 input_key: str,

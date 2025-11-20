@@ -387,6 +387,55 @@ class Trainer:
         avg_rel_l2 = total_rel_l2 / len(self.fno_val_loader)
         return avg_val_loss, avg_rel_l2
 
+    def validate_autoregressive(self, num_steps=10, horizon_targets=[10, 20, 40]):
+        """
+        Autoregressive rollout validation for dense training / sparse testing.
+
+        Repeatedly applies model: u(0) -> u(1) -> u(2) -> ... -> u(T)
+        Evaluates at sparse horizons (e.g., t=10, t=20, t=40)
+
+        Args:
+            num_steps: Number of autoregressive steps per rollout
+            horizon_targets: List of timesteps to evaluate (e.g., [10, 20, 40])
+
+        Returns:
+            dict: RelL2 errors at each horizon
+        """
+        self.fno_model.eval()
+        horizon_errors = {t: [] for t in horizon_targets}
+
+        with torch.no_grad():
+            for x_initial, y_targets in self.fno_val_loader:
+                x_initial = x_initial.to(self.config.device)
+
+                # Autoregressive rollout
+                u_current = x_initial[..., 2:3]  # Extract initial field (3rd channel)
+
+                for step in range(1, num_steps + 1):
+                    # Prepare input: [x_coord, y_coord, u_current]
+                    x_input = torch.cat([x_initial[..., :2], u_current], dim=-1)
+                    u_current = self.fno_model(x_input)
+
+                    # Evaluate at target horizons
+                    if step in horizon_targets and step - 1 < y_targets.shape[1]:
+                        y_target = y_targets[:, step - 1].to(self.config.device)
+
+                        # Denormalize for fair comparison
+                        dataset = self.fno_val_loader.dataset
+                        if hasattr(dataset, 'dataset'):
+                            dataset = dataset.dataset
+                        y_denorm = dataset.denormalize(y_target)
+                        pred_denorm = dataset.denormalize(u_current)
+
+                        rel_l2 = torch.norm(pred_denorm - y_denorm) / torch.norm(y_denorm)
+                        horizon_errors[step].append(rel_l2.item())
+
+        # Average errors at each horizon
+        results = {t: sum(errs) / len(errs) if errs else 0.0
+                   for t, errs in horizon_errors.items()}
+
+        return results
+
     def visualize_validation(self, epoch, num_samples=3):
         """Visualize validation predictions (ground truth vs FNO prediction)"""
         import matplotlib.pyplot as plt
@@ -397,7 +446,7 @@ class Trainer:
 
         self.fno_model.eval()
         x, y_true = next(iter(self.fno_val_loader))
-        x, y_true = x.to(self.config.device), y.to(self.config.device)
+        x, y_true = x.to(self.config.device), y_true.to(self.config.device)
 
         with torch.no_grad():
             y_pred = self.fno_model(x)
