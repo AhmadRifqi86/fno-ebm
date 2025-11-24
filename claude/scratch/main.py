@@ -559,8 +559,19 @@ def run_single_experiment(config, data_path, experiment_dir):
         # Load data
         log("Loading data...")
         with PDEBenchH5Loader(data_path) as loader:
-            full_dataset = loader.to_dataset(time_step=10, pairs_per_sim=25, load_all_simulations=True, batch_size=100)
+            use_lazy = config.get('lazy', False)
+            dense = config.get('dense', False)
 
+            if dense:
+                if use_lazy:
+                    full_dataset = loader.to_dataset_lazy(time_step=1, pairs_per_sim=75, load_all_simulations=True, consecutive=True)
+                else:
+                    full_dataset = loader.to_dataset(time_step=1, pairs_per_sim=25, load_all_simulations=True, batch_size=100, consecutive=True)
+            else:
+                if use_lazy:
+                    full_dataset = loader.to_dataset_lazy(time_step=10, pairs_per_sim=75, load_all_simulations=True, consecutive=False)
+                else:
+                    full_dataset = loader.to_dataset(time_step=10, pairs_per_sim=25, load_all_simulations=True, batch_size=100, consecutive=False)
             # Split data
             n_total = len(full_dataset)
             n_train = min(config['train_samples'], int(0.95 * n_total))
@@ -670,6 +681,15 @@ def run_single_experiment(config, data_path, experiment_dir):
         # Train the model
         log("Starting training...")
         trainer.train_staged()
+
+        # Autoregressive validation for dense training
+        if config.get('dense', False):
+            log(f"\n{'='*80}")
+            log("Final Autoregressive Validation")
+            log("="*80)
+            horizon_errors = trainer.validate_autoregressive()
+            for horizon, error in horizon_errors.items():
+                log(f"  t={horizon:3d}: RelL2 = {error:.4%}")
 
         # Training completed - trainer doesn't maintain history
         # Best model is saved via checkpoint mechanism
@@ -852,7 +872,7 @@ def run_single_experiment_old(config, data_path, experiment_dir):
     return results
 
 
-def run_experiment_grid(data_path, pde_type, model_types, modes_list, width_list, depth_list, pinn_constants, output_dir='experiments'):
+def run_experiment_grid(data_path, pde_type, model_types, modes_list, width_list, depth_list, pinn_constants, output_dir='experiments', dense=False, lazy=False):
     """
     Run full grid of experiments with different hyperparameters.
 
@@ -876,9 +896,11 @@ def run_experiment_grid(data_path, pde_type, model_types, modes_list, width_list
     # Generate all configurations
     configs = generate_experiment_configs(pde_type, model_types, modes_list, width_list, depth_list, pinn_constants)
 
-    # Add total count to each config for progress tracking
+    # Add total count and flags to each config for progress tracking
     for cfg in configs:
         cfg['total_experiments'] = len(configs)
+        cfg['dense'] = dense
+        cfg['lazy'] = lazy
 
     print("\n" + "="*80)
     print("EXPERIMENT GRID SEARCH")
@@ -1095,6 +1117,14 @@ def main():
     parser.add_argument('--num_temporal_splits', type=int, default=2,
                        help='Number of temporal segments per trajectory (default: 2 = 2x data)')
 
+    # Dense training flag
+    parser.add_argument('--dense', action='store_true',
+                       help='Enable dense training (time_step=1, consecutive=True)')
+
+    # Lazy loading flag
+    parser.add_argument('--lazy', action='store_true',
+                       help='Enable lazy loading (memory-efficient, loads data on-the-fly)')
+
     args = parser.parse_args()
 
     # Execute based on mode
@@ -1141,7 +1171,9 @@ def main():
             width_list=args.widths,
             depth_list=args.depths,
             pinn_constants=args.pinn_constants,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            dense=args.dense,
+            lazy=args.lazy
         )
 
 

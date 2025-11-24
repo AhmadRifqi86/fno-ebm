@@ -14,11 +14,11 @@ class LazyPDEDataset(Dataset):
     Lazy-loading dataset for PDE problems - loads data on-the-fly from HDF5.
     Memory-efficient for large datasets with dense temporal sampling.
 
-    Only stores HDF5 file handle and metadata, loads individual samples during __getitem__.
+    Only stores HDF5 file path and metadata, opens file when needed during __getitem__.
     """
-    def __init__(self, hdf5_file, sim_keys, time_step, pairs_per_sim, n_x, n_y,
+    def __init__(self, hdf5_file_path, sim_keys, time_step, pairs_per_sim, n_x, n_y,
                  normalize_output=True, normalize_input=True, normalize_coords=True, consecutive=True):
-        self.file = hdf5_file
+        self.file_path = hdf5_file_path
         self.sim_keys = sim_keys
         self.time_step = time_step
         self.pairs_per_sim = pairs_per_sim
@@ -26,24 +26,26 @@ class LazyPDEDataset(Dataset):
         self.n_y = n_y
         self.consecutive = consecutive
 
-        # Build index: (sim_idx, time_idx) for each sample
-        self.index = []
-        for sim_idx, key in enumerate(sim_keys):
-            n_t = self.file[key].shape[0]
-            max_t = n_t - time_step
+        # Open file temporarily to build index
+        with h5py.File(self.file_path, 'r') as f:
+            # Build index: (sim_idx, time_idx) for each sample
+            self.index = []
+            for sim_idx, key in enumerate(sim_keys):
+                n_t = f[key].shape[0]
+                max_t = n_t - time_step
 
-            # Choose sampling strategy
-            if not pairs_per_sim:
-                indices = range(max_t)  # All pairs
-            elif consecutive:
-                # Dense training: first N consecutive pairs [t0→t1, t1→t2, ...]
-                indices = range(min(pairs_per_sim, max_t))
-            else:
-                # Sparse sampling: evenly spaced across timeline
-                indices = np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
+                # Choose sampling strategy
+                if not pairs_per_sim:
+                    indices = range(max_t)  # All pairs
+                elif consecutive:
+                    # Dense training: first N consecutive pairs [t0→t1, t1→t2, ...]
+                    indices = range(min(pairs_per_sim, max_t))
+                else:
+                    # Sparse sampling: evenly spaced across timeline
+                    indices = np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
 
-            for t in indices:
-                self.index.append((sim_idx, int(t)))
+                for t in indices:
+                    self.index.append((sim_idx, int(t)))
 
         # Coordinate grid (computed once, reused for all samples)
         x_coords = np.linspace(0, 1, n_x)
@@ -72,11 +74,12 @@ class LazyPDEDataset(Dataset):
         input_samples = []
         output_samples = []
 
-        for idx in sample_indices:
-            sim_idx, t = self.index[idx]
-            data = self.file[self.sim_keys[sim_idx]][t:t+self.time_step+1, :, :, 0]  # Load only needed timesteps
-            input_samples.append(data[0])
-            output_samples.append(data[-1])
+        with h5py.File(self.file_path, 'r') as f:
+            for idx in sample_indices:
+                sim_idx, t = self.index[idx]
+                data = f[self.sim_keys[sim_idx]][t:t+self.time_step+1, :, :, 0]  # Load only needed timesteps
+                input_samples.append(data[0])
+                output_samples.append(data[-1])
 
         if self.normalize_input:
             input_stack = np.stack(input_samples)
@@ -100,10 +103,11 @@ class LazyPDEDataset(Dataset):
     def __getitem__(self, idx):
         sim_idx, t = self.index[idx]
 
-        # Load ONLY the required timesteps from HDF5 (lazy loading!)
-        data = self.file[self.sim_keys[sim_idx]][t:t+self.time_step+1, :, :, 0]
-        input_field = data[0]
-        output_field = data[-1]
+        # Open file and load ONLY the required timesteps (lazy loading!)
+        with h5py.File(self.file_path, 'r') as f:
+            data = f[self.sim_keys[sim_idx]][t:t+self.time_step+1, :, :, 0]
+            input_field = data[0]
+            output_field = data[-1]
 
         # Normalize input field
         if self.normalize_input and self.input_mean is not None:
@@ -734,7 +738,8 @@ class PDEBenchH5Loader:
                    normalize_input: bool = True,
                    normalize_coords: bool = True,
                    load_all_simulations: bool = True,
-                   batch_size: int = 100):
+                   batch_size: int = 100,
+                   consecutive: bool = True):
         """
         Convert PDEBench HDF5 to PDEDataset using autoregressive consecutive pairs.
 
@@ -785,9 +790,14 @@ class PDEBenchH5Loader:
             for sim_key in batch_keys:
                 data = self.file[sim_key][:]  # (n_t, n_x, n_y, n_fields)
 
-                # Create consecutive pairs: (t, t+step) for t in [0, n_t-step)
+                # Create pairs based on sampling strategy
                 max_t = n_t - time_step
-                indices = range(max_t) if not pairs_per_sim else np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)
+                if not pairs_per_sim:
+                    indices = range(max_t)  # All pairs
+                elif consecutive:
+                    indices = range(min(pairs_per_sim, max_t))  # First N consecutive
+                else:
+                    indices = np.linspace(0, max_t-1, min(pairs_per_sim, max_t), dtype=int)  # Sparse
 
                 for t in indices:
                     input_field[sample_idx] = data[t, :, :, 0]
@@ -856,7 +866,7 @@ class PDEBenchH5Loader:
         print(f"  Memory usage: MINIMAL (loads data on-the-fly)")
 
         return LazyPDEDataset(
-            hdf5_file=self.file,
+            hdf5_file_path=self.filepath,
             sim_keys=all_keys,
             time_step=time_step,
             pairs_per_sim=pairs_per_sim,
