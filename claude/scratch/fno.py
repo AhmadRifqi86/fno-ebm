@@ -1131,7 +1131,7 @@ class FFNO2d(nn.Module):
 
         # Factorized Fourier layers
         self.conv_layers = nn.ModuleList([
-            FactorizedSpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+            FactorizedSpectralConv2d(self.width, self.width, self.modes1, self.modes2, spectral_dropout=dropout)
             for _ in range(self.num_layers)
         ])
 
