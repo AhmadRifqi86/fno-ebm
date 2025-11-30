@@ -362,7 +362,7 @@ def train_baseline(data_path: str, pde_type: str, model_type: str, use_pinn: boo
             width=config.fno_width,
             num_layers=4,
             dropout=config.fno_dropout,
-            spectral_dropout=getattr(config, 'fno_spectral_dropout', 0.0)
+            spectral_dropout=0.05#getattr(config, 'fno_spectral_dropout', 0.0)
         )
     elif model_type == 'UFNO':
         fno_model = UFNO2d(

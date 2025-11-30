@@ -878,6 +878,191 @@ class PDEBenchH5Loader:
             consecutive=consecutive
         )
 
+    def flatten_dataset(self,
+                        time_step: int = 1,
+                        num_samples: int = None,
+                        normalize_output: bool = True,
+                        normalize_input: bool = True,
+                        normalize_coords: bool = True,
+                        dataset_type: str = 'auto'):
+        """
+        Convert flat-structure datasets (Darcy Flow, Navier-Stokes) to PDEDataset.
+
+        Handles both:
+        - Darcy Flow: (n_samples, n_t, n_x) flat tensor structure
+        - Navier-Stokes: (n_simulations, n_t, n_x, n_y, n_channels) structure
+
+        Args:
+            time_step: Timestep delta for prediction (default: 1 for t→t+1)
+            num_samples: Number of samples to load. If None, loads all.
+            normalize_output: Normalize output to N(0,1)
+            normalize_input: Normalize input fields to N(0,1)
+            normalize_coords: Normalize coordinates to [-1, 1]
+            dataset_type: 'darcy', 'navier-stokes', or 'auto' (auto-detect)
+
+        Returns:
+            PDEDataset: Dataset ready for training
+        """
+        # Auto-detect dataset type
+        if dataset_type == 'auto':
+            keys = list(self.file.keys())
+            if 'tensor' in keys and 't-coordinate' in keys:
+                dataset_type = 'darcy'
+            elif 'velocity' in keys and 'force' in keys:
+                dataset_type = 'navier-stokes'
+            else:
+                raise ValueError(f"Cannot auto-detect dataset type. Available keys: {keys}")
+
+        print(f"\nLoading {dataset_type} dataset with flatten_dataset...")
+
+        if dataset_type == 'darcy':
+            return self._flatten_darcy(time_step, num_samples, normalize_output,
+                                      normalize_input, normalize_coords)
+        elif dataset_type == 'navier-stokes':
+            return self._flatten_navier_stokes(time_step, num_samples, normalize_output,
+                                              normalize_input, normalize_coords)
+        else:
+            raise ValueError(f"Unknown dataset_type: {dataset_type}. Use 'darcy', 'navier-stokes', or 'auto'")
+
+    def _flatten_darcy(self, time_step, num_samples, normalize_output,
+                      normalize_input, normalize_coords):
+        """Handle Darcy Flow flat structure: tensor (n_samples, n_t, n_x)"""
+        tensor_data = self.file['tensor']  # Shape: (10000, 201, 1024)
+        t_coords = self.file['t-coordinate'][:]  # Shape: (202,)
+        x_coords = self.file['x-coordinate'][:]  # Shape: (1024,)
+
+        n_total_samples, n_t, n_x = tensor_data.shape
+
+        print(f"  Darcy Flow structure:")
+        print(f"    tensor: {tensor_data.shape}")
+        print(f"    t-coordinate: {t_coords.shape}")
+        print(f"    x-coordinate: {x_coords.shape}")
+
+        # Determine how many samples to load
+        if num_samples is None:
+            num_samples = n_total_samples
+        else:
+            num_samples = min(num_samples, n_total_samples)
+
+        # Since Darcy is 1D spatial, we need to create 2D grid
+        # We'll treat this as (n_x, 1) spatial grid
+        n_y = 1
+
+        # Create input-output pairs: t → t+time_step
+        max_t = n_t - time_step
+        input_fields = []
+        output_fields = []
+
+        print(f"  Creating {num_samples} pairs with time_step={time_step}")
+
+        for i in range(num_samples):
+            # For each sample, take initial time and final time
+            t_idx = 0  # Start at t=0
+            input_fields.append(tensor_data[i, t_idx, :])  # Shape: (1024,)
+            output_fields.append(tensor_data[i, t_idx + time_step, :])  # Shape: (1024,)
+
+        input_field = np.stack(input_fields)  # (num_samples, n_x)
+        output_field = np.stack(output_fields)  # (num_samples, n_x)
+
+        # Reshape to 2D: (num_samples, n_x, 1)
+        input_field = input_field[..., np.newaxis]  # (num_samples, n_x, 1)
+        output_field = output_field[..., np.newaxis]  # (num_samples, n_x, 1)
+
+        # Generate coordinate grids (1D problem, so y is trivial)
+        x_coords_norm = np.linspace(0, 1, n_x)
+        y_coords_norm = np.array([0.5])  # Single y coordinate
+        grid_x, grid_y = np.meshgrid(x_coords_norm, y_coords_norm, indexing='ij')
+
+        # Create X: (num_samples, n_x, 1, 3)
+        X = np.zeros((num_samples, n_x, n_y, 3), dtype=np.float32)
+        X[:, :, :, 0] = grid_x[np.newaxis, :, :]
+        X[:, :, :, 1] = grid_y[np.newaxis, :, :]
+        X[:, :, :, 2] = input_field
+
+        # Create U: (num_samples, n_x, 1, 1)
+        U = output_field[..., np.newaxis]  # (num_samples, n_x, 1, 1)
+
+        print(f"  Created X: {X.shape}, U: {U.shape}")
+        print(f"  Input field range: [{input_field.min():.4f}, {input_field.max():.4f}]")
+        print(f"  Output field range: [{output_field.min():.4f}, {output_field.max():.4f}]")
+
+        return PDEDataset(X, U,
+                         normalize_output=normalize_output,
+                         normalize_input=normalize_input,
+                         normalize_coords=normalize_coords)
+
+    def _flatten_navier_stokes(self, time_step, num_samples, normalize_output,
+                              normalize_input, normalize_coords):
+        """Handle Navier-Stokes flat structure: velocity (n_sims, n_t, n_x, n_y, 2)"""
+        velocity_data = self.file['velocity']  # Shape: (4, 1000, 512, 512, 2)
+        force_data = self.file['force']  # Shape: (4, 512, 512, 2)
+
+        n_sims, n_t, n_x, n_y, n_channels = velocity_data.shape
+
+        print(f"  Navier-Stokes structure:")
+        print(f"    velocity: {velocity_data.shape}")
+        print(f"    force: {force_data.shape}")
+
+        # For Navier-Stokes, we'll use first channel (u-velocity) as output
+        # and force as input (optional, or use initial velocity)
+
+        input_fields = []
+        output_fields = []
+
+        # Determine how many simulation pairs to create
+        total_pairs_available = n_sims * (n_t - time_step)
+        if num_samples is None:
+            num_samples = total_pairs_available
+        else:
+            num_samples = min(num_samples, total_pairs_available)
+
+        print(f"  Creating {num_samples} pairs from {n_sims} simulations with time_step={time_step}")
+
+        pairs_per_sim = num_samples // n_sims
+        remainder = num_samples % n_sims
+
+        pair_count = 0
+        for sim_idx in range(n_sims):
+            # Determine how many pairs from this simulation
+            n_pairs = pairs_per_sim + (1 if sim_idx < remainder else 0)
+
+            for t_idx in range(min(n_pairs, n_t - time_step)):
+                # Input: velocity at time t (use first channel: u-velocity)
+                input_fields.append(velocity_data[sim_idx, t_idx, :, :, 0])  # (512, 512)
+                # Output: velocity at time t+time_step
+                output_fields.append(velocity_data[sim_idx, t_idx + time_step, :, :, 0])  # (512, 512)
+                pair_count += 1
+                if pair_count >= num_samples:
+                    break
+            if pair_count >= num_samples:
+                break
+
+        input_field = np.stack(input_fields)  # (num_samples, n_x, n_y)
+        output_field = np.stack(output_fields)  # (num_samples, n_x, n_y)
+
+        # Generate coordinate grids
+        x_coords_norm = np.linspace(0, 1, n_x)
+        y_coords_norm = np.linspace(0, 1, n_y)
+        grid_x, grid_y = np.meshgrid(x_coords_norm, y_coords_norm, indexing='ij')
+
+        # Create X: (num_samples, n_x, n_y, 3)
+        X = np.zeros((pair_count, n_x, n_y, 3), dtype=np.float32)
+        X[:, :, :, 0] = grid_x[np.newaxis, :, :]
+        X[:, :, :, 1] = grid_y[np.newaxis, :, :]
+        X[:, :, :, 2] = input_field
+
+        # Create U: (num_samples, n_x, n_y, 1)
+        U = output_field[..., np.newaxis]  # (num_samples, n_x, n_y, 1)
+
+        print(f"  Created X: {X.shape}, U: {U.shape}")
+        print(f"  Input field range: [{input_field.min():.4f}, {input_field.max():.4f}]")
+        print(f"  Output field range: [{output_field.min():.4f}, {output_field.max():.4f}]")
+
+        return PDEDataset(X, U,
+                         normalize_output=normalize_output,
+                         normalize_input=normalize_input,
+                         normalize_coords=normalize_coords)
+
     def to_dataset_steady_state(self,
                                 input_key: str,
                                 output_key: str,
