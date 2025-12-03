@@ -1,0 +1,176 @@
+# UQ Paper Training Configuration
+# Structured configuration for FNO-EBM training on 4 PDEs
+
+# ============================================================================
+# FNO Model Configuration
+# ============================================================================
+fno_model:
+  spectral: 'Factorized'  # Options: 'Factorized', 'Binned', 'Hybrid', 'Vanilla'
+  modes: 12               # Number of Fourier modes
+  width: 64               # Hidden dimension width
+  depth: 4                # Number of layers
+  in_channels: 3          # Input channels [x, y, input_field]
+  out_channels: 1         # Output channels
+  dropout: 0.0            # Dropout rate
+  spectral_dropout: 0.0   # Spectral dropout (for Fourier modes)
+  activation: 'gelu'      # Activation function
+
+# ============================================================================
+# EBM Model Configuration
+# ============================================================================
+ebm_model:
+  base: 'kan'             # Options: 'mlp', 'kan'
+  input_dim: 4            # [x, y, y_fno, y_true]
+  hidden_dim: 64          # Hidden dimension
+  num_layers: 3           # Number of layers
+  
+  # KAN-specific (only used if base='kan')
+  kan_grid_size: 5        # B-spline grid points
+  kan_spline_order: 3     # Cubic splines
+  
+  # MLP-specific (only used if base='mlp')
+  mlp_activation: 'gelu'  # Activation for MLP
+  
+  # EBM training
+  score_matching_type: 'weighted'  # 'standard' or 'weighted'
+  noise_levels: [0.01, 0.02, 0.05]
+  energy_reg_weight: 0.001
+
+# ============================================================================
+# FNO Optimizer Configuration
+# ============================================================================
+fno_optim:
+  name: 'adamw'           # Options: 'adam', 'adamw', 'sgd', 'rmsprop'
+  lr: 0.001               # Learning rate
+  weight_decay: 0.0001    # Weight decay
+  betas: [0.9, 0.999]     # Adam betas
+  momentum: 0.9           # SGD momentum (if using sgd)
+
+# ============================================================================
+# EBM Optimizer Configuration
+# ============================================================================
+ebm_optim:
+  name: 'adam'            # Options: 'adam', 'adamw', 'sgd', 'rmsprop'
+  lr: 0.0001              # Learning rate (typically lower than FNO)
+  weight_decay: 0.00001   # Weight decay
+  betas: [0.9, 0.999]     # Adam betas
+
+# ============================================================================
+# FNO Scheduler Configuration
+# ============================================================================
+fno_scheduler: 
+  name: 'cosine_annealing'  # Options: 'step_lr', 'exponential_lr', 'cosine_annealing', 'reduce_on_plateau'
+  T_max: 100                # Cosine annealing period
+  eta_min: 0.000001         # Minimum learning rate
+  
+  # Alternative: StepLR
+  # step_size: 10
+  # gamma: 0.95
+  
+  # Alternative: ReduceLROnPlateau
+  # mode: 'min'
+  # factor: 0.5
+  # patience: 20
+  # min_lr: 0.000001
+
+  # Alternative 'exponential_lr'
+  # gamma: 0.9
+
+# ============================================================================
+# EBM Scheduler Configuration
+# ============================================================================
+ebm_scheduler:
+  name: 'cosine_annealing'  # Options: 'step_lr', 'exponential_lr', 'cosine_annealing', 'reduce_on_plateau'
+  T_max: 50                 # Cosine annealing period
+  eta_min: 0.000001         # Minimum learning rate
+
+  # Alternative 'exponential_lr'
+  # gamma: 0.9
+
+# ============================================================================
+# Training Configuration
+# ============================================================================
+training:
+  # General
+  device: 'cuda'          # 'cuda' or 'cpu'
+  seed: 42                # Random seed
+  
+  # FNO training
+  fno_epochs: 100         # Number of FNO training epochs
+  fno_patience: 20        # Early stopping patience
+  
+  # EBM training
+  ebm_epochs: 50          # Number of EBM training epochs
+  ebm_patience: 15        # Early stopping patience
+  
+  # Data
+  batch_size: 32          # Batch size
+  train_ratio: 0.8        # Training data ratio
+  val_ratio: 0.1          # Validation data ratio
+  max_samples: null       # Max samples to load (null = all)
+  
+  # Tracking
+  enable_tracking: true   # Enable gradient tracking
+  tracking_backend: 'custom'  # 'custom' or 'tensorboard'
+  log_dir: './runs'       # Log directory
+  checkpoint_dir: './checkpoints'  # Checkpoint directory
+  
+  # Logging intervals
+  log_interval: 10        # Log every N batches
+  save_interval: 10       # Save checkpoint every N epochs
+
+# ============================================================================
+# Data Configuration
+# ============================================================================
+data:
+  pde_type: 'burgers'     # Options: 'burgers', 'advection', 'diffusion_reaction', 'navier_stokes'
+  data_path: './data/burgers.hdf5'  # Path to data file
+  
+  # Multi-nu experiments (1D PDEs only)
+  nu_values: [0.001, 0.01, 0.1]  # List of nu values (null = all)
+  
+  # Normalization
+  normalize_output: true   # Normalize output to N(0,1)
+  normalize_input: true    # Normalize input fields to N(0,1)
+  normalize_coords: true   # Normalize coordinates to [-1, 1]
+
+# ============================================================================
+# Experiment Configuration
+# ============================================================================
+experiment:
+  name: 'burgers_multi_nu'  # Experiment name
+  output_dir: './experiments'  # Output directory
+  save_config: true         # Save config to experiment dir
+  save_results: true        # Save results to experiment dir
+
+# ============================================================================
+# PDE-Specific Configurations (overrides)
+# ============================================================================
+pde_configs:
+  burgers:
+    fno_model:
+      modes: 16
+      width: 64
+    training:
+      batch_size: 64
+  
+  advection:
+    fno_model:
+      modes: 16
+      width: 64
+    training:
+      batch_size: 64
+  
+  diffusion_reaction:
+    fno_model:
+      modes: 12
+      width: 32
+    training:
+      batch_size: 16
+  
+  navier_stokes:
+    fno_model:
+      modes: 20
+      width: 96
+    training:
+      batch_size: 16

@@ -558,33 +558,49 @@ def run_single_experiment(config, data_path, experiment_dir):
 
         # Load data
         log("Loading data...")
-        with PDEBenchH5Loader(data_path) as loader:
-            use_lazy = config.get('lazy', False)
-            dense = config.get('dense', False)
 
-            if dense:
-                if use_lazy:
-                    full_dataset = loader.to_dataset_lazy(time_step=1, pairs_per_sim=75, load_all_simulations=True, consecutive=True)
+        # Detect file format and use appropriate loader
+        if data_path.endswith('.pt'):
+            log(f"Detected PyTorch .pt format: {data_path}")
+            from datautils import load_pt_dataset
+            full_dataset = load_pt_dataset(
+                data_path,
+                normalize_output=True,
+                normalize_input=True,
+                normalize_coords=True
+            )
+        elif data_path.endswith(('.h5', '.hdf5')):
+            log(f"Detected HDF5 format: {data_path}")
+            with PDEBenchH5Loader(data_path) as loader:
+                use_lazy = config.get('lazy', False)
+                dense = config.get('dense', False)
+
+                if dense:
+                    if use_lazy:
+                        full_dataset = loader.to_dataset_lazy(time_step=1, pairs_per_sim=75, load_all_simulations=True, consecutive=True)
+                    else:
+                        full_dataset = loader.to_dataset(time_step=1, pairs_per_sim=25, load_all_simulations=True, batch_size=100, consecutive=True)
                 else:
-                    full_dataset = loader.to_dataset(time_step=1, pairs_per_sim=25, load_all_simulations=True, batch_size=100, consecutive=True)
-            else:
-                if use_lazy:
-                    full_dataset = loader.to_dataset_lazy(time_step=10, pairs_per_sim=75, load_all_simulations=True, consecutive=False)
-                else:
-                    full_dataset = loader.to_dataset(time_step=10, pairs_per_sim=25, load_all_simulations=True, batch_size=100, consecutive=False)
-            # Split data
-            n_total = len(full_dataset)
-            n_train = min(config['train_samples'], int(0.95 * n_total))
-            n_val = min(config['val_samples'], int(0.025 * n_total))
+                    if use_lazy:
+                        full_dataset = loader.to_dataset_lazy(time_step=10, pairs_per_sim=75, load_all_simulations=True, consecutive=False)
+                    else:
+                        full_dataset = loader.to_dataset(time_step=10, pairs_per_sim=25, load_all_simulations=True, batch_size=100, consecutive=False)
+        else:
+            raise ValueError(f"Unsupported file format: {data_path}. Use .pt, .h5, or .hdf5")
 
-            indices = np.random.RandomState(seed=42).permutation(n_total)
-            train_idx = indices[:n_train]
-            val_idx = indices[n_train:n_train+n_val]
+        # Split data
+        n_total = len(full_dataset)
+        n_train = min(config['train_samples'], int(0.95 * n_total))
+        n_val = min(config['val_samples'], int(0.025 * n_total))
 
-            train_dataset = Subset(full_dataset, train_idx)
-            val_dataset = Subset(full_dataset, val_idx)
+        indices = np.random.RandomState(seed=42).permutation(n_total)
+        train_idx = indices[:n_train]
+        val_idx = indices[n_train:n_train+n_val]
 
-            log(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+        train_dataset = Subset(full_dataset, train_idx)
+        val_dataset = Subset(full_dataset, val_idx)
+
+        log(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
 
         # Create data loaders
         train_loader = DataLoader(

@@ -237,7 +237,111 @@ class FactorizedSpectralConv2d(nn.Module):
 
         return x_out
 
+import torch
+import torch.nn as nn
+import torch.fft
 
+class BinnedSpectralConv2d(nn.Module):
+    """HFNO Spectral Convolution with Wavenumber Binning"""
+    def __init__(self, in_channels, out_channels, size, num_bins=3):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.size = size
+        self.num_bins = num_bins
+        
+        # Define wavenumber bin boundaries
+        # e.g., for size=64, num_bins=3: [0-21, 21-42, 42-64]
+        self.bin_boundaries = self._create_bin_boundaries(size, num_bins)
+        
+        # Separate FCNN (MLP) for each frequency bin
+        self.bin_networks = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(in_channels * 2, in_channels * 4),  # *2 for complex (real, imag)
+                nn.GELU(),
+                nn.Linear(in_channels * 4, out_channels * 2)  # *2 for complex output
+            )
+            for _ in range(num_bins)
+        ])
+    
+    def _create_bin_boundaries(self, size, num_bins):
+        """Create boundaries for wavenumber bins"""
+        max_k = size // 2 + 1  # For rfft2
+        boundaries = []
+        bin_size = max_k // num_bins
+        
+        for i in range(num_bins):
+            start = i * bin_size
+            end = (i + 1) * bin_size if i < num_bins - 1 else max_k
+            boundaries.append((start, end))
+        
+        return boundaries
+    
+    def _get_bin_mask(self, kx, ky, bin_idx):
+        """Create mask for a specific wavenumber bin"""
+        start, end = self.bin_boundaries[bin_idx]
+        # Compute radial wavenumber: k = sqrt(kx^2 + ky^2)
+        k_radial = torch.sqrt(kx**2 + ky**2)
+        mask = (k_radial >= start) & (k_radial < end)
+        return mask
+    
+    def forward(self, x):
+        batch, channels, H, W = x.shape
+        
+        # FFT to frequency domain
+        x_ft = torch.fft.rfft2(x, norm='ortho')  # (batch, channels, H, W//2+1)
+        
+        # Create wavenumber grids
+        kx = torch.arange(0, H, device=x.device).view(-1, 1).float()
+        ky = torch.arange(0, W//2 + 1, device=x.device).view(1, -1).float()
+        kx = kx.expand(H, W//2 + 1)
+        ky = ky.expand(H, W//2 + 1)
+        
+        # Initialize output in frequency domain
+        out_ft = torch.zeros_like(x_ft, dtype=torch.complex64)
+        
+        # Process each frequency bin separately
+        for bin_idx in range(self.num_bins):
+            # Get mask for current bin
+            bin_mask = self._get_bin_mask(kx, ky, bin_idx)  # (H, W//2+1)
+            
+            # Extract frequencies in this bin
+            # Convert complex to real representation (real, imag)
+            x_ft_real = torch.view_as_real(x_ft)  # (batch, channels, H, W//2+1, 2)
+            
+            # Flatten spatial dimensions for the bin
+            bin_indices = bin_mask.nonzero(as_tuple=False)  # (num_points, 2)
+            
+            if bin_indices.shape[0] > 0:
+                # Extract data at bin locations
+                bin_data = []
+                for b in range(batch):
+                    points = []
+                    for idx in bin_indices:
+                        h_idx, w_idx = idx[0], idx[1]
+                        point = x_ft_real[b, :, h_idx, w_idx, :].flatten()  # (channels*2,)
+                        points.append(point)
+                    bin_data.append(torch.stack(points))  # (num_points, channels*2)
+                bin_data = torch.stack(bin_data)  # (batch, num_points, channels*2)
+                
+                # Process through bin-specific network
+                bin_output = self.bin_networks[bin_idx](bin_data)  # (batch, num_points, out_channels*2)
+                
+                # Reshape back to complex
+                bin_output = bin_output.view(batch, -1, self.out_channels, 2)  # (batch, num_points, out_channels, 2)
+                bin_output_complex = torch.view_as_complex(bin_output.contiguous())  # (batch, num_points, out_channels)
+                
+                # Place back into output
+                for b in range(batch):
+                    for point_idx, idx in enumerate(bin_indices):
+                        h_idx, w_idx = idx[0], idx[1]
+                        out_ft[b, :, h_idx, w_idx] = bin_output_complex[b, point_idx, :]
+        
+        # IFFT back to spatial domain
+        out = torch.fft.irfft2(out_ft, s=(H, W), norm='ortho')
+        
+        return out
+    
 # ============================================================================
 # FNO1d: 1D Fourier Neural Operator
 # ============================================================================
@@ -485,6 +589,151 @@ class FFNO2d(nn.Module):
         x = self.dropout_out(x)
         x = self.fc2(x)  # (batch, n_x, n_y, out_channels)
 
+        return x
+
+
+class ConvResidualBlock(nn.Module):
+    """Convolutional residual block for capturing local high-frequency details"""
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.bn2 = nn.BatchNorm2d(channels)
+        
+    def forward(self, x):
+        residual = x
+        out = F.gelu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out = out + residual
+        out = F.gelu(out)
+        return out
+
+
+class ChannelAttention(nn.Module):
+    """Channel attention for adaptive feature selection"""
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(),
+            nn.Linear(channels // reduction, channels, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        avg_out = self.fc(self.avg_pool(x).view(b, c))
+        max_out = self.fc(self.max_pool(x).view(b, c))
+        out = self.sigmoid(avg_out + max_out).view(b, c, 1, 1)
+        return x * out
+
+
+class SpatialAttention(nn.Module):
+    """Spatial attention for focusing on important regions"""
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size//2)
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.cat([avg_out, max_out], dim=1)
+        out = self.sigmoid(self.conv(out))
+        return x * out
+
+
+class EquivariantAttention(nn.Module):
+    """Combined channel and spatial attention (translation equivariant)"""
+    def __init__(self, channels):
+        super().__init__()
+        self.channel_att = ChannelAttention(channels)
+        self.spatial_att = SpatialAttention()
+    
+    def forward(self, x):
+        x = self.channel_att(x)
+        x = self.spatial_att(x)
+        return x
+
+
+class HierarchicalFourierBlock(nn.Module):
+    """Single hierarchical block combining Fourier, Conv, and Attention"""
+    def __init__(self, width, modes1, modes2):
+        super().__init__()
+        
+        # Fourier component (global, low-frequency)
+        self.spectral_conv = SpectralConv2d(width, width, modes1, modes2)
+        
+        # Convolutional component (local, high-frequency)
+        self.conv_residual = ConvResidualBlock(width)
+        
+        # Attention mechanism (adaptive weighting)
+        self.attention = EquivariantAttention(width)
+        
+        # Skip connection
+        self.w = nn.Conv2d(width, width, 1)
+        
+    def forward(self, x):
+        # Fourier branch (global)
+        x_fourier = self.spectral_conv(x)
+        
+        # Convolutional branch (local)
+        x_conv = self.conv_residual(x)
+        
+        # Skip connection
+        x_skip = self.w(x)
+        
+        # Combine all branches
+        x_combined = x_fourier + x_conv + x_skip
+        
+        # Apply attention
+        x_out = self.attention(x_combined)
+        
+        return x_out
+
+
+class HFNO2d(nn.Module):
+    """Hierarchical Fourier Neural Operator with Conv-Residual and Attention"""
+    def __init__(self, modes1, modes2, width, in_channels=3, out_channels=1, n_layers=4):
+        super().__init__()
+        
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.width = width
+        self.n_layers = n_layers
+        
+        # Lifting layer
+        self.fc0 = nn.Linear(in_channels, self.width)
+        
+        # Hierarchical Fourier blocks
+        self.hf_blocks = nn.ModuleList([
+            HierarchicalFourierBlock(self.width, self.modes1, self.modes2)
+            for _ in range(self.n_layers)
+        ])
+        
+        # Projection layer
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, out_channels)
+
+    def forward(self, x):
+        # x: (batch, H, W, channels)
+        x = self.fc0(x)  # Lift to width channels
+        x = x.permute(0, 3, 1, 2)  # (batch, width, H, W)
+        
+        # Process through hierarchical blocks
+        for i in range(self.n_layers):
+            x = self.hf_blocks[i](x)
+            if i < self.n_layers - 1:
+                x = F.gelu(x)
+        
+        x = x.permute(0, 2, 3, 1)  # (batch, H, W, width)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)
         return x
 
 

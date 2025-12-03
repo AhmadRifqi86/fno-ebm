@@ -28,12 +28,13 @@ class FactorizedSpectralConv2d(nn.Module):
 
     Key for data-limited scenarios (e.g., 1000 training samples).
     """
-    def __init__(self, in_channels, out_channels, modes1, modes2):
+    def __init__(self, in_channels, out_channels, modes1, modes2, spectral_dropout=0.0):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.modes1 = modes1
         self.modes2 = modes2
+        self.spectral_dropout = spectral_dropout
 
         self.scale = 1 / (in_channels * out_channels)
 
@@ -109,6 +110,10 @@ class FactorizedSpectralConv2d(nn.Module):
             out_ft[:, :, -self.modes1 + i, :self.modes2, :] = self.compl_mul1d(
                 temp[:, :, i, :, :], self.weights_y
             )
+
+        # Apply spectral dropout (only during training)
+        if self.training and self.spectral_dropout > 0:
+            out_ft = F.dropout(out_ft, p=self.spectral_dropout, training=True)
 
         # Convert back to complex and IFFT
         out_ft_complex = torch.complex(out_ft[..., 0], out_ft[..., 1])

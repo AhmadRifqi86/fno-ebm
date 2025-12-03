@@ -1,13 +1,15 @@
 import torch
 import torch.optim as optim
+import yaml
 from typing import Dict, Any, Optional
+from pathlib import Path
 
 class Factory:
     """
     Factory class for creating optimizers and schedulers from configuration.
     Supports dynamic instantiation based on string names and parameters.
     """
-
+    
     # Mapping of optimizer names to their classes
     OPTIMIZER_REGISTRY = {
         'adam': optim.Adam,
@@ -129,6 +131,65 @@ class Factory:
         return scheduler_class(optimizer, **scheduler_params)
 
     @staticmethod
+    def create_fno(config):
+        """Create FNO model from config based on spectral type."""
+        spectral = getattr(config, 'fno_spectral', 'Factorized')
+
+        if spectral == 'Factorized':
+            from fno import FFNO2d
+            model = FFNO2d(
+                modes1=config.fno_modes,
+                modes2=config.fno_modes,
+                width=config.fno_width,
+                num_layers=config.fno_depth,
+                in_channels=3,
+                out_channels=1
+            )
+        elif spectral == 'Vanilla':
+            from fno import FNO2d
+            model = FNO2d(
+                modes1=config.fno_modes,
+                modes2=config.fno_modes,
+                width=config.fno_width,
+                num_layers=config.fno_depth,
+                in_channels=3,
+                out_channels=1
+            )
+        elif spectral == 'Binned':
+            # TODO: Implement BinnedFNO2d
+            raise NotImplementedError("Binned spectral not yet implemented")
+        elif spectral == 'Hybrid':
+            # TODO: Implement HybridFNO2d
+            raise NotImplementedError("Hybrid spectral not yet implemented")
+        else:
+            raise ValueError(f"Unknown spectral type: {spectral}")
+
+        return model.to(config.device)
+
+    @staticmethod
+    def create_ebm(config):
+        """Create EBM model from config based on base type."""
+        base = getattr(config, 'ebm_base', 'kan')
+        input_dim = getattr(config, 'ebm_input_dim', 4)
+        hidden_dim = getattr(config, 'ebm_hidden_dim', 64)
+        num_layers = getattr(config, 'ebm_layers', 3)
+
+        if base == 'kan':
+            from kanebm import KANEBM
+            model = KANEBM(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_layers=num_layers
+            )
+        elif base == 'mlp':
+            # TODO: Implement MLPEBM
+            raise NotImplementedError("MLP EBM not yet implemented")
+        else:
+            raise ValueError(f"Unknown EBM base: {base}")
+
+        return model.to(config.device)
+
+    @staticmethod
     def register_optimizer(name: str, optimizer_class):
         """
         Register a custom optimizer class.
@@ -169,6 +230,113 @@ class Config:
 
     def __repr__(self):
         return f"Config({self.__dict__})"
+
+    @staticmethod
+    def from_yaml(yaml_path: str, pde_type: str = None):
+        """
+        Load config from YAML file and flatten nested structure.
+
+        Args:
+            yaml_path: Path to YAML config file
+            pde_type: Optional PDE type to apply PDE-specific overrides
+
+        Returns:
+            Config instance
+        """
+        with open(yaml_path, 'r') as f:
+            yaml_config = yaml.safe_load(f)
+
+        # Flatten nested structure
+        flat_config = {}
+
+        # FNO model
+        if 'fno_model' in yaml_config:
+            fno = yaml_config['fno_model']
+            flat_config['fno_spectral'] = fno.get('spectral', 'Factorized')
+            flat_config['fno_modes'] = fno.get('modes', 12)
+            flat_config['fno_width'] = fno.get('width', 64)
+            flat_config['fno_depth'] = fno.get('depth', 4)
+
+        # EBM model
+        if 'ebm_model' in yaml_config:
+            ebm = yaml_config['ebm_model']
+            flat_config['ebm_base'] = ebm.get('base', 'kan')
+            flat_config['ebm_input_dim'] = ebm.get('input_dim', 4)
+            flat_config['ebm_hidden_dim'] = ebm.get('hidden_dim', 64)
+            flat_config['ebm_layers'] = ebm.get('num_layers', 3)
+
+        # Optimizers (convert to format expected by Factory)
+        if 'fno_optim' in yaml_config:
+            opt = yaml_config['fno_optim']
+            flat_config['fno_optimizer_config'] = {
+                'type': opt.get('name', 'adamw'),
+                'lr': opt.get('lr', 1e-3),
+                'weight_decay': opt.get('weight_decay', 1e-4),
+                'betas': opt.get('betas', [0.9, 0.999])
+            }
+
+        if 'ebm_optim' in yaml_config:
+            opt = yaml_config['ebm_optim']
+            flat_config['ebm_optimizer_config'] = {
+                'type': opt.get('name', 'adam'),
+                'lr': opt.get('lr', 1e-4),
+                'weight_decay': opt.get('weight_decay', 1e-5),
+                'betas': opt.get('betas', [0.9, 0.999])
+            }
+
+        # Schedulers
+        if 'fno_scheduler' in yaml_config:
+            sched = yaml_config['fno_scheduler']
+            flat_config['fno_scheduler_config'] = {'type': sched.get('name', 'cosine_annealing')}
+            for k, v in sched.items():
+                if k != 'name':
+                    flat_config['fno_scheduler_config'][k] = v
+
+        if 'ebm_scheduler' in yaml_config:
+            sched = yaml_config['ebm_scheduler']
+            flat_config['ebm_scheduler_config'] = {'type': sched.get('name', 'cosine_annealing')}
+            for k, v in sched.items():
+                if k != 'name':
+                    flat_config['ebm_scheduler_config'][k] = v
+
+        # Training config
+        if 'training' in yaml_config:
+            train = yaml_config['training']
+            flat_config.update({
+                'device': train.get('device', 'cuda'),
+                'seed': train.get('seed', 42),
+                'fno_epochs': train.get('fno_epochs', 100),
+                'ebm_epochs': train.get('ebm_epochs', 50),
+                'batch_size': train.get('batch_size', 32),
+                'train_ratio': train.get('train_ratio', 0.8),
+                'val_ratio': train.get('val_ratio', 0.1),
+                'max_samples': train.get('max_samples'),
+                'enable_tracking': train.get('enable_tracking', True),
+                'tracking_backend': train.get('tracking_backend', 'custom'),
+                'log_dir': train.get('log_dir', './runs'),
+                'checkpoint_dir': train.get('checkpoint_dir', './checkpoints'),
+                'patience': train.get('fno_patience', 20)
+            })
+
+        # Data config
+        if 'data' in yaml_config:
+            data = yaml_config['data']
+            flat_config.update({
+                'pde_type': data.get('pde_type', 'burgers'),
+                'data_path': data.get('data_path'),
+                'nu_values': data.get('nu_values')
+            })
+
+        # Apply PDE-specific overrides
+        if pde_type and 'pde_configs' in yaml_config and pde_type in yaml_config['pde_configs']:
+            overrides = yaml_config['pde_configs'][pde_type]
+            if 'fno_model' in overrides:
+                for k, v in overrides['fno_model'].items():
+                    flat_config[f'fno_{k}'] = v
+            if 'training' in overrides:
+                flat_config.update(overrides['training'])
+
+        return Config(flat_config)
 
 
 # ============================================================================

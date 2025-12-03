@@ -30,9 +30,8 @@ ebm_optimizer_config:
 #   decay: 0.95            # Decay max LR each restart
 
 fno_scheduler_config:
-  type: step_lr
-  step_size: 25         # Reduce LR every 10 epochs
-  gamma: 0.95 
+  type: exponential_lr         # Reduce LR every 10 epochs
+  gamma: 0.9
 
 ebm_scheduler_config:
   type: step_lr
@@ -40,9 +39,9 @@ ebm_scheduler_config:
   gamma: 1.0             # Smaller decay (was reducing too fast)
 
 # Model Parameters
-fno_modes: 16           # Fourier modes (increased for better representation)
-fno_width: 48           # Hidden dimension (increased from 64)
-fno_dropout: 0.2        # Dropout rate for FNO (prevents overfitting on complex patterns)
+fno_modes: 32           # Fourier modes (increased for better representation)
+fno_width: 24           # Hidden dimension (increased from 64)
+fno_dropout: 0.1        # Dropout rate for FNO (prevents overfitting on complex patterns)
 ebm_hidden_dim: 192      # EBM network width
 
 # Physics and MCMC

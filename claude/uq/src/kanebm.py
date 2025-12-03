@@ -739,7 +739,7 @@ class KANEBM(EBM):
 # EBMWrapper: Training Wrapper for Energy-Based Models
 # ============================================================================
 
-class EBMWrapper:
+class EBMTrainer:
     """
     Training wrapper for Energy-Based Models (KAN-EBM, MLP-EBM, etc.) with score matching and Langevin sampling.
 

@@ -1142,6 +1142,66 @@ class PDEBenchH5Loader:
                          normalize_coords=normalize_coords)
 
 
+def load_pt_dataset(filepath: str,
+                    normalize_output: bool = True,
+                    normalize_input: bool = True,
+                    normalize_coords: bool = True):
+    """
+    Load .pt format datasets (Darcy Flow, Navier-Stokes from Zenodo).
+
+    Expected format: dict with keys 'x' (input) and 'y' (output)
+    - x: (n_samples, n_x, n_y) - input field
+    - y: (n_samples, n_x, n_y) - output field
+
+    Args:
+        filepath: Path to .pt file
+        normalize_output: Normalize output to N(0,1)
+        normalize_input: Normalize input fields to N(0,1)
+        normalize_coords: Normalize coordinates to [-1, 1]
+
+    Returns:
+        PDEDataset: Dataset ready for training
+    """
+    print(f"\nLoading .pt dataset from: {filepath}")
+
+    # Load PyTorch file
+    data = torch.load(filepath, weights_only=False)
+
+    if not isinstance(data, dict) or 'x' not in data or 'y' not in data:
+        raise ValueError(f"Expected dict with 'x' and 'y' keys, got: {type(data)} with keys {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+
+    input_field = data['x'].numpy()  # (n_samples, n_x, n_y)
+    output_field = data['y'].numpy()  # (n_samples, n_x, n_y)
+
+    n_samples, n_x, n_y = input_field.shape
+
+    print(f"  Input shape: {input_field.shape}")
+    print(f"  Output shape: {output_field.shape}")
+    print(f"  Input range: [{input_field.min():.4f}, {input_field.max():.4f}]")
+    print(f"  Output range: [{output_field.min():.4f}, {output_field.max():.4f}]")
+
+    # Generate coordinate grids
+    x_coords = np.linspace(0, 1, n_x)
+    y_coords = np.linspace(0, 1, n_y)
+    grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+    # Create X: (n_samples, n_x, n_y, 3) = [x_coord, y_coord, input_field]
+    X = np.zeros((n_samples, n_x, n_y, 3), dtype=np.float32)
+    X[:, :, :, 0] = grid_x[np.newaxis, :, :]
+    X[:, :, :, 1] = grid_y[np.newaxis, :, :]
+    X[:, :, :, 2] = input_field
+
+    # Create U: (n_samples, n_x, n_y, 1)
+    U = output_field[..., np.newaxis]
+
+    print(f"  Created X: {X.shape}, U: {U.shape}")
+
+    return PDEDataset(X, U,
+                     normalize_output=normalize_output,
+                     normalize_input=normalize_input,
+                     normalize_coords=normalize_coords)
+
+
 def create_dataloaders(config):
     """
     Create train/validation dataloaders from synthetic PDE data.
