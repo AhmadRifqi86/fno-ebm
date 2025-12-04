@@ -769,8 +769,8 @@ class FNOTrainer:
 
         # Setup optimizer
         if optimizer is None:
-            lr = config.get('lr', 1e-3)
-            weight_decay = config.get('weight_decay', 1e-4)
+            lr = getattr(config, 'lr', 1e-3)
+            weight_decay = getattr(config, 'weight_decay', 1e-4)
             self.optimizer = torch.optim.Adam(
                 model.parameters(),
                 lr=lr,
@@ -785,7 +785,7 @@ class FNOTrainer:
         self.criterion = nn.MSELoss()
 
         # Loss weights
-        self.gradient_penalty_weight = config.get('gradient_penalty_weight', 0.0)
+        self.gradient_penalty_weight = getattr(config, 'gradient_penalty_weight', 0.0)
 
         # Training state
         self.current_epoch = 0
@@ -798,14 +798,14 @@ class FNOTrainer:
         self.logger = logging.getLogger(__name__)
 
         # Gradient/weight tracking
-        self.enable_tracking = config.get('enable_tracking', True)
-        self.tracking_backend = config.get('tracking_backend', 'custom')  # 'custom' or 'tensorboard'
+        self.enable_tracking = getattr(config, 'enable_tracking', True)
+        self.tracking_backend = getattr(config, 'tracking_backend', 'custom')  # 'custom' or 'tensorboard'
         self.gradient_tracker = None
         self.writer = None
 
         if self.enable_tracking:
-            log_dir = config.get('log_dir', './runs')
-            experiment_name = config.get('experiment_name', 'fno_training')
+            log_dir = getattr(config, 'log_dir', './runs')
+            experiment_name = getattr(config, 'experiment_name', 'fno_training')
 
             if self.tracking_backend == 'custom':
                 try:
@@ -814,9 +814,9 @@ class FNOTrainer:
                         model=self.model,
                         log_dir=log_dir,
                         experiment_name=experiment_name,
-                        track_interval=config.get('track_interval', 10),
-                        histogram_interval=config.get('histogram_interval', 100),
-                        gradient_clip_threshold=config.get('gradient_clip_threshold', 10.0),
+                        track_interval=getattr(config, 'track_interval', 10),
+                        histogram_interval=getattr(config, 'histogram_interval', 100),
+                        gradient_clip_threshold=getattr(config, 'gradient_clip_threshold', 10.0),
                     )
                     self.logger.info("Custom gradient tracking enabled")
                 except ImportError:
@@ -1053,7 +1053,7 @@ class FNOTrainer:
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         """Save model checkpoint."""
-        checkpoint_dir = self.config.get('checkpoint_path', './checkpoints')
+        checkpoint_dir = getattr(self.config, 'checkpoint_path', './checkpoints')
         import os
         os.makedirs(checkpoint_dir, exist_ok=True)
 

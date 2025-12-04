@@ -776,8 +776,8 @@ class EBMTrainer:
 
         # Setup optimizer
         if optimizer is None:
-            lr = config.get('lr', 5e-4)
-            weight_decay = config.get('weight_decay', 1e-5)
+            lr = getattr(config, 'lr', 5e-4)
+            weight_decay = getattr(config, 'weight_decay', 1e-5)
             self.optimizer = torch.optim.Adam(
                 model.parameters(),
                 lr=lr,
@@ -789,20 +789,20 @@ class EBMTrainer:
         self.scheduler = scheduler
 
         # Training configuration
-        self.score_matching_type = config.get('score_matching_type', 'weighted')
-        self.noise_levels = config.get('noise_levels', [0.01, 0.02, 0.05])
-        self.noise_weights = config.get('noise_weights', {0.01: 0.2, 0.02: 0.3, 0.05: 0.5})
+        self.score_matching_type = getattr(config, 'score_matching_type', 'weighted')
+        self.noise_levels = getattr(config, 'noise_levels', [0.01, 0.02, 0.05])
+        self.noise_weights = getattr(config, 'noise_weights', {0.01: 0.2, 0.02: 0.3, 0.05: 0.5})
 
         # Langevin sampling config
-        self.langevin_steps_train = config.get('langevin_steps_train', 20)
-        self.langevin_step_size_train = config.get('langevin_step_size_train', 0.01)
-        self.langevin_steps_inference = config.get('langevin_steps_inference', 50)
-        self.langevin_step_size_inference = config.get('langevin_step_size_inference', 0.01)
+        self.langevin_steps_train = getattr(config, 'langevin_steps_train', 20)
+        self.langevin_step_size_train = getattr(config, 'langevin_step_size_train', 0.01)
+        self.langevin_steps_inference = getattr(config, 'langevin_steps_inference', 50)
+        self.langevin_step_size_inference = getattr(config, 'langevin_step_size_inference', 0.01)
 
         # Loss weights
-        self.energy_reg_weight = config.get('energy_reg_weight', 0.001)
-        self.calibration_weight = config.get('calibration_weight', 0.5)
-        self.use_error_aware_loss = config.get('use_error_aware_loss', True)
+        self.energy_reg_weight = getattr(config, 'energy_reg_weight', 0.001)
+        self.calibration_weight = getattr(config, 'calibration_weight', 0.5)
+        self.use_error_aware_loss = getattr(config, 'use_error_aware_loss', True)
 
         # Training state
         self.current_epoch = 0
@@ -815,14 +815,14 @@ class EBMTrainer:
         self.logger = logging.getLogger(__name__)
 
         # Gradient/weight tracking
-        self.enable_tracking = config.get('enable_tracking', True)
-        self.tracking_backend = config.get('tracking_backend', 'custom')  # 'custom' or 'tensorboard'
+        self.enable_tracking = getattr(config, 'enable_tracking', True)
+        self.tracking_backend = getattr(config, 'tracking_backend', 'custom')  # 'custom' or 'tensorboard'
         self.gradient_tracker = None
         self.writer = None
 
         if self.enable_tracking:
-            log_dir = config.get('log_dir', './runs')
-            experiment_name = config.get('experiment_name', 'ebm_training')
+            log_dir = getattr(config, 'log_dir', './runs')
+            experiment_name = getattr(config, 'experiment_name', 'ebm_training')
 
             if self.tracking_backend == 'custom':
                 try:
@@ -831,9 +831,9 @@ class EBMTrainer:
                         model=self.model,
                         log_dir=log_dir,
                         experiment_name=experiment_name,
-                        track_interval=config.get('track_interval', 10),
-                        histogram_interval=config.get('histogram_interval', 100),
-                        gradient_clip_threshold=config.get('gradient_clip_threshold', 10.0),
+                        track_interval=getattr(config, 'track_interval', 10),
+                        histogram_interval=getattr(config, 'histogram_interval', 100),
+                        gradient_clip_threshold=getattr(config, 'gradient_clip_threshold', 10.0),
                     )
                     self.logger.info("Custom gradient tracking enabled")
                 except ImportError:
@@ -1216,7 +1216,7 @@ class EBMTrainer:
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         """Save model checkpoint."""
-        checkpoint_dir = self.config.get('checkpoint_path', './checkpoints')
+        checkpoint_dir = getattr(self.config, 'checkpoint_path', './checkpoints')
         import os
         os.makedirs(checkpoint_dir, exist_ok=True)
 
