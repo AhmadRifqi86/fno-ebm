@@ -764,7 +764,7 @@ class FNOTrainer:
         """
         self.model = model
         self.config = config
-        self.device = config.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model.to(self.device)
 
         # Setup optimizer
