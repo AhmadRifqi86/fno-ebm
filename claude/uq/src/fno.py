@@ -850,6 +850,10 @@ class FNOTrainer:
         self.model.train()
         x, y = x.to(self.device), y.to(self.device)
 
+        # Permute from (batch, nx, ny, channels) to (batch, channels, nx, ny)
+        x = x.permute(0, 3, 1, 2)
+        y = y.permute(0, 3, 1, 2)
+
         # Forward pass
         pred = self.model(x)
 
@@ -948,6 +952,11 @@ class FNOTrainer:
 
         for x, y in val_loader:
             x, y = x.to(self.device), y.to(self.device)
+
+            # Permute from (batch, nx, ny, channels) to (batch, channels, nx, ny)
+            x = x.permute(0, 3, 1, 2)
+            y = y.permute(0, 3, 1, 2)
+
             pred = self.model(x)
 
             # Validation loss
