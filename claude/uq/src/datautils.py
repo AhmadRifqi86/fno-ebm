@@ -316,8 +316,8 @@ def load_pt_2d(filepath: str) -> PDEDataset:
     return PDEDataset(X, U)
 
 
-def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samples: int = None,
-                  time_step_spacing: int = 10, max_pairs_per_sample: int = None) -> PDEDataset:
+def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samples: int = 8000,
+                  time_step_spacing: int = 10, max_pairs_per_sample: int = 100) -> PDEDataset:
     """
     Unified loader for all 4 PDEs.
 
