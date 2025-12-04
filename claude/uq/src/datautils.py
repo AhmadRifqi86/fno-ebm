@@ -90,7 +90,8 @@ class PDEDataset(Dataset):
         return U_normalized
 
 
-def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None) -> PDEDataset:
+def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
+                 time_step_spacing: int = 10, max_pairs_per_sample: int = None) -> PDEDataset:
     """
     Load 1D PDE data (.hdf5): Burgers/Advection with multiple nu values.
 
@@ -98,47 +99,122 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None)
         filepath: Path to .hdf5 file
         nu_values: List of nu values to load (None = all)
         max_samples: Max samples per nu value
+        time_step_spacing: Spacing between input and output time steps (default: 10)
+        max_pairs_per_sample: Max number of pairs to extract per sample (None = all possible)
 
     Returns:
         PDEDataset
     """
     with h5py.File(filepath, 'r') as f:
-        # Get all nu keys
-        all_nu = [k for k in f.keys() if k.startswith('nu_')]
-        if nu_values is not None:
-            # Filter by requested nu values
-            all_nu = [k for k in all_nu if float(k.split('_')[1]) in nu_values]
+        # PDEBench format: single 'tensor' with all nu values stacked
+        if 'tensor' in f.keys():
+            data = f['tensor'][:]  # (n_total, n_t, n_x)
+            x_coords_data = f['x-coordinate'][:]
 
-        X_list, U_list = [], []
+            n_total, n_t, n_x = data.shape
 
-        for nu_key in all_nu:
-            data = f[nu_key][:]  # (n_samples, n_t, n_x)
-            n_samples, n_t, n_x = data.shape
+            # Assume 4 nu values stacked: split into equal parts
+            n_nu = 4  # PDEBench has 4 nu values for Burgers
+            samples_per_nu = n_total // n_nu
 
-            if max_samples is not None:
-                n_samples = min(n_samples, max_samples)
+            X_list, U_list = [], []
 
-            # Extract initial → final pairs
-            for i in range(n_samples):
-                input_field = data[i, 0, :]  # t=0
-                output_field = data[i, -1, :]  # t=final
+            for nu_idx in range(n_nu):
+                start_idx = nu_idx * samples_per_nu
+                end_idx = (nu_idx + 1) * samples_per_nu
 
-                # Create 2D grid: (n_x, 1) spatial
-                x_coords = np.linspace(0, 1, n_x)
-                y_coords = np.array([0.5])
-                grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+                nu_data = data[start_idx:end_idx]  # (samples_per_nu, n_t, n_x)
 
-                # X: (n_x, 1, 3) = [x, y, input_field]
-                X = np.zeros((n_x, 1, 3), dtype=np.float32)
-                X[:, :, 0] = grid_x
-                X[:, :, 1] = grid_y
-                X[:, :, 2] = input_field[:, np.newaxis]
+                n_samples = samples_per_nu
+                if max_samples is not None:
+                    n_samples = min(n_samples, max_samples)
 
-                # U: (n_x, 1, 1)
-                U = output_field[:, np.newaxis, np.newaxis]
+                # Extract multiple pairs per sample with configurable spacing
+                for i in range(n_samples):
+                    # Generate all possible pairs with given spacing
+                    possible_pairs = []
+                    for t_start in range(0, n_t - time_step_spacing):
+                        t_end = t_start + time_step_spacing
+                        if t_end < n_t:
+                            possible_pairs.append((t_start, t_end))
 
-                X_list.append(X)
-                U_list.append(U)
+                    # Limit number of pairs if specified
+                    if max_pairs_per_sample is not None:
+                        # Sample uniformly across the trajectory
+                        step = max(1, len(possible_pairs) // max_pairs_per_sample)
+                        possible_pairs = possible_pairs[::step][:max_pairs_per_sample]
+
+                    # Create training pairs
+                    for t_in, t_out in possible_pairs:
+                        input_field = nu_data[i, t_in, :]
+                        output_field = nu_data[i, t_out, :]
+
+                        # Create 2D grid: (n_x, 1) spatial
+                        x_coords = np.linspace(0, 1, n_x)
+                        y_coords = np.array([0.5])
+                        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+                        # X: (n_x, 1, 3) = [x, y, input_field]
+                        X = np.zeros((n_x, 1, 3), dtype=np.float32)
+                        X[:, :, 0] = grid_x
+                        X[:, :, 1] = grid_y
+                        X[:, :, 2] = input_field[:, np.newaxis]
+
+                        # U: (n_x, 1, 1)
+                        U = output_field[:, np.newaxis, np.newaxis]
+
+                        X_list.append(X)
+                        U_list.append(U)
+
+        else:
+            # Old format with separate nu keys
+            all_nu = [k for k in f.keys() if k.startswith('nu_')]
+            if nu_values is not None:
+                all_nu = [k for k in all_nu if float(k.split('_')[1]) in nu_values]
+
+            if not all_nu:
+                raise ValueError(f"No nu keys found. Available: {list(f.keys())}")
+
+            X_list, U_list = [], []
+
+            for nu_key in all_nu:
+                data = f[nu_key][:]  # (n_samples, n_t, n_x)
+                n_samples, n_t, n_x = data.shape
+
+                if max_samples is not None:
+                    n_samples = min(n_samples, max_samples)
+
+                for i in range(n_samples):
+                    # Generate all possible pairs with given spacing
+                    possible_pairs = []
+                    for t_start in range(0, n_t - time_step_spacing):
+                        t_end = t_start + time_step_spacing
+                        if t_end < n_t:
+                            possible_pairs.append((t_start, t_end))
+
+                    # Limit number of pairs if specified
+                    if max_pairs_per_sample is not None:
+                        step = max(1, len(possible_pairs) // max_pairs_per_sample)
+                        possible_pairs = possible_pairs[::step][:max_pairs_per_sample]
+
+                    # Create training pairs
+                    for t_in, t_out in possible_pairs:
+                        input_field = data[i, t_in, :]
+                        output_field = data[i, t_out, :]
+
+                        x_coords = np.linspace(0, 1, n_x)
+                        y_coords = np.array([0.5])
+                        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+                        X = np.zeros((n_x, 1, 3), dtype=np.float32)
+                        X[:, :, 0] = grid_x
+                        X[:, :, 1] = grid_y
+                        X[:, :, 2] = input_field[:, np.newaxis]
+
+                        U = output_field[:, np.newaxis, np.newaxis]
+
+                        X_list.append(X)
+                        U_list.append(U)
 
         X = np.stack(X_list)
         U = np.stack(U_list)
@@ -240,7 +316,8 @@ def load_pt_2d(filepath: str) -> PDEDataset:
     return PDEDataset(X, U)
 
 
-def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samples: int = None) -> PDEDataset:
+def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samples: int = None,
+                  time_step_spacing: int = 10, max_pairs_per_sample: int = None) -> PDEDataset:
     """
     Unified loader for all 4 PDEs.
 
@@ -249,6 +326,8 @@ def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samp
         pde_type: 'burgers', 'advection', 'diffusion_reaction', 'navier_stokes'
         nu_values: List of nu values (for 1D PDEs only)
         max_samples: Max samples to load
+        time_step_spacing: Spacing between input and output time steps (1D PDEs only)
+        max_pairs_per_sample: Max pairs to extract per sample (1D PDEs only)
 
     Returns:
         PDEDataset
@@ -257,7 +336,7 @@ def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samp
 
     if pde_type in ['burgers', 'advection']:
         # 1D PDEs: .hdf5 format
-        return load_hdf5_1d(str(filepath), nu_values, max_samples)
+        return load_hdf5_1d(str(filepath), nu_values, max_samples, time_step_spacing, max_pairs_per_sample)
     elif pde_type == 'diffusion_reaction':
         # 2D: .h5 format
         return load_h5_2d(str(filepath), max_samples)
