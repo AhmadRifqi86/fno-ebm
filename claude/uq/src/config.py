@@ -141,7 +141,7 @@ class Factory:
                 modes1=config.fno_modes,
                 modes2=config.fno_modes,
                 width=config.fno_width,
-                num_layers=config.fno_depth,
+                n_layers=config.fno_depth,
                 in_channels=3,
                 out_channels=1
             )

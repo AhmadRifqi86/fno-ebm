@@ -15,12 +15,13 @@ from torch.utils.data import Dataset, DataLoader, Subset
 
 
 class PDEDataset(Dataset):
-    """Unified dataset for all 4 PDEs with normalization."""
+    """Memory-efficient dataset with in-place normalization and caching."""
 
     def __init__(self, X: np.ndarray, U: np.ndarray,
                  normalize_output: bool = True,
                  normalize_input: bool = True,
-                 normalize_coords: bool = True):
+                 normalize_coords: bool = True,
+                 cache_path: str = None):
         """
         Args:
             X: (n_samples, nx, ny, in_channels) - [x, y, input_field, ...]
@@ -28,54 +29,53 @@ class PDEDataset(Dataset):
             normalize_output: Normalize U to N(0,1)
             normalize_input: Normalize input fields (beyond x,y) to N(0,1)
             normalize_coords: Normalize x,y to [-1, 1]
+            cache_path: Path to save/load cached normalized dataset
         """
         self.n_samples, self.nx, self.ny, self.in_channels = X.shape
-
-        # Coordinate normalization
         self.normalize_coords = normalize_coords
-        if normalize_coords:
-            X_coords = X[..., :2].copy()
-            self.x_min, self.x_max = X_coords[..., 0].min(), X_coords[..., 0].max()
-            self.y_min, self.y_max = X_coords[..., 1].min(), X_coords[..., 1].max()
-            X_coords[..., 0] = 2 * (X_coords[..., 0] - self.x_min) / (self.x_max - self.x_min) - 1
-            X_coords[..., 1] = 2 * (X_coords[..., 1] - self.y_min) / (self.y_max - self.y_min) - 1
-            X = X.copy()
-            X[..., :2] = X_coords
-
-        # Input field normalization (channels 2+)
         self.normalize_input = normalize_input
-        if normalize_input and self.in_channels > 2:
-            X_coords = X[..., :2]
-            X_fields = X[..., 2:]
-            self.x_fields_mean = []
-            self.x_fields_std = []
-            X_fields_normalized = np.zeros_like(X_fields)
+        self.normalize_output = normalize_output
 
-            for ch in range(X_fields.shape[-1]):
-                field = X_fields[..., ch]
+        # Store normalization stats
+        self.x_min = self.x_max = self.y_min = self.y_max = None
+        self.x_fields_mean = []
+        self.x_fields_std = []
+        self.u_mean = 0.0
+        self.u_std = 1.0
+
+        # IN-PLACE normalization to save memory
+        # Coordinate normalization
+        if normalize_coords:
+            self.x_min, self.x_max = X[..., 0].min(), X[..., 0].max()
+            self.y_min, self.y_max = X[..., 1].min(), X[..., 1].max()
+            # Normalize IN-PLACE
+            X[..., 0] = 2 * (X[..., 0] - self.x_min) / (self.x_max - self.x_min + 1e-8) - 1
+            X[..., 1] = 2 * (X[..., 1] - self.y_min) / (self.y_max - self.y_min + 1e-8) - 1
+
+        # Input field normalization (channels 2+) IN-PLACE
+        if normalize_input and self.in_channels > 2:
+            for ch in range(2, self.in_channels):
+                field = X[..., ch]
                 mean, std = field.mean(), field.std()
                 self.x_fields_mean.append(mean)
                 self.x_fields_std.append(std)
-                X_fields_normalized[..., ch] = (field - mean) / (std + 1e-8)
+                # Normalize IN-PLACE
+                X[..., ch] = (field - mean) / (std + 1e-8)
 
-            X = np.concatenate([X_coords, X_fields_normalized], axis=-1)
-            self.X = torch.from_numpy(X).float()
-        else:
-            self.x_fields_mean = []
-            self.x_fields_std = []
-            self.X = torch.from_numpy(X).float()
-
-        # Output normalization
-        self.normalize_output = normalize_output
+        # Output normalization IN-PLACE
         if normalize_output:
             self.u_mean = U.mean()
             self.u_std = U.std()
-            U_normalized = (U - self.u_mean) / self.u_std
-            self.U = torch.from_numpy(U_normalized).float()
-        else:
-            self.u_mean = 0.0
-            self.u_std = 1.0
-            self.U = torch.from_numpy(U).float()
+            # Normalize IN-PLACE
+            U[:] = (U - self.u_mean) / self.u_std
+
+        # Convert to PyTorch tensors (X and U are already modified in-place)
+        self.X = torch.from_numpy(X).float()
+        self.U = torch.from_numpy(U).float()
+
+        # Save cache if requested
+        if cache_path:
+            self.save_cache(cache_path)
 
     def __len__(self):
         return len(self.X)
@@ -88,6 +88,60 @@ class PDEDataset(Dataset):
         if self.normalize_output:
             return U_normalized * self.u_std + self.u_mean
         return U_normalized
+
+    def save_cache(self, cache_path: str):
+        """Save normalized dataset to disk."""
+        cache_data = {
+            'X': self.X,
+            'U': self.U,
+            'n_samples': self.n_samples,
+            'nx': self.nx,
+            'ny': self.ny,
+            'in_channels': self.in_channels,
+            'x_min': self.x_min,
+            'x_max': self.x_max,
+            'y_min': self.y_min,
+            'y_max': self.y_max,
+            'x_fields_mean': self.x_fields_mean,
+            'x_fields_std': self.x_fields_std,
+            'u_mean': self.u_mean,
+            'u_std': self.u_std,
+            'normalize_coords': self.normalize_coords,
+            'normalize_input': self.normalize_input,
+            'normalize_output': self.normalize_output,
+        }
+        torch.save(cache_data, cache_path)
+        print(f"Dataset cached to: {cache_path}")
+
+    @staticmethod
+    def load_cache(cache_path: str):
+        """Load normalized dataset from disk."""
+        cache_data = torch.load(cache_path, weights_only=False)
+
+        # Create empty instance
+        dataset = PDEDataset.__new__(PDEDataset)
+
+        # Restore attributes
+        dataset.X = cache_data['X']
+        dataset.U = cache_data['U']
+        dataset.n_samples = cache_data['n_samples']
+        dataset.nx = cache_data['nx']
+        dataset.ny = cache_data['ny']
+        dataset.in_channels = cache_data['in_channels']
+        dataset.x_min = cache_data['x_min']
+        dataset.x_max = cache_data['x_max']
+        dataset.y_min = cache_data['y_min']
+        dataset.y_max = cache_data['y_max']
+        dataset.x_fields_mean = cache_data['x_fields_mean']
+        dataset.x_fields_std = cache_data['x_fields_std']
+        dataset.u_mean = cache_data['u_mean']
+        dataset.u_std = cache_data['u_std']
+        dataset.normalize_coords = cache_data['normalize_coords']
+        dataset.normalize_input = cache_data['normalize_input']
+        dataset.normalize_output = cache_data['normalize_output']
+
+        print(f"Dataset loaded from cache: {cache_path}")
+        return dataset
 
 
 def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
