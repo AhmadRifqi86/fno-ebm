@@ -5,7 +5,7 @@
 # FNO Model Configuration
 # ============================================================================
 fno_model:
-  spectral: 'Factorized'  # Options: 'Factorized', 'Binned', 'Hybrid', 'Vanilla'
+  spectral: 'Vanilla'  # Options: 'Factorized', 'Binned', 'Hybrid', 'Vanilla'
   modes: 12               # Number of Fourier modes
   width: 64               # Hidden dimension width
   depth: 4                # Number of layers
