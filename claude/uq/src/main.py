@@ -87,7 +87,8 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
     print("Stage 1: Training FNO")
     print("="*80)
     fno_trainer = FNOTrainer(model=fno_model, config=config)
-    fno_trainer.train(train_loader, val_loader)
+    fno_epochs = getattr(config, 'fno_epochs', 100)
+    fno_trainer.train(train_loader, val_loader, fno_epochs)
 
     # Initialize EBM
     print("\n" + "="*80)
@@ -106,7 +107,8 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
         ebm_model=ebm_model,
         config=config
     )
-    ebm_trainer.train(train_loader, val_loader)
+    ebm_epochs = getattr(config, 'ebm_epochs', 50)
+    ebm_trainer.train(train_loader, val_loader, ebm_epochs)
 
     # Evaluate on test set
     print("\n" + "="*80)
