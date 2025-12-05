@@ -1,6 +1,6 @@
 # UQ Paper Training Configuration
 # Structured configuration for FNO-EBM training on 4 PDEs
-
+# Other dataset links: https://zenodo.org/records/13355846
 # ============================================================================
 # FNO Model Configuration
 # ============================================================================
@@ -96,18 +96,20 @@ training:
   seed: 42                # Random seed
   
   # FNO training
-  fno_epochs: 100         # Number of FNO training epochs
+  fno_epochs: 20         # Number of FNO training epochs
   fno_patience: 20        # Early stopping patience
   
   # EBM training
-  ebm_epochs: 50          # Number of EBM training epochs
+  ebm_epochs: 20          # Number of EBM training epochs
   ebm_patience: 15        # Early stopping patience
   
   # Data
   batch_size: 32          # Batch size
   train_ratio: 0.8        # Training data ratio
   val_ratio: 0.1          # Validation data ratio
-  max_samples: null       # Max samples to load (null = all)
+  max_samples: 1000        # Max samples to load per nu value (null = all, CAUTION: large datasets can cause OOM)
+  time_step_spacing: 10   # Spacing between input/output time steps (1D PDEs)
+  max_pairs_per_sample: 20  # Max training pairs per sample (1D PDEs)
   
   # Tracking
   enable_tracking: true   # Enable gradient tracking

@@ -391,9 +391,14 @@ class FNO1d(nn.Module):
 
     def forward(self, x):
         """
-        x: (batch, n_x, in_channels)
-        Returns: (batch, n_x, out_channels)
+        x: (batch, n_x, in_channels) OR (batch, n_x, 1, in_channels) for compatibility
+        Returns: (batch, n_x, out_channels) OR (batch, n_x, 1, out_channels) to match input
         """
+        # Handle 4D input from dataloader (batch, n_x, 1, in_channels)
+        input_is_4d = (x.dim() == 4)
+        if input_is_4d:
+            x = x.squeeze(2)  # (batch, n_x, in_channels)
+
         # Lift
         x = self.lift(x)  # (batch, n_x, width)
         x = x.permute(0, 2, 1)  # (batch, width, n_x) for conv
@@ -409,6 +414,10 @@ class FNO1d(nn.Module):
         # Project
         x = x.permute(0, 2, 1)  # (batch, n_x, width)
         x = self.project(x)     # (batch, n_x, out_channels)
+
+        # Restore 4D shape if input was 4D
+        if input_is_4d:
+            x = x.unsqueeze(2)  # (batch, n_x, 1, out_channels)
 
         return x
 

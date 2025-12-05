@@ -131,9 +131,32 @@ class Factory:
         return scheduler_class(optimizer, **scheduler_params)
 
     @staticmethod
-    def create_fno(config):
-        """Create FNO model from config based on spectral type."""
-        spectral = getattr(config, 'fno_spectral', 'Factorized')
+    def create_fno(config, pde_type=None):
+        """
+        Create FNO model from config based on spectral type and PDE type.
+
+        Args:
+            config: Configuration object
+            pde_type: 'burgers', 'advection', 'diffusion_reaction', 'navier_stokes'
+                     If None, will try to get from config
+        """
+        if pde_type is None:
+            pde_type = getattr(config, 'pde_type', None)
+
+        # For 1D PDEs (Burgers, Advection), use FNO1d
+        if pde_type in ['burgers', 'advection']:
+            from fno import FNO1d
+            model = FNO1d(
+                modes=config.fno_modes,
+                width=config.fno_width,
+                n_layers=config.fno_depth,
+                in_channels=2,  # [x, input_field] for 1D
+                out_channels=1
+            )
+            return model.to(config.device)
+
+        # For 2D PDEs, use spectral type from config
+        spectral = getattr(config, 'fno_spectral', 'Vanilla')
 
         if spectral == 'Factorized':
             from fno import FFNO2d
@@ -174,12 +197,23 @@ class Factory:
         hidden_dim = getattr(config, 'ebm_hidden_dim', 64)
         num_layers = getattr(config, 'ebm_layers', 3)
 
+        print(f"[Factory] EBM input_dim={input_dim}, hidden_dim={hidden_dim}, layers={num_layers}")
+
+        # Convert single hidden_dim to list of hidden_dims
+        if isinstance(hidden_dim, int):
+            hidden_dims = [hidden_dim] * (num_layers - 1)
+        else:
+            hidden_dims = hidden_dim
+
+        print(f"[Factory] Building KAN with layers: [{input_dim}] + {hidden_dims} + [1]")
+
         if base == 'kan':
             from kanebm import KANEBM
             model = KANEBM(
                 input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers
+                hidden_dims=hidden_dims,
+                grid_size=getattr(config, 'grid_size', 5),
+                spline_order=getattr(config, 'spline_order', 3),
             )
         elif base == 'mlp':
             # TODO: Implement MLPEBM

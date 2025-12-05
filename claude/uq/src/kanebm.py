@@ -639,9 +639,8 @@ class EBM(nn.Module):
         if input_dim is not None:
             self.input_dim = input_dim
             self.condition_dim = condition_dim
-            total_input_dim = input_dim + condition_dim
-            if condition_on_fno:
-                total_input_dim += input_dim  # Add û dimension
+            # input_dim is ALREADY the total flattened size (u + x + u_fno)
+            total_input_dim = input_dim
 
         # Build or assign energy network
         if energy_net is not None:
@@ -696,6 +695,16 @@ class EBM(nn.Module):
             inputs = torch.cat([u_flat, x_flat, u_fno_flat], dim=-1)
         else:
             inputs = torch.cat([u_flat, x_flat], dim=-1)
+
+        # Debug: Check dimensions on first call
+        if not hasattr(self, '_dim_checked'):
+            print(f"[EBM Debug] u shape: {u.shape}, u_flat: {u_flat.shape}")
+            print(f"[EBM Debug] x shape: {x.shape}, x_flat: {x_flat.shape}")
+            if u_fno is not None:
+                print(f"[EBM Debug] u_fno shape: {u_fno.shape}, u_fno_flat: {u_fno_flat.shape}")
+            print(f"[EBM Debug] inputs shape: {inputs.shape}")
+            print(f"[EBM Debug] Expected input_dim: {self.input_dim}")
+            self._dim_checked = True
 
         # Compute energy through network
         energy = self.energy_net(inputs)
@@ -1033,7 +1042,10 @@ class EBMTrainer:
         self.optimizer.zero_grad()
         total_loss.backward()
 
-        # Track gradients (before optimizer step)
+        # Gradient clipping to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+        # Track gradients (after clipping, before optimizer step)
         if self.enable_tracking:
             if self.gradient_tracker is not None:
                 # Custom tracking with anomaly detection
@@ -1091,27 +1103,29 @@ class EBMTrainer:
         self.model.eval()
         total_val_loss = 0
 
-        for u, x in val_loader:
-            u, x = u.to(self.device), x.to(self.device)
+        for x, u in val_loader:
+            x, u = x.to(self.device), u.to(self.device)
 
             # Get FNO prediction
             u_fno = None
             if self.fno_model is not None:
                 u_fno = self.fno_model(x)
 
-            # Score matching loss (no gradients)
+            # Score matching loss (enable gradients temporarily for validation)
             batch_loss = 0.0
             for sigma in self.noise_levels:
                 noise = torch.randn_like(u)
                 u_noisy = u + sigma * noise
-                u_noisy.requires_grad_(True)
 
-                energy = self.model(u_noisy, x, u_fno)
-                score = torch.autograd.grad(
-                    outputs=energy.sum(),
-                    inputs=u_noisy,
-                    create_graph=False
-                )[0]
+                # Enable gradients for u_noisy within this scope
+                with torch.enable_grad():
+                    u_noisy.requires_grad_(True)
+                    energy = self.model(u_noisy, x, u_fno)
+                    score = torch.autograd.grad(
+                        outputs=energy.sum(),
+                        inputs=u_noisy,
+                        create_graph=False
+                    )[0]
 
                 target_score = -noise / sigma
                 score_loss = torch.mean((score - target_score) ** 2)

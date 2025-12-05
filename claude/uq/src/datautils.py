@@ -81,7 +81,18 @@ class PDEDataset(Dataset):
         return len(self.X)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.U[idx]
+        """
+        Return data item. For 1D data (ny=1), only returns [x, input_field] channels.
+        """
+        X_item = self.X[idx]
+        U_item = self.U[idx]
+
+        # For 1D data (ny=1), extract only [x, input_field] (channels 0 and 2)
+        # Skip channel 1 (dummy y coordinate)
+        if self.ny == 1:
+            X_item = torch.stack([X_item[..., 0], X_item[..., 2]], dim=-1)
+
+        return X_item, U_item
 
     def denormalize(self, U_normalized: torch.Tensor) -> torch.Tensor:
         """Convert normalized predictions back to original scale."""
@@ -145,9 +156,11 @@ class PDEDataset(Dataset):
 
 
 def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
-                 time_step_spacing: int = 10, max_pairs_per_sample: int = None) -> PDEDataset:
+                 time_step_spacing: int = 10, max_pairs_per_sample: int = 20) -> PDEDataset:
     """
     Load 1D PDE data (.hdf5): Burgers/Advection with multiple nu values.
+
+    MEMORY-EFFICIENT VERSION: Uses chunked loading to prevent OOM.
 
     Args:
         filepath: Path to .hdf5 file
@@ -162,29 +175,58 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
     with h5py.File(filepath, 'r') as f:
         # PDEBench format: single 'tensor' with all nu values stacked
         if 'tensor' in f.keys():
-            data = f['tensor'][:]  # (n_total, n_t, n_x)
-            x_coords_data = f['x-coordinate'][:]
+            # Get shape WITHOUT loading data into memory
+            data_shape = f['tensor'].shape  # (n_total, n_t, n_x)
+            n_total, n_t, n_x = data_shape
 
-            n_total, n_t, n_x = data.shape
+            print(f"Dataset shape: {data_shape}")
+            print(f"Estimated size: {n_total * n_t * n_x * 4 / (1024**3):.2f} GB")
 
             # Assume 4 nu values stacked: split into equal parts
             n_nu = 4  # PDEBench has 4 nu values for Burgers
             samples_per_nu = n_total // n_nu
 
-            X_list, U_list = [], []
+            # Apply max_samples limit EARLY to reduce memory
+            n_samples_to_load = samples_per_nu
+            if max_samples is not None:
+                n_samples_to_load = min(n_samples_to_load, max_samples)
+
+            # Calculate total pairs estimate
+            max_possible_pairs = (n_t - time_step_spacing)
+            if max_pairs_per_sample is not None:
+                pairs_per_sample = min(max_possible_pairs, max_pairs_per_sample)
+            else:
+                pairs_per_sample = max_possible_pairs
+
+            total_pairs_estimate = n_nu * n_samples_to_load * pairs_per_sample
+            print(f"Loading {n_samples_to_load} samples per nu value")
+            print(f"Estimated total training pairs: {total_pairs_estimate}")
+
+            # Pre-allocate arrays for better memory efficiency
+            X_shape = (total_pairs_estimate, n_x, 1, 3)
+            U_shape = (total_pairs_estimate, n_x, 1, 1)
+
+            X_array = np.zeros(X_shape, dtype=np.float32)
+            U_array = np.zeros(U_shape, dtype=np.float32)
+
+            # Pre-compute coordinate grid (reuse for all samples)
+            x_coords = np.linspace(0, 1, n_x)
+            y_coords = np.array([0.5])
+            grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+            pair_idx = 0
 
             for nu_idx in range(n_nu):
                 start_idx = nu_idx * samples_per_nu
-                end_idx = (nu_idx + 1) * samples_per_nu
+                end_idx = start_idx + n_samples_to_load
 
-                nu_data = data[start_idx:end_idx]  # (samples_per_nu, n_t, n_x)
+                print(f"Loading nu group {nu_idx+1}/{n_nu}: samples {start_idx} to {end_idx}")
 
-                n_samples = samples_per_nu
-                if max_samples is not None:
-                    n_samples = min(n_samples, max_samples)
+                # CHUNKED LOADING: Load only needed samples, not entire dataset
+                nu_data = f['tensor'][start_idx:end_idx, :, :]  # (n_samples_to_load, n_t, n_x)
 
                 # Extract multiple pairs per sample with configurable spacing
-                for i in range(n_samples):
+                for i in range(n_samples_to_load):
                     # Generate all possible pairs with given spacing
                     possible_pairs = []
                     for t_start in range(0, n_t - time_step_spacing):
@@ -198,30 +240,38 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
                         step = max(1, len(possible_pairs) // max_pairs_per_sample)
                         possible_pairs = possible_pairs[::step][:max_pairs_per_sample]
 
-                    # Create training pairs
+                    # Create training pairs directly in pre-allocated array
                     for t_in, t_out in possible_pairs:
+                        if pair_idx >= total_pairs_estimate:
+                            break
+
                         input_field = nu_data[i, t_in, :]
                         output_field = nu_data[i, t_out, :]
 
-                        # Create 2D grid: (n_x, 1) spatial
-                        x_coords = np.linspace(0, 1, n_x)
-                        y_coords = np.array([0.5])
-                        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+                        # Store in 2D format for compatibility (will be squeezed for 1D FNO)
+                        # X: (n_x, 1, 2) = [x, input_field] for 1D PDEs
+                        X_array[pair_idx, :, :, 0] = x_coords[:, np.newaxis]  # x coordinates
+                        X_array[pair_idx, :, :, 1] = grid_y  # dummy y (not used by FNO1d)
+                        X_array[pair_idx, :, :, 2] = input_field[:, np.newaxis]
 
-                        # X: (n_x, 1, 3) = [x, y, input_field]
-                        X = np.zeros((n_x, 1, 3), dtype=np.float32)
-                        X[:, :, 0] = grid_x
-                        X[:, :, 1] = grid_y
-                        X[:, :, 2] = input_field[:, np.newaxis]
+                        U_array[pair_idx, :, :, 0] = output_field[:, np.newaxis]
 
-                        # U: (n_x, 1, 1)
-                        U = output_field[:, np.newaxis, np.newaxis]
+                        pair_idx += 1
 
-                        X_list.append(X)
-                        U_list.append(U)
+                # Free memory
+                del nu_data
+
+            # Trim arrays to actual size
+            X_array = X_array[:pair_idx]
+            U_array = U_array[:pair_idx]
+
+            print(f"Actual pairs loaded: {pair_idx}")
+            print(f"Memory usage: X={X_array.nbytes / (1024**2):.2f} MB, U={U_array.nbytes / (1024**2):.2f} MB")
+
+            return PDEDataset(X_array, U_array)
 
         else:
-            # Old format with separate nu keys
+            # Old format with separate nu keys - use memory-efficient approach too
             all_nu = [k for k in f.keys() if k.startswith('nu_')]
             if nu_values is not None:
                 all_nu = [k for k in all_nu if float(k.split('_')[1]) in nu_values]
@@ -229,14 +279,47 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
             if not all_nu:
                 raise ValueError(f"No nu keys found. Available: {list(f.keys())}")
 
-            X_list, U_list = [], []
+            # First pass: count samples to pre-allocate
+            total_pairs = 0
+            for nu_key in all_nu:
+                data_shape = f[nu_key].shape
+                n_samples_nu = data_shape[0]
+                if max_samples is not None:
+                    n_samples_nu = min(n_samples_nu, max_samples)
+
+                n_t = data_shape[1]
+                max_possible_pairs = (n_t - time_step_spacing)
+                if max_pairs_per_sample is not None:
+                    pairs_per_sample = min(max_possible_pairs, max_pairs_per_sample)
+                else:
+                    pairs_per_sample = max_possible_pairs
+
+                total_pairs += n_samples_nu * pairs_per_sample
+
+            print(f"Estimated total training pairs: {total_pairs}")
+
+            # Pre-allocate
+            first_data = f[all_nu[0]]
+            n_x = first_data.shape[2]
+
+            X_array = np.zeros((total_pairs, n_x, 1, 3), dtype=np.float32)
+            U_array = np.zeros((total_pairs, n_x, 1, 1), dtype=np.float32)
+
+            # Pre-compute coordinate grid
+            x_coords = np.linspace(0, 1, n_x)
+            y_coords = np.array([0.5])
+            grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+
+            pair_idx = 0
 
             for nu_key in all_nu:
+                print(f"Loading {nu_key}...")
                 data = f[nu_key][:]  # (n_samples, n_t, n_x)
                 n_samples, n_t, n_x = data.shape
 
                 if max_samples is not None:
                     n_samples = min(n_samples, max_samples)
+                    data = data[:n_samples]
 
                 for i in range(n_samples):
                     # Generate all possible pairs with given spacing
@@ -251,29 +334,33 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
                         step = max(1, len(possible_pairs) // max_pairs_per_sample)
                         possible_pairs = possible_pairs[::step][:max_pairs_per_sample]
 
-                    # Create training pairs
+                    # Create training pairs directly in pre-allocated array
                     for t_in, t_out in possible_pairs:
+                        if pair_idx >= total_pairs:
+                            break
+
                         input_field = data[i, t_in, :]
                         output_field = data[i, t_out, :]
 
-                        x_coords = np.linspace(0, 1, n_x)
-                        y_coords = np.array([0.5])
-                        grid_x, grid_y = np.meshgrid(x_coords, y_coords, indexing='ij')
+                        X_array[pair_idx, :, :, 0] = grid_x
+                        X_array[pair_idx, :, :, 1] = grid_y
+                        X_array[pair_idx, :, :, 2] = input_field[:, np.newaxis]
 
-                        X = np.zeros((n_x, 1, 3), dtype=np.float32)
-                        X[:, :, 0] = grid_x
-                        X[:, :, 1] = grid_y
-                        X[:, :, 2] = input_field[:, np.newaxis]
+                        U_array[pair_idx, :, :, 0] = output_field[:, np.newaxis]
 
-                        U = output_field[:, np.newaxis, np.newaxis]
+                        pair_idx += 1
 
-                        X_list.append(X)
-                        U_list.append(U)
+                # Free memory
+                del data
 
-        X = np.stack(X_list)
-        U = np.stack(U_list)
+            # Trim arrays to actual size
+            X_array = X_array[:pair_idx]
+            U_array = U_array[:pair_idx]
 
-    return PDEDataset(X, U)
+            print(f"Actual pairs loaded: {pair_idx}")
+            print(f"Memory usage: X={X_array.nbytes / (1024**2):.2f} MB, U={U_array.nbytes / (1024**2):.2f} MB")
+
+            return PDEDataset(X_array, U_array)
 
 
 def load_h5_2d(filepath: str, max_samples: int = None) -> PDEDataset:

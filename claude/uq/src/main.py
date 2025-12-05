@@ -55,13 +55,24 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
     print(f"Output: {exp_dir}")
     print(f"{'='*80}\n")
 
-    # Load data
+    # Load data with memory-safe defaults
     print("Loading data...")
+    max_samples = getattr(config, 'max_samples', 100)  # Default to 100 samples per nu value
+    time_step_spacing = getattr(config, 'time_step_spacing', 10)
+    max_pairs_per_sample = getattr(config, 'max_pairs_per_sample', 20)
+
+    print(f"Data loading settings:")
+    print(f"  max_samples: {max_samples}")
+    print(f"  time_step_spacing: {time_step_spacing}")
+    print(f"  max_pairs_per_sample: {max_pairs_per_sample}")
+
     dataset = load_pde_data(
         filepath=data_path,
         pde_type=pde_type,
         nu_values=nu_values,
-        max_samples=config.max_samples if hasattr(config, 'max_samples') else None
+        max_samples=max_samples,
+        time_step_spacing=time_step_spacing,
+        max_pairs_per_sample=max_pairs_per_sample
     )
     print(f"Dataset size: {len(dataset)}")
     print(f"Input shape: {dataset.X[0].shape}")
@@ -79,7 +90,8 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
 
     # Initialize FNO model
     print("\nInitializing FNO model...")
-    fno_model = Factory.create_fno(config)
+    fno_model = Factory.create_fno(config, pde_type=pde_type)
+    print(f"FNO Model type: {fno_model.__class__.__name__}")
     print(f"FNO parameters: {sum(p.numel() for p in fno_model.parameters()):,}")
 
     # Train FNO
@@ -94,18 +106,32 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
     print("\n" + "="*80)
     print("Stage 2: Training EBM")
     print("="*80)
-    # ebm_model = KANEBM(#change this by calling a Factory function, eg: ebm_model = create_ebm(config)
-    #     input_dim=4,  # [x, y, y_fno, y_true]
-    #     hidden_dim=config.ebm_hidden_dim if hasattr(config, 'ebm_hidden_dim') else 64,
-    #     num_layers=config.ebm_layers if hasattr(config, 'ebm_layers') else 3
-    # ).to(config.device)
+
+    # Calculate EBM input_dim based on data shape
+    sample_x, sample_u = dataset[0]
+    n_spatial = sample_x.shape[0] * sample_x.shape[1]  # n_x * n_y
+    n_input_channels = sample_x.shape[-1]  # coordinate channels
+    n_output_channels = sample_u.shape[-1]  # output channels
+
+    # Total flattened size: u + x + u_fno
+    ebm_input_dim = n_spatial * (n_output_channels + n_input_channels + n_output_channels)
+
+    print(f"EBM input calculation: n_spatial={n_spatial}, input_ch={n_input_channels}, output_ch={n_output_channels}")
+    print(f"EBM input_dim: {ebm_input_dim}")
+
+    # Update config_dict BEFORE creating Config object
+    config_dict['ebm_input_dim'] = ebm_input_dim
+
+    # Recreate config with updated input_dim
+    config = Config(config_dict)
+
     ebm_model = Factory.create_ebm(config)
     print(f"EBM parameters: {sum(p.numel() for p in ebm_model.parameters()):,}")
 
     ebm_trainer = EBMTrainer(
-        fno_model=fno_model,
-        ebm_model=ebm_model,
-        config=config
+        model=ebm_model,
+        config=config,
+        fno_model=fno_model
     )
     ebm_epochs = getattr(config, 'ebm_epochs', 50)
     ebm_trainer.train(train_loader, val_loader, ebm_epochs)
@@ -114,10 +140,10 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
     print("\n" + "="*80)
     print("Final Evaluation on Test Set")
     print("="*80)
-    test_metrics = ebm_trainer.evaluate(test_loader)
+    test_loss = ebm_trainer.validate(test_loader)
+    test_metrics = {'test_loss': test_loss}
     print(f"Test Metrics:")
-    for key, val in test_metrics.items():
-        print(f"  {key}: {val:.6f}")
+    print(f"  test_loss: {test_loss:.6f}")
 
     # Save final results
     with open(exp_dir / 'results.json', 'w') as f:
@@ -141,16 +167,18 @@ def create_default_config(pde_type: str) -> dict:
 
         # Training
         'batch_size': 32,
-        'fno_epochs': 100,
-        'ebm_epochs': 50,
+        'fno_epochs': 20,
+        'ebm_epochs': 20,
         'fno_lr': 1e-3,
         'ebm_lr': 1e-4,
         'patience': 20,
 
-        # Data
+        # Data - Memory-safe defaults
         'train_ratio': 0.8,
         'val_ratio': 0.1,
-        'max_samples': None,
+        'max_samples': 250,  # Default to 100 samples per nu value to prevent OOM
+        'time_step_spacing': 10,  # Time step spacing for 1D PDEs
+        'max_pairs_per_sample': 20,  # Max pairs per sample for 1D PDEs
         'seed': 42,
 
         # Tracking
