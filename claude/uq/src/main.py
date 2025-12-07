@@ -17,6 +17,7 @@ from config import Config, Factory
 from datautils import load_pde_data, create_dataloaders
 from fno import FNOTrainer
 from kanebm import EBMTrainer
+from visualize import generate_ebm_visualization, plot_training_curves
 
 
 def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
@@ -149,6 +150,42 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
     with open(exp_dir / 'results.json', 'w') as f:
         json.dump(test_metrics, f, indent=2)
 
+    # Generate visualizations
+    print("\n" + "="*80)
+    print("Generating Visualizations and Calibration Analysis")
+    print("="*80)
+
+    # Generate comparison visualizations (GT, FNO, FNO Error, EBM) + calibration plots
+    num_viz_samples = getattr(config, 'num_viz_samples', 4)
+    generate_ebm_visualization(
+        ebm_trainer=ebm_trainer,
+        fno_model=fno_model,
+        test_loader=test_loader,
+        config=config,
+        pde_type=pde_type,
+        output_dir=str(exp_dir),
+        num_samples=num_viz_samples,
+    )
+
+    print("\nCalibration plot saved to: " + str(exp_dir / 'ebm_calibration.png'))
+
+    # Plot training curves for both FNO and EBM
+    if hasattr(fno_trainer, 'train_losses') and len(fno_trainer.train_losses) > 0:
+        plot_training_curves(
+            train_losses=fno_trainer.train_losses,
+            val_losses=fno_trainer.val_losses,
+            save_path=str(exp_dir / 'fno_training_curves.png'),
+            title='FNO Training Curves',
+        )
+
+    if hasattr(ebm_trainer, 'train_losses') and len(ebm_trainer.train_losses) > 0:
+        plot_training_curves(
+            train_losses=ebm_trainer.train_losses,
+            val_losses=ebm_trainer.val_losses,
+            save_path=str(exp_dir / 'ebm_training_curves.png'),
+            title='EBM Training Curves',
+        )
+
     print(f"\n{'='*80}")
     print("Training Complete!")
     print(f"Results saved to: {exp_dir}")
@@ -184,6 +221,9 @@ def create_default_config(pde_type: str) -> dict:
         # Tracking
         'enable_tracking': True,
         'tracking_backend': 'custom',  # 'custom' or 'tensorboard'
+
+        # Checkpointing
+        'save_checkpoints': False,  # Set to True to save model checkpoints
 
         # Device
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
@@ -234,6 +274,10 @@ def main():
                         choices=['custom', 'tensorboard'],
                         help='Tracking backend (custom or tensorboard)')
 
+    # Checkpointing
+    parser.add_argument('--save_checkpoints', action='store_true',
+                        help='Save model checkpoints during training')
+
     args = parser.parse_args()
 
     # Create config
@@ -258,6 +302,8 @@ def main():
         config_dict['ebm_epochs'] = args.ebm_epochs
     if args.tracking_backend is not None:
         config_dict['tracking_backend'] = args.tracking_backend
+    if args.save_checkpoints:
+        config_dict['save_checkpoints'] = True
 
     # Run training
     train_fno_ebm(

@@ -819,6 +819,9 @@ class EBMTrainer:
         self.train_losses = []
         self.val_losses = []
 
+        # Checkpoint configuration
+        self.save_checkpoints = getattr(config, 'save_checkpoints', True)
+
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -1225,8 +1228,9 @@ class EBMTrainer:
             # Save best model
             if avg_val_loss < self.best_val_loss:
                 self.best_val_loss = avg_val_loss
-                self.save_checkpoint(epoch, is_best=True)
-                self.logger.info(f"  → Best EBM model saved (val_loss={avg_val_loss:.6f})")
+                if self.save_checkpoints:
+                    self.save_checkpoint(epoch, is_best=True)
+                    self.logger.info(f"  → Best EBM model saved (val_loss={avg_val_loss:.6f})")
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         """Save model checkpoint."""
