@@ -191,35 +191,94 @@ class Factory:
 
     @staticmethod
     def create_ebm(config):
-        """Create EBM model from config based on base type."""
-        base = getattr(config, 'ebm_base', 'kan')
+        """Create EBM model from config based on architecture type."""
+        from kanebm import EBM, ConvEnergyNet, MLPEnergyNet
+
         input_dim = getattr(config, 'ebm_input_dim', 4)
-        hidden_dim = getattr(config, 'ebm_hidden_dim', 64)
-        num_layers = getattr(config, 'ebm_layers', 3)
+        use_cnn = getattr(config, 'ebm_use_cnn', False)
+        use_kan = getattr(config, 'ebm_use_kan', False)
 
-        print(f"[Factory] EBM input_dim={input_dim}, hidden_dim={hidden_dim}, layers={num_layers}")
+        print(f"[Factory] Creating EBM: use_cnn={use_cnn}, use_kan={use_kan}, input_dim={input_dim}")
 
-        # Convert single hidden_dim to list of hidden_dims
-        if isinstance(hidden_dim, int):
-            hidden_dims = [hidden_dim] * (num_layers - 1)
-        else:
-            hidden_dims = hidden_dim
+        if use_cnn:
+            # CNN-based EBM for 2D spatial data
+            # Input shape will be (batch, channels, H, W) not flattened
+            # Calculate input channels: u + x_coords + u_fno
+            n_input_channels = getattr(config, 'ebm_n_input_channels', 3)  # x coordinate channels
+            n_output_channels = getattr(config, 'ebm_n_output_channels', 1)  # u field channels
 
-        print(f"[Factory] Building KAN with layers: [{input_dim}] + {hidden_dims} + [1]")
+            # Total CNN input channels: u (1) + x (3) + u_fno (1) = 5 for typical 2D case
+            in_channels = n_output_channels + n_input_channels + n_output_channels
 
-        if base == 'kan':
+            base_channels = getattr(config, 'ebm_base_channels', 64)
+            num_blocks = getattr(config, 'ebm_num_blocks', 4)
+            use_spatial_attn = getattr(config, 'ebm_use_spatial_attn', True)
+            use_channel_attn = getattr(config, 'ebm_use_channel_attn', True)
+            mlp_hidden = getattr(config, 'ebm_mlp_hidden', 256)
+
+            print(f"[Factory] Building CNN-EBM: in_ch={in_channels} (u={n_output_channels} + x={n_input_channels} + u_fno={n_output_channels})")
+            print(f"[Factory]   base_ch={base_channels}, blocks={num_blocks}")
+            print(f"[Factory]   Spatial attn={use_spatial_attn}, Channel attn={use_channel_attn}")
+
+            energy_net = ConvEnergyNet(
+                in_channels=in_channels,
+                base_channels=base_channels,
+                num_blocks=num_blocks,
+                use_spatial_attn=use_spatial_attn,
+                use_channel_attn=use_channel_attn,
+                dropout=0.1,
+                mlp_hidden=mlp_hidden,
+            )
+
+            # Wrap in EBM with custom energy network
+            model = EBM(
+                energy_net=energy_net,
+                input_dim=input_dim,  # Not used for CNN, but kept for compatibility
+                condition_on_fno=True,
+            )
+
+        elif use_kan:
+            # KAN-based EBM (legacy)
             from kanebm import KANEBM
+            hidden_dim = getattr(config, 'ebm_hidden_dim', 64)
+            num_layers = getattr(config, 'ebm_layers', 3)
+
+            if isinstance(hidden_dim, int):
+                hidden_dims = [hidden_dim] * (num_layers - 1)
+            else:
+                hidden_dims = hidden_dim
+
+            print(f"[Factory] Building KAN-EBM: [{input_dim}] + {hidden_dims} + [1]")
+
             model = KANEBM(
                 input_dim=input_dim,
                 hidden_dims=hidden_dims,
                 grid_size=getattr(config, 'grid_size', 5),
                 spline_order=getattr(config, 'spline_order', 3),
             )
-        elif base == 'mlp':
-            # TODO: Implement MLPEBM
-            raise NotImplementedError("MLP EBM not yet implemented")
+
         else:
-            raise ValueError(f"Unknown EBM base: {base}")
+            # MLP-based EBM (default)
+            hidden_dim = getattr(config, 'ebm_hidden_dim', 256)
+            num_layers = getattr(config, 'ebm_layers', 4)
+
+            if isinstance(hidden_dim, int):
+                hidden_dims = [hidden_dim] * num_layers
+            else:
+                hidden_dims = hidden_dim
+
+            print(f"[Factory] Building MLP-EBM: input={input_dim}, hidden={hidden_dims}")
+
+            model = EBM(
+                energy_net=None,  # Will create MLPEnergyNet internally
+                input_dim=input_dim,
+                hidden_dims=hidden_dims,
+                condition_on_fno=True,
+                use_kan=False,
+                use_attention=False,
+                dropout=0.1,
+                activation='gelu',
+            )
 
         return model.to(config.device)
 

@@ -575,6 +575,190 @@ class MLPEnergyNet(nn.Module):
 
 
 # ============================================================================
+# CNN-based Energy Network with Attention
+# ============================================================================
+
+class SpatialAttention(nn.Module):
+    """Spatial attention module for highlighting important spatial regions."""
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size//2)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, channels, H, W)
+        Returns:
+            x_attended: (batch, channels, H, W)
+        """
+        # Aggregate channel information
+        avg_pool = torch.mean(x, dim=1, keepdim=True)  # (batch, 1, H, W)
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)  # (batch, 1, H, W)
+        pooled = torch.cat([avg_pool, max_pool], dim=1)  # (batch, 2, H, W)
+
+        # Compute attention map
+        attention = self.sigmoid(self.conv(pooled))  # (batch, 1, H, W)
+        return x * attention
+
+
+class ChannelAttention(nn.Module):
+    """Channel attention (Squeeze-and-Excitation) for feature recalibration."""
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, channels, H, W)
+        Returns:
+            x_attended: (batch, channels, H, W)
+        """
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
+class ConvBlock(nn.Module):
+    """Convolutional block with optional attention."""
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        stride=1,
+        use_spatial_attn=False,
+        use_channel_attn=False,
+        dropout=0.1
+    ):
+        super().__init__()
+        padding = kernel_size // 2
+
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+        self.norm = nn.BatchNorm2d(out_channels)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout2d(dropout)
+
+        # Attention modules
+        self.use_spatial_attn = use_spatial_attn
+        self.use_channel_attn = use_channel_attn
+        if use_spatial_attn:
+            self.spatial_attn = SpatialAttention()
+        if use_channel_attn:
+            self.channel_attn = ChannelAttention(out_channels)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.norm(x)
+        x = self.activation(x)
+
+        # Apply attention
+        if self.use_spatial_attn:
+            x = self.spatial_attn(x)
+        if self.use_channel_attn:
+            x = self.channel_attn(x)
+
+        x = self.dropout(x)
+        return x
+
+
+class ConvEnergyNet(nn.Module):
+    """
+    CNN-based energy network with attention for 2D spatial data.
+
+    Architecture:
+        Input (batch, in_channels, H, W)
+        → Conv Blocks with attention (gradually increase channels, reduce spatial)
+        → Global pooling
+        → MLP head → scalar energy
+
+    Much more efficient than flattened MLP for 2D PDEs (128×128 grid).
+    """
+    def __init__(
+        self,
+        in_channels: int = 3,  # [u, x, u_fno] for 1D, or channels for 2D
+        base_channels: int = 64,
+        num_blocks: int = 4,
+        use_spatial_attn: bool = True,
+        use_channel_attn: bool = True,
+        dropout: float = 0.1,
+        mlp_hidden: int = 256,
+    ):
+        """
+        Args:
+            in_channels: Number of input channels
+            base_channels: Base number of channels (doubles each downsampling)
+            num_blocks: Number of convolutional blocks
+            use_spatial_attn: Use spatial attention in blocks
+            use_channel_attn: Use channel attention (SE) in blocks
+            dropout: Dropout rate
+            mlp_hidden: Hidden dimension for final MLP head
+        """
+        super().__init__()
+        self.in_channels = in_channels
+
+        # Build convolutional blocks
+        self.blocks = nn.ModuleList()
+        current_channels = in_channels
+
+        for i in range(num_blocks):
+            out_channels = base_channels * (2 ** (i // 2))  # Double channels every 2 blocks
+            stride = 2 if i % 2 == 1 else 1  # Downsample every other block
+
+            # Add attention to later blocks (more abstract features)
+            use_attn_here = (use_spatial_attn or use_channel_attn) and i >= num_blocks // 2
+
+            self.blocks.append(ConvBlock(
+                current_channels,
+                out_channels,
+                kernel_size=3,
+                stride=stride,
+                use_spatial_attn=use_spatial_attn and use_attn_here,
+                use_channel_attn=use_channel_attn and use_attn_here,
+                dropout=dropout
+            ))
+            current_channels = out_channels
+
+        # Global pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+
+        # Simple linear head for energy output (channels → 1)
+        self.mlp_head = nn.Linear(current_channels, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor (batch, in_channels, H, W) for 2D
+               or (batch, in_channels, N, 1) for 1D (will squeeze)
+
+        Returns:
+            energy: Scalar energy (batch,)
+        """
+        # Handle 1D case: (batch, channels, N, 1) → treat as (batch, channels, N, N)
+        # or just process as-is with 2D convs
+
+        # Apply convolutional blocks
+        for block in self.blocks:
+            x = block(x)
+
+        # Global pooling: (batch, channels, H, W) → (batch, channels, 1, 1)
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)  # (batch, channels)
+
+        # MLP head to scalar energy
+        energy = self.mlp_head(x).squeeze(-1)  # (batch,)
+        return energy
+
+
+# ============================================================================
 # Flexible EBM: Accepts Any Energy Network (KAN or MLP)
 # ============================================================================
 
@@ -684,27 +868,69 @@ class EBM(nn.Module):
         Returns:
             energy: Scalar energy for each sample (batch,)
         """
-        # Flatten spatial dimensions
         batch_size = u.shape[0]
-        u_flat = u.reshape(batch_size, -1)
-        x_flat = x.reshape(batch_size, -1)
 
-        # Concatenate inputs
-        if self.condition_on_fno and u_fno is not None:
-            u_fno_flat = u_fno.reshape(batch_size, -1)
-            inputs = torch.cat([u_flat, x_flat, u_fno_flat], dim=-1)
+        # Check if using CNN-based energy network
+        is_cnn = isinstance(self.energy_net, ConvEnergyNet)
+
+        if is_cnn:
+            # CNN path: Keep spatial structure, stack channels
+            # Input shapes: u (batch, H, W, 1), x (batch, H, W, coord_ch), u_fno (batch, H, W, 1)
+            # Need to convert to (batch, channels, H, W)
+
+            if len(u.shape) == 4:  # 2D: (batch, H, W, channels)
+                # Permute to (batch, channels, H, W)
+                u_spatial = u.permute(0, 3, 1, 2)  # (batch, 1, H, W)
+                x_spatial = x.permute(0, 3, 1, 2)  # (batch, coord_ch, H, W)
+
+                if self.condition_on_fno and u_fno is not None:
+                    u_fno_spatial = u_fno.permute(0, 3, 1, 2)  # (batch, 1, H, W)
+                    inputs = torch.cat([u_spatial, x_spatial, u_fno_spatial], dim=1)
+                else:
+                    inputs = torch.cat([u_spatial, x_spatial], dim=1)
+
+            elif len(u.shape) == 3:  # 1D: (batch, N, channels)
+                # Convert to (batch, channels, N, 1) for 2D conv
+                u_spatial = u.permute(0, 2, 1).unsqueeze(-1)  # (batch, 1, N, 1)
+                x_spatial = x.permute(0, 2, 1).unsqueeze(-1)  # (batch, coord_ch, N, 1)
+
+                if self.condition_on_fno and u_fno is not None:
+                    u_fno_spatial = u_fno.permute(0, 2, 1).unsqueeze(-1)  # (batch, 1, N, 1)
+                    inputs = torch.cat([u_spatial, x_spatial, u_fno_spatial], dim=1)
+                else:
+                    inputs = torch.cat([u_spatial, x_spatial], dim=1)
+            else:
+                raise ValueError(f"Unexpected input shape for CNN: {u.shape}")
+
+            # Debug
+            if not hasattr(self, '_dim_checked'):
+                print(f"[CNN-EBM Debug] u shape: {u.shape} → {u_spatial.shape}")
+                print(f"[CNN-EBM Debug] x shape: {x.shape} → {x_spatial.shape}")
+                if u_fno is not None:
+                    print(f"[CNN-EBM Debug] u_fno shape: {u_fno.shape} → {u_fno_spatial.shape}")
+                print(f"[CNN-EBM Debug] CNN input shape: {inputs.shape}")
+                self._dim_checked = True
+
         else:
-            inputs = torch.cat([u_flat, x_flat], dim=-1)
+            # MLP path: Flatten everything
+            u_flat = u.reshape(batch_size, -1)
+            x_flat = x.reshape(batch_size, -1)
 
-        # Debug: Check dimensions on first call
-        if not hasattr(self, '_dim_checked'):
-            print(f"[EBM Debug] u shape: {u.shape}, u_flat: {u_flat.shape}")
-            print(f"[EBM Debug] x shape: {x.shape}, x_flat: {x_flat.shape}")
-            if u_fno is not None:
-                print(f"[EBM Debug] u_fno shape: {u_fno.shape}, u_fno_flat: {u_fno_flat.shape}")
-            print(f"[EBM Debug] inputs shape: {inputs.shape}")
-            print(f"[EBM Debug] Expected input_dim: {self.input_dim}")
-            self._dim_checked = True
+            if self.condition_on_fno and u_fno is not None:
+                u_fno_flat = u_fno.reshape(batch_size, -1)
+                inputs = torch.cat([u_flat, x_flat, u_fno_flat], dim=-1)
+            else:
+                inputs = torch.cat([u_flat, x_flat], dim=-1)
+
+            # Debug
+            if not hasattr(self, '_dim_checked'):
+                print(f"[MLP-EBM Debug] u shape: {u.shape}, u_flat: {u_flat.shape}")
+                print(f"[MLP-EBM Debug] x shape: {x.shape}, x_flat: {x_flat.shape}")
+                if u_fno is not None:
+                    print(f"[MLP-EBM Debug] u_fno shape: {u_fno.shape}, u_fno_flat: {u_fno_flat.shape}")
+                print(f"[MLP-EBM Debug] MLP input shape: {inputs.shape}")
+                print(f"[MLP-EBM Debug] Expected input_dim: {self.input_dim}")
+                self._dim_checked = True
 
         # Compute energy through network
         energy = self.energy_net(inputs)

@@ -122,6 +122,8 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
 
     # Update config_dict BEFORE creating Config object
     config_dict['ebm_input_dim'] = ebm_input_dim
+    config_dict['ebm_n_input_channels'] = n_input_channels  # For CNN: x coordinate channels
+    config_dict['ebm_n_output_channels'] = n_output_channels  # For CNN: u field channels
 
     # Recreate config with updated input_dim
     config = Config(config_dict)
@@ -195,27 +197,40 @@ def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
 def create_default_config(pde_type: str) -> dict:
     """Create default configuration for a PDE type."""
     config = {
-        # Model
+        # FNO Model
         'fno_modes': 12,
         'fno_width': 64,
         'fno_depth': 4,
-        'ebm_hidden_dim': 64,
-        'ebm_layers': 3,
+
+        # EBM Architecture Selection
+        'ebm_use_cnn': False,  # Use CNN for 2D spatial data (auto-enabled for 2D PDEs)
+        'ebm_use_kan': False,  # Use KAN instead of MLP (not recommended)
+
+        # EBM MLP-based settings (for 1D or when ebm_use_cnn=False)
+        'ebm_hidden_dim': 256,  # Increased from 64
+        'ebm_layers': 4,  # Increased from 3
+
+        # EBM CNN-specific settings (when ebm_use_cnn=True for 2D PDEs)
+        'ebm_base_channels': 64,  # Base channels for CNN
+        'ebm_num_blocks': 4,  # Number of convolutional blocks
+        'ebm_use_spatial_attn': True,  # Enable spatial attention
+        'ebm_use_channel_attn': True,  # Enable channel attention (SE)
+        'ebm_mlp_hidden': 256,  # MLP head hidden dimension
 
         # Training
         'batch_size': 32,
         'fno_epochs': 20,
-        'ebm_epochs': 20,
+        'ebm_epochs': 100,  # Increased from 20 - EBM needs longer training
         'fno_lr': 1e-3,
         'ebm_lr': 1e-4,
-        'patience': 20,
+        'patience': 50,  # Increased for longer training
 
         # Data - Memory-safe defaults
         'train_ratio': 0.8,
         'val_ratio': 0.1,
-        'max_samples': 250,  # Default to 100 samples per nu value to prevent OOM
-        'time_step_spacing': 10,  # Time step spacing for 1D PDEs
-        'max_pairs_per_sample': 20,  # Max pairs per sample for 1D PDEs
+        'max_samples': 100,
+        'time_step_spacing': 2,  # CRITICAL FIX: Reduced from 10 to capture early dynamics
+        'max_pairs_per_sample': 20,  # Increased from 10
         'seed': 42,
 
         # Tracking
@@ -231,14 +246,30 @@ def create_default_config(pde_type: str) -> dict:
 
     # PDE-specific adjustments
     if pde_type in ['burgers', 'advection']:
-        # 1D PDEs need fewer parameters
+        # 1D PDEs: Use MLP-based EBM
         config['fno_modes'] = 16
-        config['batch_size'] = 64
-    elif pde_type == 'navier_stokes':
-        # NS needs more capacity
+        config['batch_size'] = 32
+        config['ebm_use_cnn'] = False
+        config['ebm_hidden_dim'] = 256
+        config['ebm_layers'] = 4
+        config['ebm_epochs'] = 100
+        config['time_step_spacing'] = 2  # Critical: capture dynamics before dissipation
+        config['max_pairs_per_sample'] = 20
+        config['max_samples'] = 200
+
+    elif pde_type in ['navier_stokes', 'diffusion_reaction']:
+        # 2D PDEs: Use CNN-based EBM for spatial data
         config['fno_modes'] = 20
         config['fno_width'] = 96
-        config['batch_size'] = 16
+        config['batch_size'] = 8  # Smaller batch for larger models
+        config['ebm_use_cnn'] = True  # Enable CNN architecture
+        config['ebm_base_channels'] = 64
+        config['ebm_num_blocks'] = 4
+        config['ebm_use_spatial_attn'] = True
+        config['ebm_use_channel_attn'] = True
+        config['ebm_mlp_hidden'] = 512  # Larger MLP head for 2D
+        config['ebm_epochs'] = 150  # Longer training for complex 2D patterns
+        config['max_samples'] = 100  # Prevent OOM on 2D data
 
     return config
 
