@@ -536,7 +536,7 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
     if method_name in ['der_nig', 'improved_der', 'natural_posterior']:
         print("\nGenerating evidential parameter visualization...")
         try:
-            # Get a sample from test loader
+            # Get samples from test loader
             for x, y in test_loader:
                 pde_type = config_dict.get('pde_type', 'unknown')
                 visualize_evidential_parameters(
@@ -544,11 +544,11 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
                     x=x,
                     u_gt=y,
                     save_path=str(output_dir / f'{method_name}_nig_parameters.png'),
-                    sample_idx=0,
+                    n_samples=3,  # Visualize 3 samples
                     pde_type=pde_type,
                     device=config.device
                 )
-                print(f"NIG parameter visualization saved to {output_dir / f'{method_name}_nig_parameters.png'}")
+                print(f"NIG parameter visualizations saved to {output_dir}")
                 break  # Only visualize first batch
         except Exception as e:
             print(f"Warning: Could not generate NIG parameter visualization: {e}")

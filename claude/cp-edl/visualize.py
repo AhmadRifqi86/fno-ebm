@@ -509,25 +509,23 @@ def visualize_evidential_parameters(
     x: torch.Tensor,
     u_gt: torch.Tensor,
     save_path: Optional[str] = None,
-    sample_idx: int = 0,
+    n_samples: int = 10,
     pde_type: str = 'unknown',
     device: str = 'cuda'
 ) -> None:
     """
-    Visualize the 4 NIG parameters (gamma, nu, alpha, beta) from an evidential model.
+    Visualize the NIG parameters (gamma, nu, alpha, beta) and ground truth from an evidential model.
 
-    Creates a 2x2 grid showing:
-    - Top left: Gamma (predicted mean)
-    - Top right: Nu (evidence for mean)
-    - Bottom left: Alpha (shape parameter)
-    - Bottom right: Beta (scale parameter)
+    Creates a 2x3 grid showing:
+    - Top row: Ground Truth | Gamma (predicted mean) | Nu (evidence for mean)
+    - Bottom row: Alpha (shape) | Beta (scale) | Total Uncertainty
 
     Args:
         model: Evidential FNO model
         x: Input tensor (batch, n_x, [n_y], coord_channels)
         u_gt: Ground truth (batch, n_x, [n_y], channels)
-        save_path: Path to save the figure
-        sample_idx: Which sample in the batch to visualize
+        save_path: Path to save the figure (will append sample index for multiple samples)
+        n_samples: Number of samples to visualize from the batch
         pde_type: Type of PDE for labeling
         device: Device to run model on
     """
@@ -537,141 +535,195 @@ def visualize_evidential_parameters(
         x_input = x.to(device)
         gamma, nu, alpha, beta = model(x_input)
 
-    # Move to CPU and select sample
-    gamma_np = gamma[sample_idx].cpu().numpy()
-    nu_np = nu[sample_idx].cpu().numpy()
-    alpha_np = alpha[sample_idx].cpu().numpy()
-    beta_np = beta[sample_idx].cpu().numpy()
-    u_gt_np = u_gt[sample_idx].cpu().numpy()
+    # Determine actual number of samples to visualize
+    batch_size = x.shape[0]
+    n_samples = min(n_samples, batch_size)
 
-    # Squeeze all singleton dimensions to get clean shapes
-    gamma_np = np.squeeze(gamma_np)
-    nu_np = np.squeeze(nu_np)
-    alpha_np = np.squeeze(alpha_np)
-    beta_np = np.squeeze(beta_np)
-    u_gt_np = np.squeeze(u_gt_np)
+    # Loop through samples and create a figure for each
+    for sample_idx in range(n_samples):
+        # Move to CPU and select sample
+        gamma_np = gamma[sample_idx].cpu().numpy()
+        nu_np = nu[sample_idx].cpu().numpy()
+        alpha_np = alpha[sample_idx].cpu().numpy()
+        beta_np = beta[sample_idx].cpu().numpy()
+        u_gt_np = u_gt[sample_idx].cpu().numpy()
 
-    # Determine dimensionality after squeezing
-    is_1d = len(gamma_np.shape) == 1  # (n_x,)
-    is_2d = len(gamma_np.shape) == 2  # (n_x, n_y)
+        # Squeeze all singleton dimensions to get clean shapes
+        gamma_np = np.squeeze(gamma_np)
+        nu_np = np.squeeze(nu_np)
+        alpha_np = np.squeeze(alpha_np)
+        beta_np = np.squeeze(beta_np)
+        u_gt_np = np.squeeze(u_gt_np)
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f'Evidential NIG Parameters - {pde_type.upper()}',
-                 fontsize=16, fontweight='bold')
+        # Determine dimensionality after squeezing
+        is_1d = len(gamma_np.shape) == 1  # (n_x,)
+        is_2d = len(gamma_np.shape) == 2  # (n_x, n_y)
 
-    if is_1d:
-        # 1D visualization with line plots
-        n_x = gamma_np.shape[0]
-        x_coords = np.linspace(0, 1, n_x)
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        fig.suptitle(f'Evidential NIG Parameters - {pde_type.upper()} (Sample {sample_idx + 1}/{n_samples})',
+                     fontsize=16, fontweight='bold')
 
-        # Gamma (predicted mean)
-        axes[0, 0].plot(x_coords, gamma_np, 'b-', linewidth=2, label='Gamma (mean)')
-        axes[0, 0].plot(x_coords, u_gt_np, 'r--', linewidth=1, alpha=0.7, label='Ground Truth')
-        axes[0, 0].set_title('γ (Gamma) - Predicted Mean', fontsize=12, fontweight='bold')
-        axes[0, 0].set_xlabel('x')
-        axes[0, 0].set_ylabel('Value')
-        axes[0, 0].legend()
-        axes[0, 0].grid(True, alpha=0.3)
+        if is_1d:
+            # 1D visualization with line plots
+            n_x = gamma_np.shape[0]
+            x_coords = np.linspace(0, 1, n_x)
 
-        # Nu (evidence for mean)
-        axes[0, 1].plot(x_coords, nu_np, 'g-', linewidth=2)
-        axes[0, 1].set_title('ν (Nu) - Evidence for Mean', fontsize=12, fontweight='bold')
-        axes[0, 1].set_xlabel('x')
-        axes[0, 1].set_ylabel('Value')
-        axes[0, 1].grid(True, alpha=0.3)
-        axes[0, 1].set_ylim(bottom=0)
+            # Ground Truth
+            axes[0, 0].plot(x_coords, u_gt_np, 'k-', linewidth=2)
+            axes[0, 0].set_title('Ground Truth', fontsize=12, fontweight='bold')
+            axes[0, 0].set_xlabel('x')
+            axes[0, 0].set_ylabel('Value')
+            axes[0, 0].grid(True, alpha=0.3)
 
-        # Alpha (shape)
-        axes[1, 0].plot(x_coords, alpha_np, 'm-', linewidth=2)
-        axes[1, 0].set_title('α (Alpha) - Shape Parameter', fontsize=12, fontweight='bold')
-        axes[1, 0].set_xlabel('x')
-        axes[1, 0].set_ylabel('Value')
-        axes[1, 0].grid(True, alpha=0.3)
-        axes[1, 0].set_ylim(bottom=0)
+            # Gamma (predicted mean)
+            axes[0, 1].plot(x_coords, gamma_np, 'b-', linewidth=2, label='Gamma (mean)')
+            axes[0, 1].plot(x_coords, u_gt_np, 'k--', linewidth=1, alpha=0.5, label='Ground Truth')
+            axes[0, 1].set_title('γ (Gamma) - Predicted Mean', fontsize=12, fontweight='bold')
+            axes[0, 1].set_xlabel('x')
+            axes[0, 1].set_ylabel('Value')
+            axes[0, 1].legend()
+            axes[0, 1].grid(True, alpha=0.3)
 
-        # Beta (scale)
-        axes[1, 1].plot(x_coords, beta_np, 'c-', linewidth=2)
-        axes[1, 1].set_title('β (Beta) - Scale Parameter', fontsize=12, fontweight='bold')
-        axes[1, 1].set_xlabel('x')
-        axes[1, 1].set_ylabel('Value')
-        axes[1, 1].grid(True, alpha=0.3)
-        axes[1, 1].set_ylim(bottom=0)
+            # Nu (evidence for mean)
+            axes[0, 2].plot(x_coords, nu_np, 'g-', linewidth=2)
+            axes[0, 2].set_title('ν (Nu) - Evidence for Mean', fontsize=12, fontweight='bold')
+            axes[0, 2].set_xlabel('x')
+            axes[0, 2].set_ylabel('Value')
+            axes[0, 2].grid(True, alpha=0.3)
+            axes[0, 2].set_ylim(bottom=0)
 
-        # Compute and display statistics
-        var_aleatoric = beta_np / (alpha_np - 1)
-        var_epistemic = beta_np / (nu_np * (alpha_np - 1))
-        var_total = var_aleatoric + var_epistemic
+            # Alpha (shape)
+            axes[1, 0].plot(x_coords, alpha_np, 'm-', linewidth=2)
+            axes[1, 0].set_title('α (Alpha) - Shape Parameter', fontsize=12, fontweight='bold')
+            axes[1, 0].set_xlabel('x')
+            axes[1, 0].set_ylabel('Value')
+            axes[1, 0].grid(True, alpha=0.3)
+            axes[1, 0].set_ylim(bottom=0)
 
-        stats_text = (
-            f"Statistics:\n"
-            f"Mean γ: {gamma_np.mean():.4f} ± {gamma_np.std():.4f}\n"
-            f"Mean ν: {nu_np.mean():.4f}\n"
-            f"Mean α: {alpha_np.mean():.4f}\n"
-            f"Mean β: {beta_np.mean():.4f}\n"
-            f"Avg Aleatoric: {var_aleatoric.mean():.6f}\n"
-            f"Avg Epistemic: {var_epistemic.mean():.6f}\n"
-            f"Avg Total Unc: {np.sqrt(var_total.mean()):.6f}"
-        )
-        fig.text(0.98, 0.02, stats_text, fontsize=10,
-                 verticalalignment='bottom', horizontalalignment='right',
-                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            # Beta (scale)
+            axes[1, 1].plot(x_coords, beta_np, 'c-', linewidth=2)
+            axes[1, 1].set_title('β (Beta) - Scale Parameter', fontsize=12, fontweight='bold')
+            axes[1, 1].set_xlabel('x')
+            axes[1, 1].set_ylabel('Value')
+            axes[1, 1].grid(True, alpha=0.3)
+            axes[1, 1].set_ylim(bottom=0)
 
-    elif is_2d:
-        # 2D visualization with heatmaps
-        # Gamma (predicted mean)
-        im0 = axes[0, 0].imshow(gamma_np.T, origin='lower', aspect='auto', cmap='viridis')
-        axes[0, 0].set_title('γ (Gamma) - Predicted Mean', fontsize=12, fontweight='bold')
-        axes[0, 0].set_xlabel('x')
-        axes[0, 0].set_ylabel('y')
-        plt.colorbar(im0, ax=axes[0, 0])
+            # Total Uncertainty
+            var_aleatoric = beta_np / (alpha_np - 1)
+            var_epistemic = beta_np / (nu_np * (alpha_np - 1))
+            var_total = var_aleatoric + var_epistemic
+            std_total = np.sqrt(var_total)
 
-        # Nu (evidence for mean)
-        im1 = axes[0, 1].imshow(nu_np.T, origin='lower', aspect='auto', cmap='Greens')
-        axes[0, 1].set_title('ν (Nu) - Evidence for Mean', fontsize=12, fontweight='bold')
-        axes[0, 1].set_xlabel('x')
-        axes[0, 1].set_ylabel('y')
-        plt.colorbar(im1, ax=axes[0, 1])
+            axes[1, 2].plot(x_coords, std_total, 'r-', linewidth=2)
+            axes[1, 2].set_title('Total Uncertainty (Std Dev)', fontsize=12, fontweight='bold')
+            axes[1, 2].set_xlabel('x')
+            axes[1, 2].set_ylabel('Std Dev')
+            axes[1, 2].grid(True, alpha=0.3)
+            axes[1, 2].set_ylim(bottom=0)
 
-        # Alpha (shape)
-        im2 = axes[1, 0].imshow(alpha_np.T, origin='lower', aspect='auto', cmap='plasma')
-        axes[1, 0].set_title('α (Alpha) - Shape Parameter', fontsize=12, fontweight='bold')
-        axes[1, 0].set_xlabel('x')
-        axes[1, 0].set_ylabel('y')
-        plt.colorbar(im2, ax=axes[1, 0])
+            # Compute and display statistics
+            mse = np.mean((gamma_np - u_gt_np) ** 2)
+            mae = np.mean(np.abs(gamma_np - u_gt_np))
 
-        # Beta (scale)
-        im3 = axes[1, 1].imshow(beta_np.T, origin='lower', aspect='auto', cmap='cool')
-        axes[1, 1].set_title('β (Beta) - Scale Parameter', fontsize=12, fontweight='bold')
-        axes[1, 1].set_xlabel('x')
-        axes[1, 1].set_ylabel('y')
-        plt.colorbar(im3, ax=axes[1, 1])
+            stats_text = (
+                f"Statistics:\n"
+                f"MSE: {mse:.6f}\n"
+                f"MAE: {mae:.6f}\n"
+                f"Mean γ: {gamma_np.mean():.4f} ± {gamma_np.std():.4f}\n"
+                f"Mean ν: {nu_np.mean():.4f}\n"
+                f"Mean α: {alpha_np.mean():.4f}\n"
+                f"Mean β: {beta_np.mean():.4f}\n"
+                f"Avg Aleatoric: {var_aleatoric.mean():.6f}\n"
+                f"Avg Epistemic: {var_epistemic.mean():.6f}\n"
+                f"Avg Total Unc: {std_total.mean():.6f}"
+            )
+            fig.text(0.98, 0.02, stats_text, fontsize=10,
+                     verticalalignment='bottom', horizontalalignment='right',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-        # Compute and display statistics
-        var_aleatoric = beta_np / (alpha_np - 1)
-        var_epistemic = beta_np / (nu_np * (alpha_np - 1))
-        var_total = var_aleatoric + var_epistemic
+        elif is_2d:
+            # 2D visualization with heatmaps
+            # Ground Truth
+            im_gt = axes[0, 0].imshow(u_gt_np.T, origin='lower', aspect='auto', cmap='viridis')
+            axes[0, 0].set_title('Ground Truth', fontsize=12, fontweight='bold')
+            axes[0, 0].set_xlabel('x')
+            axes[0, 0].set_ylabel('y')
+            plt.colorbar(im_gt, ax=axes[0, 0])
 
-        stats_text = (
-            f"Statistics:\n"
-            f"Mean γ: {gamma_np.mean():.4f} ± {gamma_np.std():.4f}\n"
-            f"Mean ν: {nu_np.mean():.4f} (min: {nu_np.min():.4f})\n"
-            f"Mean α: {alpha_np.mean():.4f} (min: {alpha_np.min():.4f})\n"
-            f"Mean β: {beta_np.mean():.4f}\n"
-            f"Avg Aleatoric: {var_aleatoric.mean():.6f}\n"
-            f"Avg Epistemic: {var_epistemic.mean():.6f}\n"
-            f"Avg Total Unc: {np.sqrt(var_total.mean()):.6f}"
-        )
-        fig.text(0.98, 0.02, stats_text, fontsize=10,
-                 verticalalignment='bottom', horizontalalignment='right',
-                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            # Gamma (predicted mean)
+            im0 = axes[0, 1].imshow(gamma_np.T, origin='lower', aspect='auto', cmap='viridis')
+            axes[0, 1].set_title('γ (Gamma) - Predicted Mean', fontsize=12, fontweight='bold')
+            axes[0, 1].set_xlabel('x')
+            axes[0, 1].set_ylabel('y')
+            plt.colorbar(im0, ax=axes[0, 1])
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+            # Nu (evidence for mean)
+            im1 = axes[0, 2].imshow(nu_np.T, origin='lower', aspect='auto', cmap='Greens')
+            axes[0, 2].set_title('ν (Nu) - Evidence for Mean', fontsize=12, fontweight='bold')
+            axes[0, 2].set_xlabel('x')
+            axes[0, 2].set_ylabel('y')
+            plt.colorbar(im1, ax=axes[0, 2])
 
-    if save_path:
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        logger.info(f"Evidential parameters visualization saved to {save_path}")
-    else:
-        plt.show()
+            # Alpha (shape)
+            im2 = axes[1, 0].imshow(alpha_np.T, origin='lower', aspect='auto', cmap='plasma')
+            axes[1, 0].set_title('α (Alpha) - Shape Parameter', fontsize=12, fontweight='bold')
+            axes[1, 0].set_xlabel('x')
+            axes[1, 0].set_ylabel('y')
+            plt.colorbar(im2, ax=axes[1, 0])
 
-    plt.close()
+            # Beta (scale)
+            im3 = axes[1, 1].imshow(beta_np.T, origin='lower', aspect='auto', cmap='cool')
+            axes[1, 1].set_title('β (Beta) - Scale Parameter', fontsize=12, fontweight='bold')
+            axes[1, 1].set_xlabel('x')
+            axes[1, 1].set_ylabel('y')
+            plt.colorbar(im3, ax=axes[1, 1])
+
+            # Total Uncertainty
+            var_aleatoric = beta_np / (alpha_np - 1)
+            var_epistemic = beta_np / (nu_np * (alpha_np - 1))
+            var_total = var_aleatoric + var_epistemic
+            std_total = np.sqrt(var_total)
+
+            im_unc = axes[1, 2].imshow(std_total.T, origin='lower', aspect='auto', cmap='Reds')
+            axes[1, 2].set_title('Total Uncertainty (Std Dev)', fontsize=12, fontweight='bold')
+            axes[1, 2].set_xlabel('x')
+            axes[1, 2].set_ylabel('y')
+            plt.colorbar(im_unc, ax=axes[1, 2])
+
+            # Compute and display statistics
+            mse = np.mean((gamma_np - u_gt_np) ** 2)
+            mae = np.mean(np.abs(gamma_np - u_gt_np))
+
+            stats_text = (
+                f"Statistics:\n"
+                f"MSE: {mse:.6f}\n"
+                f"MAE: {mae:.6f}\n"
+                f"Mean γ: {gamma_np.mean():.4f} ± {gamma_np.std():.4f}\n"
+                f"Mean ν: {nu_np.mean():.4f} (min: {nu_np.min():.4f})\n"
+                f"Mean α: {alpha_np.mean():.4f} (min: {alpha_np.min():.4f})\n"
+                f"Mean β: {beta_np.mean():.4f}\n"
+                f"Avg Aleatoric: {var_aleatoric.mean():.6f}\n"
+                f"Avg Epistemic: {var_epistemic.mean():.6f}\n"
+                f"Avg Total Unc: {std_total.mean():.6f}"
+            )
+            fig.text(0.98, 0.02, stats_text, fontsize=10,
+                     verticalalignment='bottom', horizontalalignment='right',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+
+        # Generate filename for this sample
+        if save_path:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            # Add sample index to filename
+            save_path_obj = Path(save_path)
+            if n_samples > 1:
+                sample_save_path = save_path_obj.parent / f"{save_path_obj.stem}_sample{sample_idx + 1}{save_path_obj.suffix}"
+            else:
+                sample_save_path = save_path
+            plt.savefig(sample_save_path, dpi=150, bbox_inches='tight')
+            logger.info(f"Evidential parameters visualization saved to {sample_save_path}")
+        else:
+            plt.show()
+
+        plt.close()
