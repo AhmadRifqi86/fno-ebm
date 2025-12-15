@@ -46,7 +46,7 @@ from customs import (
     evaluate_uq_method, expected_calibration_error, uncertainty_error_correlation
 )
 from kanebm import EBMTrainer
-from visualize import generate_ebm_visualization, plot_training_curves
+from visualize import generate_ebm_visualization, plot_training_curves, visualize_evidential_parameters
 
 
 def train_fno_ebm(config_dict: dict, data_path: str, pde_type: str,
@@ -531,6 +531,28 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
     print(f"NLL: {metrics.get('nll', 0):.6f}, rel_l2: {metrics.get('rel_l2', 0):.3f}")
     print(f"MSE: {metrics.get('mse', 0):.6f}, MAE: {metrics.get('mae', 0):.6f}")
     print(f"coverage: {metrics.get('coverage', 0):.3f}, interval_width: {metrics.get('interval_width', 0):.6f}")
+
+    # Generate visualization of NIG parameters (only for NIG-based methods)
+    if method_name in ['der_nig', 'improved_der', 'natural_posterior']:
+        print("\nGenerating evidential parameter visualization...")
+        try:
+            # Get a sample from test loader
+            for x, y in test_loader:
+                pde_type = config_dict.get('pde_type', 'unknown')
+                visualize_evidential_parameters(
+                    model=model,
+                    x=x,
+                    u_gt=y,
+                    save_path=str(output_dir / f'{method_name}_nig_parameters.png'),
+                    sample_idx=0,
+                    pde_type=pde_type,
+                    device=config.device
+                )
+                print(f"NIG parameter visualization saved to {output_dir / f'{method_name}_nig_parameters.png'}")
+                break  # Only visualize first batch
+        except Exception as e:
+            print(f"Warning: Could not generate NIG parameter visualization: {e}")
+
     # Save results
     with open(output_dir / f'{method_name}_results.json', 'w') as f:
         json.dump(metrics, f, indent=2)
