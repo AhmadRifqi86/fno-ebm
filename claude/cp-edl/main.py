@@ -278,8 +278,8 @@ def train_conformal_method(method_name: str, dataset, config_dict: dict,
         except ImportError:
             pass
 
-    # Training loop
-    epochs = method_config.get('epochs', 30)
+    # Training loop - prioritize config_dict over method_config
+    epochs = config_dict.get('epochs', method_config.get('epochs', 30))
     print(f"Training for {epochs} epochs...")
     for epoch in range(epochs):
         model.train()
@@ -368,8 +368,8 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
     # Standard 2-way split for EDL
     train_loader, val_loader, test_loader = create_dataloaders(
         dataset,
-        train_ratio=0.9,
-        val_ratio=0.1,
+        train_ratio=0.85,
+        val_ratio=0.05,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
@@ -405,7 +405,26 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
         raise ValueError(f"Unknown evidential method: {method_name}")
 
     model = model.to(config.device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=method_config.get('lr', 1e-3))
+
+    # Use Factory to create optimizer and scheduler
+    optimizer_config = {
+        'type': method_config.get('optimizer', 'adam'),
+        'lr': method_config.get('lr', 1e-4),
+        'weight_decay': method_config.get('weight_decay', 0.0)
+    }
+    optimizer = Factory.create_optimizer(optimizer_config, model.parameters())
+
+    # Create learning rate scheduler if configured
+    scheduler = None
+    if 'scheduler' in method_config and method_config['scheduler'] is not None:
+        scheduler = Factory.create_scheduler(method_config['scheduler'], optimizer)
+    else:
+        # Default: ReduceLROnPlateau for evidential methods
+        scheduler_config = {
+            'type': 'exponential_lr',
+            'gamma': 0.93
+        }
+        scheduler = Factory.create_scheduler(scheduler_config, optimizer)
 
     # Initialize tracker
     tracker = None
@@ -417,13 +436,14 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
         except ImportError:
             pass
 
-    # Training loop
-    epochs = method_config.get('epochs', 30)
+    # Training loop - prioritize config_dict over method_config
+    epochs = config_dict.get('epochs', method_config.get('epochs', 30))
     print(f"\nTraining evidential model for {epochs} epochs...")
     for epoch in range(epochs):
+        # Training phase
         model.train()
-        epoch_loss = 0.0
-        num_batches = 0
+        train_loss = 0.0
+        train_batches = 0
 
         for x, y in train_loader:
             x, y = x.to(config.device), y.to(config.device)
@@ -447,23 +467,70 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
 
             optimizer.zero_grad()
             loss.backward()
+
+            # Gradient clipping to prevent evidential collapse
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=15.0)
+
             optimizer.step()
 
             if tracker:
                 tracker.track(loss=loss)
 
-            epoch_loss += loss.item()
-            num_batches += 1
+            train_loss += loss.item()
+            train_batches += 1
 
-        avg_loss = epoch_loss / num_batches
-        print(f"[{method_name.upper()}] Epoch {epoch+1}/{epochs}, Avg Loss: {avg_loss:.6f}")
+        avg_train_loss = train_loss / train_batches
 
+        # Validation phase
+        model.eval()
+        val_loss = 0.0
+        val_batches = 0
+
+        with torch.no_grad():
+            for x, y in val_loader:
+                x, y = x.to(config.device), y.to(config.device)
+
+                if method_name in ['der_nig', 'improved_der', 'natural_posterior']:
+                    gamma, nu, alpha, beta = model(x)
+                    if method_name == 'improved_der':
+                        loss, _ = improved_evidential_loss(gamma, nu, alpha, beta, y, reg_weight=method_config['reg_weight'])
+                    elif method_name == 'natural_posterior':
+                        loss = natural_nig_loss(gamma, nu, alpha, beta, y)
+                    else:
+                        loss, _ = evidential_loss(gamma, nu, alpha, beta, y, reg_weight=method_config['reg_weight'])
+                elif method_name == 'prior_networks':
+                    alphas, mean, uncertainty = model(x)
+                    loss = prior_network_loss(alphas, y, n_bins=method_config['n_bins'],
+                                             output_range=tuple(method_config['output_range']))
+                else:
+                    # Posterior networks or Dirichlet
+                    mean, aleatoric, epistemic = model(x)
+                    loss = F.mse_loss(mean, y)
+
+                val_loss += loss.item()
+                val_batches += 1
+
+        avg_val_loss = val_loss / val_batches if val_batches > 0 else 0.0
+
+        # Step scheduler based on validation loss
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(avg_val_loss)
+            else:
+                scheduler.step()
+
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"[{method_name.upper()}] Epoch {epoch+1}/{epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}, LR: {current_lr:.2e}")
+        
     # Evaluate
     print("\nEvaluating uncertainty quantification...")
     metrics = evaluate_uq_method(model, test_loader, method_name=method_name, device=config.device)
 
     print(f"ECE: {metrics.get('ece', 0):.4f}, Correlation: {metrics.get('correlation', 0):.3f}")
-
+    print(f"NLL: {metrics.get('nll', 0):.6f}, rel_l2: {metrics.get('rel_l2', 0):.3f}")
+    print(f"MSE: {metrics.get('mse', 0):.6f}, MAE: {metrics.get('mae', 0):.6f}")
+    print(f"coverage: {metrics.get('coverage', 0):.3f}, interval_width: {metrics.get('interval_width', 0):.6f}")
     # Save results
     with open(output_dir / f'{method_name}_results.json', 'w') as f:
         json.dump(metrics, f, indent=2)
@@ -496,7 +563,7 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
     # Standard 2-way split for baselines
     train_loader, val_loader, test_loader = create_dataloaders(
         dataset,
-        train_ratio=0.9,
+        train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
@@ -550,7 +617,7 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
         # Create ensemble splits
         ensemble_splits = create_ensemble_splits(
             dataset, n_models=n_models, bootstrap=True,
-            train_ratio=0.9, batch_size=config.batch_size,
+            train_ratio=0.8, batch_size=config.batch_size,
             seed=config.seed if hasattr(config, 'seed') else 42
         )
 
@@ -918,6 +985,8 @@ Examples:
     parser.add_argument('--fno_width', type=int, default=None)
     parser.add_argument('--fno_depth', type=int, default=None)
     parser.add_argument('--batch_size', type=int, default=None)
+    parser.add_argument('--epochs', type=int, default=None,
+                        help='Number of epochs for conformal/evidential/baseline methods')
     parser.add_argument('--fno_epochs', type=int, default=None)
     parser.add_argument('--ebm_epochs', type=int, default=None)
 
@@ -948,6 +1017,8 @@ Examples:
         config_dict['fno_depth'] = args.fno_depth
     if args.batch_size is not None:
         config_dict['batch_size'] = args.batch_size
+    if args.epochs is not None:
+        config_dict['epochs'] = args.epochs
     if args.fno_epochs is not None:
         config_dict['fno_epochs'] = args.fno_epochs
     if args.ebm_epochs is not None:

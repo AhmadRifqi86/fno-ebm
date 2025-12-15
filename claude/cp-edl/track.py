@@ -52,7 +52,7 @@ class GradientTracker:
         experiment_name: Optional[str] = None,
         track_interval: int = 10,
         histogram_interval: int = 100,
-        gradient_clip_threshold: float = 20.0,
+        gradient_clip_threshold: float = 50.0,
     ):
         """
         Args:

@@ -1345,19 +1345,39 @@ def evaluate_uq_method(model, test_loader, method_name, device='cuda',
                 upper = result['upper']
                 std = (upper - lower) / (2 * 1.96)  # Approximate std
                 
-            elif method_name == 'evidential':
-                # Evidential deep learning
-                gamma, nu, alpha, beta = model(x)
-                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
-                
-                mean = uq_dict['mean']
-                std = torch.sqrt(uq_dict['total'])
-                
+            elif method_name in ['evidential', 'der_nig', 'improved_der', 'natural_posterior',
+                                'prior_networks', 'posterior_networks', 'dirichlet_evidential']:
+                # Evidential deep learning methods
+                if method_name in ['der_nig', 'improved_der', 'natural_posterior', 'evidential']:
+                    # NIG-based methods
+                    gamma, nu, alpha, beta = model(x)
+                    uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+
+                    mean = uq_dict['mean']
+                    std = torch.sqrt(uq_dict['total'])
+                elif method_name in ['prior_networks', 'posterior_networks', 'dirichlet_evidential']:
+                    # Other evidential methods - assume they return (mean, aleatoric, epistemic)
+                    mean, aleatoric, epistemic = model(x)
+                    std = torch.sqrt(aleatoric + epistemic)
+                else:
+                    # Fallback
+                    gamma, nu, alpha, beta = model(x)
+                    uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                    mean = uq_dict['mean']
+                    std = torch.sqrt(uq_dict['total'])
+
                 # Construct intervals from Student-t
                 t_quantile = 1.96  # Approximate for large df
                 lower = mean - t_quantile * std
                 upper = mean + t_quantile * std
-            
+
+            elif method_name in ['standard_fno']:
+                # Standard FNO without uncertainty
+                mean = model(x)
+                std = torch.zeros_like(mean)  # No uncertainty
+                lower = mean
+                upper = mean
+
             else:
                 raise ValueError(f"Unknown method: {method_name}")
             
