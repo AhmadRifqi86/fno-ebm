@@ -26,7 +26,7 @@ from datautils import (
     create_ood_test_data, get_calibration_dataset
 )
 from fno import (
-    FNO2d, FNOTrainer, EvidentialFNO2d, MCDropoutFNO2d, FNOEnsemble,
+    FNO2d, FNOTrainer, EvidentialFNO2d, EvidentialFNOTrainer, MCDropoutFNO2d, FNOEnsemble,
     BayesianFNO2d, QuantileFNO2d, PriorNetworkFNO2d, DirichletEvidentialFNO2d,
     PosteriorNetworkFNO2d
 )
@@ -406,7 +406,13 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
 
     model = model.to(config.device)
 
-    # Use Factory to create optimizer and scheduler
+    # Training loop - prioritize config_dict over method_config
+    epochs = config_dict.get('epochs', method_config.get('epochs', 30))
+
+    # Use EvidentialFNOTrainer for ALL evidential methods
+    print(f"\nUsing EvidentialFNOTrainer ({method_name}) for {epochs} epochs...")
+
+    # Create optimizer and scheduler
     optimizer_config = {
         'type': method_config.get('optimizer', 'adam'),
         'lr': method_config.get('lr', 1e-4),
@@ -414,114 +420,42 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
     }
     optimizer = Factory.create_optimizer(optimizer_config, model.parameters())
 
-    # Create learning rate scheduler if configured
     scheduler = None
     if 'scheduler' in method_config and method_config['scheduler'] is not None:
         scheduler = Factory.create_scheduler(method_config['scheduler'], optimizer)
     else:
-        # Default: ReduceLROnPlateau for evidential methods
+        # Default: exponential_lr for evidential methods
         scheduler_config = {
             'type': 'exponential_lr',
             'gamma': 0.93
         }
         scheduler = Factory.create_scheduler(scheduler_config, optimizer)
 
-    # Initialize tracker
-    tracker = None
-    if getattr(config, 'enable_tracking', False):
-        try:
-            from track import GradientTracker
-            tracker = GradientTracker(model, log_dir=str(output_dir / 'logs'),
-                                     experiment_name=f'evidential_{method_name}')
-        except ImportError:
-            pass
+    # Setup trainer config
+    trainer_config = Config({
+        'device': config.device,
+        'lr': method_config.get('lr', 1e-4),
+        'weight_decay': method_config.get('weight_decay', 0.0),
+        'enable_tracking': getattr(config, 'enable_tracking', False),
+        'log_dir': str(output_dir / 'logs'),
+        'experiment_name': f'evidential_{method_name}',
+        'checkpoint_dir': str(output_dir / 'checkpoints'),
+        'save_every': 50,
+        'use_tensorboard': False
+    })
 
-    # Training loop - prioritize config_dict over method_config
-    epochs = config_dict.get('epochs', method_config.get('epochs', 30))
-    print(f"\nTraining evidential model for {epochs} epochs...")
-    for epoch in range(epochs):
-        # Training phase
-        model.train()
-        train_loss = 0.0
-        train_batches = 0
+    # Create trainer with method-specific configuration
+    trainer = EvidentialFNOTrainer(
+        model=model,
+        config=trainer_config,
+        method_name=method_name,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        method_config=method_config
+    )
 
-        for x, y in train_loader:
-            x, y = x.to(config.device), y.to(config.device)
-
-            if method_name in ['der_nig', 'improved_der', 'natural_posterior']:
-                gamma, nu, alpha, beta = model(x)
-                if method_name == 'improved_der':
-                    loss, _ = improved_evidential_loss(gamma, nu, alpha, beta, y, reg_weight=method_config['reg_weight'])
-                elif method_name == 'natural_posterior':
-                    loss = natural_nig_loss(gamma, nu, alpha, beta, y)
-                else:
-                    loss, _ = evidential_loss(gamma, nu, alpha, beta, y, reg_weight=method_config['reg_weight'])
-            elif method_name == 'prior_networks':
-                alphas, mean, uncertainty = model(x)
-                loss = prior_network_loss(alphas, y, n_bins=method_config['n_bins'],
-                                         output_range=tuple(method_config['output_range']))
-            else:
-                # Posterior networks or Dirichlet
-                mean, aleatoric, epistemic = model(x)
-                loss = F.mse_loss(mean, y)
-
-            optimizer.zero_grad()
-            loss.backward()
-
-            # Gradient clipping to prevent evidential collapse
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=15.0)
-
-            optimizer.step()
-
-            if tracker:
-                tracker.track(loss=loss)
-
-            train_loss += loss.item()
-            train_batches += 1
-
-        avg_train_loss = train_loss / train_batches
-
-        # Validation phase
-        model.eval()
-        val_loss = 0.0
-        val_batches = 0
-
-        with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(config.device), y.to(config.device)
-
-                if method_name in ['der_nig', 'improved_der', 'natural_posterior']:
-                    gamma, nu, alpha, beta = model(x)
-                    if method_name == 'improved_der':
-                        loss, _ = improved_evidential_loss(gamma, nu, alpha, beta, y, reg_weight=method_config['reg_weight'])
-                    elif method_name == 'natural_posterior':
-                        loss = natural_nig_loss(gamma, nu, alpha, beta, y)
-                    else:
-                        loss, _ = evidential_loss(gamma, nu, alpha, beta, y, reg_weight=method_config['reg_weight'])
-                elif method_name == 'prior_networks':
-                    alphas, mean, uncertainty = model(x)
-                    loss = prior_network_loss(alphas, y, n_bins=method_config['n_bins'],
-                                             output_range=tuple(method_config['output_range']))
-                else:
-                    # Posterior networks or Dirichlet
-                    mean, aleatoric, epistemic = model(x)
-                    loss = F.mse_loss(mean, y)
-
-                val_loss += loss.item()
-                val_batches += 1
-
-        avg_val_loss = val_loss / val_batches if val_batches > 0 else 0.0
-
-        # Step scheduler based on validation loss
-        if scheduler is not None:
-            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(avg_val_loss)
-            else:
-                scheduler.step()
-
-        # Get current learning rate
-        current_lr = optimizer.param_groups[0]['lr']
-        print(f"[{method_name.upper()}] Epoch {epoch+1}/{epochs}, Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}, LR: {current_lr:.2e}")
+    # Train
+    trainer.train(train_loader, val_loader, epochs=epochs)
         
     # Evaluate
     print("\nEvaluating uncertainty quantification...")
@@ -544,7 +478,7 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
                     x=x,
                     u_gt=y,
                     save_path=str(output_dir / f'{method_name}_nig_parameters.png'),
-                    n_samples=3,  # Visualize 3 samples
+                    n_samples=12,  # Visualize 3 samples
                     pde_type=pde_type,
                     device=config.device
                 )
@@ -936,7 +870,7 @@ def create_default_config(pde_type: str) -> dict:
         config['max_pairs_per_sample'] = 20
         config['max_samples'] = 200
 
-    elif pde_type in ['navier_stokes', 'diffusion_reaction']:
+    elif pde_type in ['navier_stokes', 'diffusion_reaction','darcy']:
         # 2D PDEs: Use CNN-based EBM for spatial data
         config['fno_modes'] = 20
         config['fno_width'] = 96
@@ -987,7 +921,7 @@ Examples:
     parser.add_argument('--data_path', type=str, required=True,
                         help='Path to data file (.hdf5, .h5, or .pt)')
     parser.add_argument('--pde_type', type=str, required=True,
-                        choices=['burgers', 'advection', 'diffusion_reaction', 'navier_stokes'],
+                        choices=['burgers', 'advection', 'diffusion_reaction', 'navier_stokes', 'darcy'],
                         help='PDE type')
 
     # Method-specific arguments

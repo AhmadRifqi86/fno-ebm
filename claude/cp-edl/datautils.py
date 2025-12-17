@@ -481,7 +481,7 @@ def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samp
     elif pde_type == 'diffusion_reaction':
         # 2D: .h5 format
         return load_h5_2d(str(filepath), max_samples)
-    elif pde_type == 'navier_stokes':
+    elif pde_type in ['navier_stokes', 'darcy']:
         # 2D: .pt format
         return load_pt_2d(str(filepath))
     else:

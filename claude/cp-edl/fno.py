@@ -2094,3 +2094,459 @@ def is_evidential_model(model):
     """Check if model is evidential (returns 4 outputs)."""
     return isinstance(model, (EvidentialFNO1d, EvidentialFNO2d))
 
+
+# ============================================================================
+# EVIDENTIAL FNO TRAINER
+# ============================================================================
+
+class EvidentialFNOTrainer:
+    """
+    Trainer class for all Evidential Deep Learning FNO models.
+
+    Supports multiple evidential methods:
+    - 'der_nig': Standard DER with NIG prior
+    - 'improved_der': Improved DER with enhanced regularization
+    - 'natural_posterior': Natural posterior network
+    - 'prior_networks': Dirichlet prior networks
+    - 'posterior_networks': Posterior networks with normalizing flows
+    - 'dirichlet_evidential': Dirichlet evidential regression
+
+    Args:
+        model: Evidential FNO model (EvidentialFNO2d, PriorNetworkFNO2d, etc.)
+        config: Configuration object or dictionary with training parameters
+        method_name: Name of evidential method ('der_nig', 'improved_der', etc.)
+        optimizer: PyTorch optimizer (default: Adam with lr=1e-4)
+        scheduler: Learning rate scheduler (default: None)
+        loss_fn: Custom loss function (if None, uses default based on method_name)
+        method_config: Additional method-specific configuration (reg_weight, n_bins, etc.)
+    """
+
+    def __init__(self, model, config, method_name='der_nig', optimizer=None, scheduler=None,
+                 loss_fn=None, method_config=None, save_flag: bool = False):
+        self.model = model
+        self.config = config
+        self.method_name = method_name
+        self.save_flag = save_flag
+
+        # Setup device
+        self.device = getattr(config, 'device', 'cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = self.model.to(self.device)
+
+        # Create optimizer if not provided
+        if optimizer is None:
+            lr = getattr(config, 'lr', 1e-4)
+            weight_decay = getattr(config, 'weight_decay', 0.0)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        else:
+            self.optimizer = optimizer
+
+        # Setup scheduler
+        self.scheduler = scheduler
+
+        # Method-specific parameters
+        self.method_config = method_config if method_config is not None else {}
+        self.reg_weight = self.method_config.get('reg_weight', 0.01)
+
+        # Setup loss function
+        if loss_fn is not None:
+            self.loss_fn = loss_fn
+        else:
+            # Default loss functions based on method
+            self._setup_default_loss_fn()
+
+        # Tracking
+        self.current_epoch = 0
+        self.best_val_loss = float('inf')
+        self.train_losses = []
+        self.val_losses = []
+        self.train_nll_losses = []
+        self.val_nll_losses = []
+
+        # Gradient tracking (optional)
+        self.gradient_tracker = None
+        if getattr(config, 'enable_tracking', False):
+            try:
+                from track import GradientTracker
+                self.gradient_tracker = GradientTracker(
+                    self.model,
+                    log_dir=getattr(config, 'log_dir', './logs'),
+                    experiment_name=getattr(config, 'experiment_name', 'evidential_fno')
+                )
+            except ImportError:
+                pass
+
+        # TensorBoard writer (alternative to GradientTracker)
+        self.writer = None
+        if getattr(config, 'use_tensorboard', False):
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+                log_dir = getattr(config, 'log_dir', './runs/evidential_fno')
+                self.writer = SummaryWriter(log_dir)
+            except ImportError:
+                pass
+
+        # Checkpointing configuration
+        self.checkpoint_dir = getattr(config, 'checkpoint_dir', './checkpoints')
+        self.save_every = getattr(config, 'save_every', 10)
+
+        # Logger
+        import logging
+        self.logger = logging.getLogger(__name__)
+
+    def _setup_default_loss_fn(self):
+        """Setup default loss function based on method_name."""
+        from customs import (evidential_loss, improved_evidential_loss,
+                            natural_nig_loss, prior_network_loss)
+        import torch.nn.functional as F
+
+        if self.method_name == 'der_nig':
+            self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
+                gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+            )
+        elif self.method_name == 'improved_der':
+            self.loss_fn = lambda gamma, nu, alpha, beta, y: improved_evidential_loss(
+                gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+            )
+        elif self.method_name == 'natural_posterior':
+            self.loss_fn = lambda gamma, nu, alpha, beta, y: (
+                natural_nig_loss(gamma, nu, alpha, beta, y),
+                {'nll': natural_nig_loss(gamma, nu, alpha, beta, y).item(), 'reg': 0.0}
+            )
+        elif self.method_name == 'prior_networks':
+            n_bins = self.method_config.get('n_bins', 50)
+            output_range = tuple(self.method_config.get('output_range', (-1, 1)))
+            self.loss_fn = lambda alphas, mean, uncertainty, y: (
+                prior_network_loss(alphas, y, n_bins=n_bins, output_range=output_range),
+                {'nll': prior_network_loss(alphas, y, n_bins=n_bins, output_range=output_range).item(), 'reg': 0.0}
+            )
+        elif self.method_name in ['posterior_networks', 'dirichlet_evidential']:
+            self.loss_fn = lambda mean, aleatoric, epistemic, y: (
+                F.mse_loss(mean, y),
+                {'mse': F.mse_loss(mean, y).item(), 'nll': 0.0, 'reg': 0.0}
+            )
+        else:
+            # Default to DER-NIG
+            self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
+                gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+            )
+
+    def train_step(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
+        """
+        Execute a single training step.
+
+        Args:
+            x: Input tensor (batch_size, in_channels, H, W)
+            y: Target tensor (batch_size, out_channels, H, W)
+
+        Returns:
+            loss: Total loss (scalar tensor)
+            loss_dict: Dictionary with loss components ('total', 'nll', 'reg', etc.)
+        """
+        self.model.train()
+
+        # Move to device
+        x = x.to(self.device)
+        y = y.to(self.device)
+
+        # Forward pass - get outputs based on method type
+        if self.method_name in ['der_nig', 'improved_der', 'natural_posterior']:
+            # NIG-based methods: return (gamma, nu, alpha, beta)
+            outputs = self.model(x)
+            loss, loss_dict = self.loss_fn(*outputs, y)
+        elif self.method_name == 'prior_networks':
+            # Prior networks: return (alphas, mean, uncertainty)
+            outputs = self.model(x)
+            loss, loss_dict = self.loss_fn(*outputs, y)
+        elif self.method_name in ['posterior_networks', 'dirichlet_evidential']:
+            # Posterior/Dirichlet: return (mean, aleatoric, epistemic)
+            outputs = self.model(x)
+            loss, loss_dict = self.loss_fn(*outputs, y)
+        else:
+            # Fallback: assume NIG-based
+            outputs = self.model(x)
+            loss, loss_dict = self.loss_fn(*outputs, y)
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        # Gradient clipping to prevent evidential collapse
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=15.0)
+
+        # Optimizer step
+        self.optimizer.step()
+
+        # Track gradients if enabled
+        if self.gradient_tracker is not None:
+            self.gradient_tracker.track(loss=loss)
+
+        return loss, loss_dict
+
+    def validate(self, val_loader) -> tuple:
+        """
+        Validate the model on validation set.
+
+        Args:
+            val_loader: Validation data loader
+
+        Returns:
+            avg_val_loss: Average validation loss
+            metrics_dict: Dictionary with validation metrics
+        """
+        self.model.eval()
+
+        from customs import evidential_uncertainty
+
+        total_loss = 0.0
+        total_nll = 0.0
+        total_reg = 0.0
+        num_batches = 0
+
+        # For computing additional metrics
+        all_predictions = []
+        all_targets = []
+        all_epistemic = []
+        all_aleatoric = []
+
+        with torch.no_grad():
+            for x, y in val_loader:
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                # Forward pass and loss computation based on method type
+                if self.method_name in ['der_nig', 'improved_der', 'natural_posterior']:
+                    # NIG-based methods
+                    gamma, nu, alpha, beta = self.model(x)
+                    loss, loss_dict = self.loss_fn(gamma, nu, alpha, beta, y)
+
+                    # Compute uncertainties
+                    uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                    all_predictions.append(gamma.cpu())
+                    all_epistemic.append(uq_dict['epistemic'].cpu())
+                    all_aleatoric.append(uq_dict['aleatoric'].cpu())
+
+                elif self.method_name == 'prior_networks':
+                    # Prior networks
+                    alphas, mean, uncertainty = self.model(x)
+                    loss, loss_dict = self.loss_fn(alphas, mean, uncertainty, y)
+
+                    all_predictions.append(mean.cpu())
+                    # For prior networks, uncertainty is total uncertainty
+                    all_epistemic.append(uncertainty.cpu())
+                    all_aleatoric.append(torch.zeros_like(uncertainty).cpu())
+
+                elif self.method_name in ['posterior_networks', 'dirichlet_evidential']:
+                    # Posterior/Dirichlet networks
+                    mean, aleatoric, epistemic = self.model(x)
+                    loss, loss_dict = self.loss_fn(mean, aleatoric, epistemic, y)
+
+                    all_predictions.append(mean.cpu())
+                    all_epistemic.append(epistemic.cpu())
+                    all_aleatoric.append(aleatoric.cpu())
+                else:
+                    # Fallback: assume NIG-based
+                    gamma, nu, alpha, beta = self.model(x)
+                    loss, loss_dict = self.loss_fn(gamma, nu, alpha, beta, y)
+
+                    uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                    all_predictions.append(gamma.cpu())
+                    all_epistemic.append(uq_dict['epistemic'].cpu())
+                    all_aleatoric.append(uq_dict['aleatoric'].cpu())
+
+                total_loss += loss.item()
+                total_nll += loss_dict.get('nll', loss.item())
+                total_reg += loss_dict.get('reg', 0.0)
+                all_targets.append(y.cpu())
+                num_batches += 1
+
+        # Average losses
+        avg_val_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        avg_nll = total_nll / num_batches if num_batches > 0 else 0.0
+        avg_reg = total_reg / num_batches if num_batches > 0 else 0.0
+
+        # Compute relative L2 error
+        predictions = torch.cat(all_predictions, dim=0)
+        targets = torch.cat(all_targets, dim=0)
+        rel_l2 = (torch.norm(predictions - targets) / torch.norm(targets)).item()
+
+        # Compute average uncertainties
+        avg_epistemic = torch.cat(all_epistemic, dim=0).mean().item()
+        avg_aleatoric = torch.cat(all_aleatoric, dim=0).mean().item()
+
+        metrics_dict = {
+            'loss': avg_val_loss,
+            'nll': avg_nll,
+            'reg': avg_reg,
+            'rel_l2': rel_l2,
+            'epistemic': avg_epistemic,
+            'aleatoric': avg_aleatoric
+        }
+
+        return avg_val_loss, metrics_dict
+
+    def train(self, train_loader, val_loader, epochs: int):
+        """
+        Main training loop.
+
+        Args:
+            train_loader: Training data loader
+            val_loader: Validation data loader
+            epochs: Number of epochs to train
+        """
+        from tqdm import tqdm
+
+        print(f"\nTraining Evidential FNO for {epochs} epochs...")
+        print(f"Regularization weight (λ): {self.reg_weight}")
+
+        for epoch in range(epochs):
+            self.current_epoch = epoch
+
+            # Training phase
+            self.model.train()
+            epoch_loss = 0.0
+            epoch_nll = 0.0
+            epoch_reg = 0.0
+            num_batches = 0
+
+            # Training loop with progress bar
+            train_pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs} [Train]')
+            for x, y in train_pbar:
+                loss, loss_dict = self.train_step(x, y)
+
+                epoch_loss += loss.item()
+                epoch_nll += loss_dict.get('nll', loss.item())
+                epoch_reg += loss_dict.get('reg', 0.0)
+                num_batches += 1
+
+                # Update progress bar
+                train_pbar.set_postfix({
+                    'loss': f'{loss.item():.6f}',
+                    'nll': f'{loss_dict.get("nll", loss.item()):.6f}',
+                    'reg': f'{loss_dict.get("reg", 0.0):.6f}'
+                })
+
+            # Average training losses
+            avg_train_loss = epoch_loss / num_batches
+            avg_train_nll = epoch_nll / num_batches
+            avg_train_reg = epoch_reg / num_batches
+
+            self.train_losses.append(avg_train_loss)
+            self.train_nll_losses.append(avg_train_nll)
+
+            # Validation phase
+            avg_val_loss, val_metrics = self.validate(val_loader)
+            self.val_losses.append(avg_val_loss)
+            self.val_nll_losses.append(val_metrics['nll'])
+
+            # Scheduler step
+            if self.scheduler is not None:
+                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(avg_val_loss)
+                else:
+                    self.scheduler.step()
+
+            # Get current learning rate
+            current_lr = self.optimizer.param_groups[0]['lr']
+
+            # Logging
+            log_msg = (
+                f"Epoch {epoch+1}/{epochs} | "
+                f"Train Loss: {avg_train_loss:.6f} (NLL: {avg_train_nll:.6f}, Reg: {avg_train_reg:.6f}) | "
+                f"Val Loss: {avg_val_loss:.6f} (NLL: {val_metrics['nll']:.6f}) | "
+                f"Rel L2: {val_metrics['rel_l2']:.4f} | "
+                f"Epistemic: {val_metrics['epistemic']:.6f} | "
+                f"Aleatoric: {val_metrics['aleatoric']:.6f} | "
+                f"LR: {current_lr:.2e}"
+            )
+            print(log_msg)
+            self.logger.info(log_msg)
+
+            # TensorBoard logging
+            if self.writer is not None:
+                self.writer.add_scalar('Loss/train', avg_train_loss, epoch)
+                self.writer.add_scalar('Loss/val', avg_val_loss, epoch)
+                self.writer.add_scalar('NLL/train', avg_train_nll, epoch)
+                self.writer.add_scalar('NLL/val', val_metrics['nll'], epoch)
+                self.writer.add_scalar('Reg/train', avg_train_reg, epoch)
+                self.writer.add_scalar('Metrics/rel_l2', val_metrics['rel_l2'], epoch)
+                self.writer.add_scalar('Uncertainty/epistemic', val_metrics['epistemic'], epoch)
+                self.writer.add_scalar('Uncertainty/aleatoric', val_metrics['aleatoric'], epoch)
+                self.writer.add_scalar('Learning_Rate', current_lr, epoch)
+
+            # Save best checkpoint
+            if avg_val_loss < self.best_val_loss and self.save_flag:
+                self.best_val_loss = avg_val_loss
+                self.save_checkpoint(epoch, is_best=True)
+                print(f"  → Saved best model (val_loss: {avg_val_loss:.6f})")
+
+            # Save periodic checkpoints
+            if (epoch + 1) % self.save_every == 0 and self.save_flag:
+                self.save_checkpoint(epoch, is_best=False)
+
+        print(f"\nTraining complete! Best val loss: {self.best_val_loss:.6f}")
+
+        if self.writer is not None:
+            self.writer.close()
+
+    def save_checkpoint(self, epoch: int, is_best: bool = False):
+        """
+        Save model checkpoint.
+
+        Args:
+            epoch: Current epoch number
+            is_best: Whether this is the best model so far
+        """
+        import os
+
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'best_val_loss': self.best_val_loss,
+            'train_losses': self.train_losses,
+            'val_losses': self.val_losses,
+            'train_nll_losses': self.train_nll_losses,
+            'val_nll_losses': self.val_nll_losses,
+            'reg_weight': self.reg_weight,
+            'config': self.config
+        }
+
+        if self.scheduler is not None:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+
+        # Create checkpoint directory
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+        # Save checkpoint
+        if is_best:
+            path = os.path.join(self.checkpoint_dir, 'best_evidential_fno.pt')
+        else:
+            path = os.path.join(self.checkpoint_dir, f'evidential_fno_epoch_{epoch}.pt')
+
+        torch.save(checkpoint, path)
+
+    def load_checkpoint(self, path: str):
+        """
+        Load model checkpoint.
+
+        Args:
+            path: Path to checkpoint file
+        """
+        checkpoint = torch.load(path, map_location=self.device)
+
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.current_epoch = checkpoint['epoch']
+        self.best_val_loss = checkpoint['best_val_loss']
+        self.train_losses = checkpoint.get('train_losses', [])
+        self.val_losses = checkpoint.get('val_losses', [])
+        self.train_nll_losses = checkpoint.get('train_nll_losses', [])
+        self.val_nll_losses = checkpoint.get('val_nll_losses', [])
+        self.reg_weight = checkpoint.get('reg_weight', 0.01)
+
+        if self.scheduler is not None and 'scheduler_state_dict' in checkpoint:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+
+        self.logger.info(f"Loaded checkpoint from epoch {self.current_epoch}")
+        print(f"Loaded checkpoint from epoch {self.current_epoch}, val_loss: {self.best_val_loss:.6f}")
+
