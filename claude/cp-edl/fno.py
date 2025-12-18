@@ -1336,6 +1336,207 @@ class EvidentialFNO2d(nn.Module):
         return gamma, nu, alpha, beta
 
 
+class AblationEvidentialFNO2d(nn.Module):
+    """
+    Ablation-friendly Evidential 2D FNO for Experiment 8.
+
+    Supports selective removal/modification of architectural components:
+    - Skip connections between Fourier and Conv layers
+    - Activation functions between layers
+    - Evidential head complexity (deep/shallow/linear)
+    - Batch normalization
+    - Fourier-only mode (no Conv layers)
+    - Residual connections
+
+    For Experiment 8: Ablation Studies
+    """
+    def __init__(self,
+                 modes1: int = 12,
+                 modes2: int = 12,
+                 width: int = 32,
+                 n_layers: int = 4,
+                 in_channels: int = 3,
+                 nu_min: float = 0.01,
+                 alpha_min: float = 1.01,
+                 beta_min: float = 0.01,
+                 # Ablation flags
+                 use_skip_connections: bool = True,
+                 use_activations: callable = F.gelu,
+                 head_depth: str = 'deep',  # 'deep', 'shallow', 'linear'
+                 use_batch_norm: bool = False,
+                 fourier_only: bool = False,
+                 residual_connection: bool = False):
+        """
+        Args:
+            modes1, modes2: Number of Fourier modes
+            width: Channel width
+            n_layers: Number of Fourier layers
+            in_channels: Input channels
+            nu_min, alpha_min, beta_min: Evidential parameter minimums
+            use_skip_connections: If True, uses x1 + x2; else only x1 (Fourier)
+            use_activations: If True, applies GELU between layers
+            head_depth: Complexity of evidential heads
+                - 'deep': Conv -> GELU -> Conv (default)
+                - 'shallow': Conv -> GELU -> Conv (smaller hidden size)
+                - 'linear': Single Conv layer
+            use_batch_norm: If True, adds BatchNorm2d after each layer
+            fourier_only: If True, removes Conv layers entirely
+            residual_connection: If True, adds residual from input to output
+        """
+        super().__init__()
+
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.width = width
+        self.n_layers = n_layers
+
+        self.nu_min = nu_min
+        self.alpha_min = alpha_min
+        self.beta_min = beta_min
+
+        # Ablation configuration
+        self.use_skip_connections = use_skip_connections
+        self.use_activations = use_activations
+        self.head_depth = head_depth
+        self.use_batch_norm = use_batch_norm
+        self.fourier_only = fourier_only
+        self.residual_connection = residual_connection
+
+        # Shared backbone
+        self.lift = nn.Conv2d(in_channels, width, 1)
+
+        # Fourier layers
+        self.fourier_layers = nn.ModuleList([
+            SpectralConv2d(width, width, modes1, modes2) for _ in range(n_layers)
+        ])
+
+        # Conv layers (optional for ablation)
+        if not fourier_only:
+            self.conv_layers = nn.ModuleList([
+                nn.Conv2d(width, width, 1) for _ in range(n_layers)
+            ])
+        else:
+            self.conv_layers = None
+
+        # Batch normalization (optional)
+        if use_batch_norm:
+            self.batch_norms = nn.ModuleList([
+                nn.BatchNorm2d(width) for _ in range(n_layers)
+            ])
+        else:
+            self.batch_norms = None
+
+        # Residual projection (optional)
+        if residual_connection:
+            self.residual_proj = nn.Conv2d(in_channels, width, 1)
+        else:
+            self.residual_proj = None
+
+        # Evidential heads with configurable depth
+        self.gamma_head = self._build_head(width, head_depth)
+        self.nu_head = self._build_head(width, head_depth)
+        self.alpha_head = self._build_head(width, head_depth)
+        self.beta_head = self._build_head(width, head_depth)
+
+    def _build_head(self, width: int, depth: str):
+        """Build evidential head based on depth configuration."""
+        if depth == 'deep':
+            # Original: Conv(width->128) -> GELU -> Conv(128->1)
+            return nn.Sequential(
+                nn.Conv2d(width, 128, 1),
+                nn.GELU(),
+                nn.Conv2d(128, 1, 1)
+            )
+        elif depth == 'shallow':
+            # Smaller hidden size: Conv(width->64) -> GELU -> Conv(64->1)
+            return nn.Sequential(
+                nn.Conv2d(width, 64, 1),
+                nn.GELU(),
+                nn.Conv2d(64, 1, 1)
+            )
+        elif depth == 'linear':
+            # No hidden layer: Conv(width->1)
+            return nn.Conv2d(width, 1, 1)
+        else:
+            raise ValueError(f"Unknown head_depth: {depth}. Use 'deep', 'shallow', or 'linear'")
+
+    def forward(self, x):
+        """
+        Args:
+            x: (batch, n_x, n_y, in_channels)
+
+        Returns:
+            gamma, nu, alpha, beta: Each (batch, n_x, n_y, 1)
+        """
+        # Permute to (batch, channels, n_x, n_y)
+        x = x.permute(0, 3, 1, 2)
+
+        # Store input for residual connection
+        if self.residual_connection:
+            x_input = self.residual_proj(x)
+
+        # Shared backbone
+        x = self.lift(x)
+
+        for i in range(self.n_layers):
+            # Fourier layer
+            x1 = self.fourier_layers[i](x)
+
+            # Conv layer (if not fourier_only)
+            if self.conv_layers is not None:
+                x2 = self.conv_layers[i](x)
+
+                # Skip connection (if enabled)
+                if self.use_skip_connections:
+                    x = x1 + x2
+                else:
+                    x = x1  # Fourier only
+            else:
+                # Fourier-only mode
+                x = x1
+
+            # Batch normalization (if enabled)
+            if self.batch_norms is not None:
+                x = self.batch_norms[i](x)
+
+            # Activation (if enabled and not last layer)
+            if self.use_activations and i < self.n_layers - 1:
+                x = self.use_activations(x)
+
+        # Add residual connection from input (if enabled)
+        if self.residual_connection:
+            x = x + x_input
+
+        # Evidential heads
+        gamma = self.gamma_head(x)
+        nu = F.softplus(self.nu_head(x)) + self.nu_min
+        alpha = F.softplus(self.alpha_head(x)) + self.alpha_min
+        beta = F.softplus(self.beta_head(x)) + self.beta_min
+
+        # Permute back to (batch, n_x, n_y, 1)
+        gamma = gamma.permute(0, 2, 3, 1)
+        nu = nu.permute(0, 2, 3, 1)
+        alpha = alpha.permute(0, 2, 3, 1)
+        beta = beta.permute(0, 2, 3, 1)
+
+        return gamma, nu, alpha, beta
+
+    def get_ablation_config(self) -> dict:
+        """Return current ablation configuration."""
+        return {
+            'use_skip_connections': self.use_skip_connections,
+            'use_activations': self.use_activations,
+            'head_depth': self.head_depth,
+            'use_batch_norm': self.use_batch_norm,
+            'fourier_only': self.fourier_only,
+            'residual_connection': self.residual_connection,
+            'modes1': self.modes1,
+            'modes2': self.modes2,
+            'width': self.width,
+            'n_layers': self.n_layers
+        }
+
+
 # ============================================================================
 # 2. MC DROPOUT (Cross-Family Comparison)
 # ============================================================================
@@ -2393,8 +2594,6 @@ class EvidentialFNOTrainer:
             val_loader: Validation data loader
             epochs: Number of epochs to train
         """
-        from tqdm import tqdm
-
         print(f"\nTraining Evidential FNO for {epochs} epochs...")
         print(f"Regularization weight (λ): {self.reg_weight}")
 
@@ -2408,9 +2607,8 @@ class EvidentialFNOTrainer:
             epoch_reg = 0.0
             num_batches = 0
 
-            # Training loop with progress bar
-            train_pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{epochs} [Train]')
-            for x, y in train_pbar:
+            # Training loop without progress bar
+            for batch_idx, (x, y) in enumerate(train_loader):
                 loss, loss_dict = self.train_step(x, y)
 
                 epoch_loss += loss.item()
@@ -2418,12 +2616,12 @@ class EvidentialFNOTrainer:
                 epoch_reg += loss_dict.get('reg', 0.0)
                 num_batches += 1
 
-                # Update progress bar
-                train_pbar.set_postfix({
-                    'loss': f'{loss.item():.6f}',
-                    'nll': f'{loss_dict.get("nll", loss.item()):.6f}',
-                    'reg': f'{loss_dict.get("reg", 0.0):.6f}'
-                })
+                # Print progress every 10 batches
+                if (batch_idx + 1) % 10 == 0:
+                    print(f'  Batch [{batch_idx+1}/{len(train_loader)}] - '
+                          f'loss={loss.item():.6f}, '
+                          f'nll={loss_dict.get("nll", loss.item()):.6f}, '
+                          f'reg={loss_dict.get("reg", 0.0):.6f}')
 
             # Average training losses
             avg_train_loss = epoch_loss / num_batches

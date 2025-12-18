@@ -882,3 +882,48 @@ def get_calibration_dataset(dataset: PDEDataset,
         ...     x_i, y_i = cal_dataset[i]  # Access individual samples
     """
     return Subset(dataset, indices.tolist() if isinstance(indices, np.ndarray) else indices)
+
+
+def create_subset_loader(dataset: PDEDataset,
+                        n_samples: int,
+                        batch_size: int = 32,
+                        seed: int = 42) -> DataLoader:
+    """
+    Create a DataLoader with a specific number of samples from the dataset.
+
+    Used for Experiment 3 (Epistemic vs Aleatoric) to train models on varying data sizes
+    while keeping a consistent test set.
+
+    Args:
+        dataset: PDEDataset instance
+        n_samples: Number of samples to include in the subset
+        batch_size: Batch size for the DataLoader
+        seed: Random seed for reproducibility
+
+    Returns:
+        DataLoader with n_samples from the dataset
+
+    Example:
+        >>> # Create loaders with different training sizes
+        >>> train_100 = create_subset_loader(dataset, n_samples=100, seed=42)
+        >>> train_500 = create_subset_loader(dataset, n_samples=500, seed=42)
+        >>> # Train separate models on each subset
+    """
+    n_total = len(dataset)
+
+    if n_samples > n_total:
+        raise ValueError(f"Requested {n_samples} samples but dataset only has {n_total}")
+
+    # Random sample indices
+    rng = np.random.RandomState(seed=seed)
+    indices = rng.choice(n_total, size=n_samples, replace=False)
+
+    # Create subset
+    subset = Subset(dataset, indices.tolist())
+
+    # Create DataLoader
+    loader = DataLoader(subset, batch_size=batch_size, shuffle=True, num_workers=0)
+
+    print(f"Created subset loader: {n_samples} samples (batch_size={batch_size})")
+
+    return loader

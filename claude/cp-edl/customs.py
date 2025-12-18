@@ -1195,19 +1195,19 @@ def improved_evidential_loss(gamma, nu, alpha, beta, y, reg_weight=0.01):
     """
     # Same NLL as standard DER
     nll = nig_nll(gamma, nu, alpha, beta, y)
-    
+
     # Improved regularization
     reg = improved_evidential_regularization(gamma, nu, alpha, beta, y)
-    
+
     # Total loss
     total_loss = nll + reg_weight * reg
-    
+
     loss_dict = {
         'nll': nll.item(),
-        'improved_reg': reg.item(),
+        'reg': reg.item(),  # Changed from 'improved_reg' to 'reg' for consistency
         'total': total_loss.item()
     }
-    
+
     return total_loss, loss_dict
 
 

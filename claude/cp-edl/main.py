@@ -18,17 +18,18 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Tuple
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from config import Config, Factory, get_baseline_configs, get_conformal_methods_configs, get_evidential_methods_configs
 from datautils import (
     load_pde_data, create_dataloaders, create_dataloaders_with_calibration,
     create_kfold_splits, create_stratified_splits, create_ensemble_splits,
-    create_ood_test_data, get_calibration_dataset
+    create_ood_test_data, get_calibration_dataset, create_subset_loader
 )
 from fno import (
-    FNO2d, FNOTrainer, EvidentialFNO2d, EvidentialFNOTrainer, MCDropoutFNO2d, FNOEnsemble,
-    BayesianFNO2d, QuantileFNO2d, PriorNetworkFNO2d, DirichletEvidentialFNO2d,
-    PosteriorNetworkFNO2d
+    FNO2d, FNOTrainer, EvidentialFNO2d, AblationEvidentialFNO2d, EvidentialFNOTrainer,
+    MCDropoutFNO2d, FNOEnsemble, BayesianFNO2d, QuantileFNO2d, PriorNetworkFNO2d,
+    DirichletEvidentialFNO2d, PosteriorNetworkFNO2d
 )
 from customs import (
     # Conformal Prediction
@@ -807,6 +808,694 @@ def run_comprehensive_comparison(data_path: str, pde_type: str,
     return results
 
 
+def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
+                                   config_dict: dict,
+                                   output_dir: str = 'experiments') -> Dict:
+    """
+    Experiment 3: Epistemic vs Aleatoric Decomposition.
+
+    Validates that epistemic uncertainty decreases with more training data
+    while aleatoric uncertainty remains constant.
+
+    Args:
+        data_path: Path to data file
+        pde_type: PDE type
+        config_dict: Configuration dictionary
+        output_dir: Output directory
+
+    Returns:
+        Dictionary with experimental results
+    """
+    # Setup output directory
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    exp_dir = Path(output_dir) / f"experiment3_{pde_type}_{timestamp}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT 3: Epistemic vs Aleatoric Decomposition")
+    print(f"PDE: {pde_type}")
+    print(f"Output: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    # Load full dataset
+    print("Loading dataset...")
+    dataset = load_pde_data(data_path, pde_type, max_samples=5000)
+    print(f"Total dataset size: {len(dataset)}")
+
+    # Create fixed test set
+    config = Config(config_dict)
+    _, _, test_loader = create_dataloaders(
+        dataset,
+        train_ratio=0.8,
+        val_ratio=0.1,
+        batch_size=config.batch_size,
+        seed=config.seed if hasattr(config, 'seed') else 42
+    )
+    print(f"Fixed test set size: {len(test_loader.dataset)}")
+
+    # Training data sizes to test
+    train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    # Filter out sizes larger than dataset
+    train_sizes = [n for n in train_sizes if n <= len(dataset)]
+
+    print(f"\nTraining sizes to test: {train_sizes}")
+
+    # Store results
+    results = []
+
+    # Train model for each data size
+    for n_train in train_sizes:
+        print(f"\n{'='*70}")
+        print(f"Training with N={n_train} samples")
+        print(f"{'='*70}")
+
+        # Create subset loader
+        train_loader = create_subset_loader(
+            dataset,
+            n_samples=n_train,
+            batch_size=config.batch_size,
+            seed=config.seed if hasattr(config, 'seed') else 42
+        )
+
+        # Create evidential model
+        model = EvidentialFNO2d(
+            modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
+            nu_min=1.0, alpha_min=1.0, beta_min=0.0
+        )
+        model = model.to(config.device)
+
+        # Get method config for evidential training
+        method_configs = get_evidential_methods_configs()
+        method_config = method_configs.get('der_nig')
+
+        # Create optimizer and scheduler
+        optimizer_config = {
+            'type': 'adam',
+            'lr': method_config.get('lr', 1e-4),
+            'weight_decay': 0.0
+        }
+        optimizer = Factory.create_optimizer(optimizer_config, model.parameters())
+
+        scheduler_config = {
+            'type': 'exponential_lr',
+            'gamma': 0.93
+        }
+        scheduler = Factory.create_scheduler(scheduler_config, optimizer)
+
+        # Setup trainer config
+        trainer_config = Config({
+            'device': config.device,
+            'lr': method_config.get('lr', 1e-4),
+            'weight_decay': 0.0,
+            'enable_tracking': False,
+            'log_dir': str(exp_dir / 'logs'),
+            'experiment_name': f'exp3_n{n_train}',
+            'checkpoint_dir': str(exp_dir / 'checkpoints'),
+            'save_every': 50,
+            'use_tensorboard': False
+        })
+
+        # Create trainer
+        trainer = EvidentialFNOTrainer(
+            model=model,
+            config=trainer_config,
+            method_name='der_nig',
+            optimizer=optimizer,
+            scheduler=scheduler,
+            method_config=method_config
+        )
+
+        # Train
+        epochs = config_dict.get('epochs', 200)
+        print(f"Training for {epochs} epochs...")
+        trainer.train(train_loader, test_loader, epochs=epochs)
+
+        # Evaluate uncertainty on test set
+        print("\nEvaluating uncertainties on test set...")
+        model.eval()
+        all_aleatoric = []
+        all_epistemic = []
+
+        with torch.no_grad():
+            for x, y in test_loader:
+                x, y = x.to(config.device), y.to(config.device)
+
+                # Get evidential parameters
+                gamma, nu, alpha, beta = model(x)
+
+                # Compute uncertainties
+                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+
+                all_aleatoric.append(uq_dict['aleatoric'].cpu().numpy())
+                all_epistemic.append(uq_dict['epistemic'].cpu().numpy())
+
+        # Aggregate results
+        aleatoric = np.concatenate(all_aleatoric).mean()
+        epistemic = np.concatenate(all_epistemic).mean()
+        ratio = epistemic / (aleatoric + 1e-8)
+
+        print(f"Results for N={n_train}:")
+        print(f"  Aleatoric: {aleatoric:.6f}")
+        print(f"  Epistemic: {epistemic:.6f}")
+        print(f"  Ratio (Epi/Ale): {ratio:.3f}")
+
+        results.append({
+            'n_train': n_train,
+            'aleatoric': float(aleatoric),
+            'epistemic': float(epistemic),
+            'ratio': float(ratio)
+        })
+
+    # Save results to CSV
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(exp_dir / 'experiment3_results.csv', index=False)
+    print(f"\nResults saved to: {exp_dir / 'experiment3_results.csv'}")
+
+    # Generate plot
+    try:
+        import matplotlib.pyplot as plt
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Plot 1: Uncertainties vs Training Size
+        ax1.plot(results_df['n_train'], results_df['aleatoric'], 'o-', label='Aleatoric (σ²_ale)', linewidth=2)
+        ax1.plot(results_df['n_train'], results_df['epistemic'], 's-', label='Epistemic (σ²_epi)', linewidth=2)
+        ax1.set_xlabel('Training Data Size (N)', fontsize=12)
+        ax1.set_ylabel('Uncertainty', fontsize=12)
+        ax1.set_title('Epistemic vs Aleatoric Uncertainty', fontsize=14)
+        ax1.legend(fontsize=10)
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xscale('log')
+
+        # Plot 2: Log-log plot to show σ²_epi ∝ 1/N
+        ax2.loglog(results_df['n_train'], results_df['epistemic'], 's-', label='Epistemic (σ²_epi)', linewidth=2)
+        ax2.loglog(results_df['n_train'], results_df['aleatoric'], 'o-', label='Aleatoric (σ²_ale)', linewidth=2)
+
+        # Add reference line for 1/N slope
+        n_vals = np.array(train_sizes)
+        reference = results_df['epistemic'].iloc[0] * (train_sizes[0] / n_vals)
+        ax2.plot(n_vals, reference, '--', color='gray', alpha=0.5, label='Reference: 1/N slope')
+
+        ax2.set_xlabel('Training Data Size (N)', fontsize=12)
+        ax2.set_ylabel('Uncertainty (log scale)', fontsize=12)
+        ax2.set_title('Log-Log: Epistemic ∝ 1/N Validation', fontsize=14)
+        ax2.legend(fontsize=10)
+        ax2.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(exp_dir / 'experiment3_plot.png', dpi=150, bbox_inches='tight')
+        print(f"Plot saved to: {exp_dir / 'experiment3_plot.png'}")
+        plt.close()
+
+    except Exception as e:
+        print(f"Warning: Could not generate plot: {e}")
+
+    # Validation check
+    print(f"\n{'='*70}")
+    print("VALIDATION:")
+    print(f"{'='*70}")
+
+    # Check if epistemic decreases
+    epi_start = results_df['epistemic'].iloc[0]
+    epi_end = results_df['epistemic'].iloc[-1]
+    epi_decrease = (epi_start - epi_end) / epi_start * 100
+
+    print(f"Epistemic uncertainty: {epi_start:.6f} → {epi_end:.6f} ({epi_decrease:.1f}% decrease)")
+
+    # Check if aleatoric remains constant (< 10% variation)
+    ale_std = results_df['aleatoric'].std()
+    ale_mean = results_df['aleatoric'].mean()
+    ale_variation = (ale_std / ale_mean) * 100
+
+    print(f"Aleatoric uncertainty: mean={ale_mean:.6f}, std={ale_std:.6f} ({ale_variation:.1f}% variation)")
+
+    validation = {
+        'epistemic_decrease_pct': float(epi_decrease),
+        'aleatoric_variation_pct': float(ale_variation),
+        'validation_passed': epi_decrease > 20 and ale_variation < 15
+    }
+
+    if validation['validation_passed']:
+        print("\n✓ VALIDATION PASSED: Epistemic decreases, aleatoric constant")
+    else:
+        print("\n✗ VALIDATION FAILED: Check experiment parameters")
+
+    # Save validation results
+    with open(exp_dir / 'experiment3_validation.json', 'w') as f:
+        json.dump(validation, f, indent=2)
+
+    print(f"\n{'='*80}")
+    print("EXPERIMENT 3 COMPLETE!")
+    print(f"Results saved to: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    return {
+        'results': results,
+        'validation': validation,
+        'output_dir': str(exp_dir)
+    }
+
+
+def experiment_ablation(data_path: str, pde_type: str,
+                        config_dict: dict,
+                        output_dir: str = 'experiments') -> Dict:
+    """
+    Experiment 8: Ablation Studies.
+
+    Tests the impact of removing architectural components from EvidentialFNO2d:
+    - Skip connections (Fourier + Conv)
+    - Activation functions (GELU)
+    - Evidential head complexity (deep/shallow/linear)
+    - Batch normalization
+    - Fourier-only mode
+    - Residual connections
+
+    Args:
+        data_path: Path to data file
+        pde_type: PDE type
+        config_dict: Configuration dictionary
+        output_dir: Output directory
+
+    Returns:
+        Dictionary with experimental results
+    """
+    # Setup output directory
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    exp_dir = Path(output_dir) / f"experiment8_ablation_{pde_type}_{timestamp}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT 8: Ablation Studies")
+    print(f"PDE: {pde_type}")
+    print(f"Output: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    # Load dataset
+    print("Loading dataset...")
+    dataset = load_pde_data(data_path, pde_type, max_samples=5000)
+    print(f"Total dataset size: {len(dataset)}")
+
+    # Create train/val/test splits
+    config = Config(config_dict)
+    train_loader, val_loader, test_loader = create_dataloaders(
+        dataset,
+        train_ratio=0.7,
+        val_ratio=0.15,
+        batch_size=config.batch_size,
+        seed=42
+    )
+
+    print(f"Train size: {len(train_loader.dataset)}")
+    print(f"Val size: {len(val_loader.dataset)}")
+    print(f"Test size: {len(test_loader.dataset)}")
+
+    # Define ablation configurations
+    ablation_configs = [
+        {
+            'name': 'baseline',
+            'description': 'Full model with all components',
+            'use_skip_connections': True,
+            'use_activations': True,
+            'head_depth': 'deep',
+            'use_batch_norm': False,
+            'fourier_only': False,
+            'residual_connection': False
+        },
+        {
+            'name': 'no_skip_connections',
+            'description': 'Remove skip connections (Fourier only in layers)',
+            'use_skip_connections': False,
+            'use_activations': True,
+            'head_depth': 'deep',
+            'use_batch_norm': False,
+            'fourier_only': False,
+            'residual_connection': False
+        },
+        {
+            'name': 'no_activations',
+            'description': 'Remove GELU activations between layers',
+            'use_skip_connections': True,
+            'use_activations': False,
+            'head_depth': 'deep',
+            'use_batch_norm': False,
+            'fourier_only': False,
+            'residual_connection': False
+        },
+        {
+            'name': 'shallow_heads',
+            'description': 'Use shallow evidential heads (64 hidden)',
+            'use_skip_connections': True,
+            'use_activations': True,
+            'head_depth': 'shallow',
+            'use_batch_norm': False,
+            'fourier_only': False,
+            'residual_connection': False
+        },
+        {
+            'name': 'linear_heads',
+            'description': 'Use linear evidential heads (no hidden layer)',
+            'use_skip_connections': True,
+            'use_activations': True,
+            'head_depth': 'linear',
+            'use_batch_norm': False,
+            'fourier_only': False,
+            'residual_connection': False
+        },
+        {
+            'name': 'with_batch_norm',
+            'description': 'Add batch normalization after each layer',
+            'use_skip_connections': True,
+            'use_activations': True,
+            'head_depth': 'deep',
+            'use_batch_norm': True,
+            'fourier_only': False,
+            'residual_connection': False
+        },
+        {
+            'name': 'fourier_only',
+            'description': 'Remove all Conv layers (pure Fourier)',
+            'use_skip_connections': True,  # Irrelevant when fourier_only=True
+            'use_activations': True,
+            'head_depth': 'deep',
+            'use_batch_norm': False,
+            'fourier_only': True,
+            'residual_connection': False
+        },
+        {
+            'name': 'with_residual',
+            'description': 'Add residual connection from input to output',
+            'use_skip_connections': True,
+            'use_activations': True,
+            'head_depth': 'deep',
+            'use_batch_norm': False,
+            'fourier_only': False,
+            'residual_connection': True
+        }
+    ]
+
+    # Train and evaluate each ablation variant
+    results = []
+    method_config = get_evidential_methods_configs()['der_nig']
+    epochs = config_dict.get('epochs', 100)
+
+    for idx, ablation_cfg in enumerate(ablation_configs):
+        print(f"\n{'='*80}")
+        print(f"Ablation {idx+1}/{len(ablation_configs)}: {ablation_cfg['name']}")
+        print(f"Description: {ablation_cfg['description']}")
+        print(f"{'='*80}\n")
+
+        # Create model with ablation configuration
+        model = AblationEvidentialFNO2d(
+            modes1=12,
+            modes2=12,
+            width=32,
+            n_layers=4,
+            in_channels=3,
+            nu_min=1.0,
+            alpha_min=1.0,
+            beta_min=0.0,
+            use_skip_connections=ablation_cfg['use_skip_connections'],
+            use_activations=ablation_cfg['use_activations'],
+            head_depth=ablation_cfg['head_depth'],
+            use_batch_norm=ablation_cfg['use_batch_norm'],
+            fourier_only=ablation_cfg['fourier_only'],
+            residual_connection=ablation_cfg['residual_connection']
+        )
+        model = model.to(config.device)
+
+        # Count parameters
+        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Model parameters: {n_params:,}")
+
+        # Setup optimizer and scheduler
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=10, verbose=False
+        )
+
+        # Setup trainer
+        trainer_config = Config({
+            'device': config.device,
+            'batch_size': config.batch_size,
+            'lr': 1e-3,
+            'weight_decay': 1e-5,
+            'checkpoint_dir': str(exp_dir / ablation_cfg['name']),
+            'save_every': epochs + 1  # Don't save periodic checkpoints
+        })
+
+        trainer = EvidentialFNOTrainer(
+            model=model,
+            config=trainer_config,
+            method_name='der_nig',
+            optimizer=optimizer,
+            scheduler=scheduler,
+            method_config=method_config,
+            save_flag=False  # Don't save checkpoints for ablation
+        )
+
+        # Train
+        print(f"Training for {epochs} epochs...")
+        trainer.train(train_loader, val_loader, epochs=epochs)
+
+        # Evaluate on test set
+        print("\nEvaluating on test set...")
+        model.eval()
+
+        all_predictions = []
+        all_targets = []
+        all_epistemic = []
+        all_aleatoric = []
+        all_total_unc = []
+
+        with torch.no_grad():
+            for x, y in test_loader:
+                x, y = x.to(config.device), y.to(config.device)
+
+                # Forward pass
+                gamma, nu, alpha, beta = model(x)
+
+                # Compute uncertainties
+                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+
+                all_predictions.append(gamma.cpu())
+                all_targets.append(y.cpu())
+                all_epistemic.append(uq_dict['epistemic'].cpu())
+                all_aleatoric.append(uq_dict['aleatoric'].cpu())
+                all_total_unc.append(uq_dict['total'].cpu())
+
+        # Concatenate results
+        predictions = torch.cat(all_predictions, dim=0)
+        targets = torch.cat(all_targets, dim=0)
+        epistemic = torch.cat(all_epistemic, dim=0)
+        aleatoric = torch.cat(all_aleatoric, dim=0)
+        total_unc = torch.cat(all_total_unc, dim=0)
+
+        # Compute metrics
+        mse = F.mse_loss(predictions, targets).item()
+        mae = F.l1_loss(predictions, targets).item()
+        rel_l2 = (torch.norm(predictions - targets) / torch.norm(targets)).item()
+
+        # Uncertainty metrics
+        mean_epistemic = epistemic.mean().item()
+        mean_aleatoric = aleatoric.mean().item()
+        mean_total = total_unc.mean().item()
+
+        # Calibration error
+        ece = expected_calibration_error(predictions, targets, total_unc, n_bins=10)
+
+        # Uncertainty-error correlation
+        errors = (predictions - targets).abs()
+        unc_err_corr = uncertainty_error_correlation(total_unc, errors)
+
+        # Store results
+        result = {
+            'name': ablation_cfg['name'],
+            'description': ablation_cfg['description'],
+            'n_params': n_params,
+            'mse': mse,
+            'mae': mae,
+            'rel_l2': rel_l2,
+            'epistemic': mean_epistemic,
+            'aleatoric': mean_aleatoric,
+            'total_uncertainty': mean_total,
+            'calibration_error': ece,
+            'unc_err_correlation': unc_err_corr,
+            'final_train_loss': trainer.train_losses[-1] if trainer.train_losses else 0.0,
+            'final_val_loss': trainer.val_losses[-1] if trainer.val_losses else 0.0,
+            **ablation_cfg  # Include ablation flags
+        }
+
+        results.append(result)
+
+        print(f"\nResults for {ablation_cfg['name']}:")
+        print(f"  MSE: {mse:.6f}")
+        print(f"  MAE: {mae:.6f}")
+        print(f"  Rel L2: {rel_l2:.6f}")
+        print(f"  Epistemic: {mean_epistemic:.6f}")
+        print(f"  Aleatoric: {mean_aleatoric:.6f}")
+        print(f"  Calibration Error: {ece:.6f}")
+        print(f"  Unc-Err Correlation: {unc_err_corr:.6f}")
+
+    # Save results to CSV
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(exp_dir / 'experiment8_ablation_results.csv', index=False)
+    print(f"\n\nResults saved to: {exp_dir / 'experiment8_ablation_results.csv'}")
+
+    # Create comparison plots
+    print("\nGenerating comparison plots...")
+
+    # 1. Performance comparison (MSE, MAE, Rel L2)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    names = [r['name'] for r in results]
+    mses = [r['mse'] for r in results]
+    maes = [r['mae'] for r in results]
+    rel_l2s = [r['rel_l2'] for r in results]
+
+    # Highlight baseline
+    colors = ['green' if name == 'baseline' else 'steelblue' for name in names]
+
+    axes[0].bar(range(len(names)), mses, color=colors)
+    axes[0].set_xlabel('Ablation Variant')
+    axes[0].set_ylabel('MSE')
+    axes[0].set_title('Mean Squared Error')
+    axes[0].set_xticks(range(len(names)))
+    axes[0].set_xticklabels(names, rotation=45, ha='right')
+    axes[0].grid(axis='y', alpha=0.3)
+
+    axes[1].bar(range(len(names)), maes, color=colors)
+    axes[1].set_xlabel('Ablation Variant')
+    axes[1].set_ylabel('MAE')
+    axes[1].set_title('Mean Absolute Error')
+    axes[1].set_xticks(range(len(names)))
+    axes[1].set_xticklabels(names, rotation=45, ha='right')
+    axes[1].grid(axis='y', alpha=0.3)
+
+    axes[2].bar(range(len(names)), rel_l2s, color=colors)
+    axes[2].set_xlabel('Ablation Variant')
+    axes[2].set_ylabel('Relative L2 Error')
+    axes[2].set_title('Relative L2 Error')
+    axes[2].set_xticks(range(len(names)))
+    axes[2].set_xticklabels(names, rotation=45, ha='right')
+    axes[2].grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment8_performance_comparison.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # 2. Uncertainty comparison
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    epistemics = [r['epistemic'] for r in results]
+    aleatorics = [r['aleatoric'] for r in results]
+    totals = [r['total_uncertainty'] for r in results]
+
+    axes[0].bar(range(len(names)), epistemics, color=colors)
+    axes[0].set_xlabel('Ablation Variant')
+    axes[0].set_ylabel('Epistemic Uncertainty')
+    axes[0].set_title('Epistemic Uncertainty')
+    axes[0].set_xticks(range(len(names)))
+    axes[0].set_xticklabels(names, rotation=45, ha='right')
+    axes[0].grid(axis='y', alpha=0.3)
+
+    axes[1].bar(range(len(names)), aleatorics, color=colors)
+    axes[1].set_xlabel('Ablation Variant')
+    axes[1].set_ylabel('Aleatoric Uncertainty')
+    axes[1].set_title('Aleatoric Uncertainty')
+    axes[1].set_xticks(range(len(names)))
+    axes[1].set_xticklabels(names, rotation=45, ha='right')
+    axes[1].grid(axis='y', alpha=0.3)
+
+    axes[2].bar(range(len(names)), totals, color=colors)
+    axes[2].set_xlabel('Ablation Variant')
+    axes[2].set_ylabel('Total Uncertainty')
+    axes[2].set_title('Total Uncertainty')
+    axes[2].set_xticks(range(len(names)))
+    axes[2].set_xticklabels(names, rotation=45, ha='right')
+    axes[2].grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment8_uncertainty_comparison.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # 3. Calibration and correlation comparison
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    eces = [r['calibration_error'] for r in results]
+    corrs = [r['unc_err_correlation'] for r in results]
+
+    axes[0].bar(range(len(names)), eces, color=colors)
+    axes[0].set_xlabel('Ablation Variant')
+    axes[0].set_ylabel('Expected Calibration Error')
+    axes[0].set_title('Calibration Quality (lower is better)')
+    axes[0].set_xticks(range(len(names)))
+    axes[0].set_xticklabels(names, rotation=45, ha='right')
+    axes[0].grid(axis='y', alpha=0.3)
+
+    axes[1].bar(range(len(names)), corrs, color=colors)
+    axes[1].set_xlabel('Ablation Variant')
+    axes[1].set_ylabel('Uncertainty-Error Correlation')
+    axes[1].set_title('Uncertainty-Error Correlation (higher is better)')
+    axes[1].set_xticks(range(len(names)))
+    axes[1].set_xticklabels(names, rotation=45, ha='right')
+    axes[1].axhline(y=0, color='red', linestyle='--', alpha=0.5, label='No correlation')
+    axes[1].grid(axis='y', alpha=0.3)
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment8_calibration_comparison.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # 4. Performance degradation table
+    baseline_result = results[0]  # First config is baseline
+
+    print("\n" + "="*80)
+    print("ABLATION STUDY SUMMARY")
+    print("="*80)
+    print(f"\n{'Variant':<25} {'MSE Δ%':<12} {'Rel L2 Δ%':<12} {'ECE Δ%':<12} {'Corr Δ%':<12}")
+    print("-"*80)
+
+    for r in results:
+        if r['name'] == 'baseline':
+            print(f"{r['name']:<25} {'baseline':<12} {'baseline':<12} {'baseline':<12} {'baseline':<12}")
+        else:
+            mse_delta = ((r['mse'] - baseline_result['mse']) / baseline_result['mse']) * 100
+            rel_l2_delta = ((r['rel_l2'] - baseline_result['rel_l2']) / baseline_result['rel_l2']) * 100
+            ece_delta = ((r['calibration_error'] - baseline_result['calibration_error']) / baseline_result['calibration_error']) * 100
+            corr_delta = ((r['unc_err_correlation'] - baseline_result['unc_err_correlation']) / baseline_result['unc_err_correlation']) * 100
+
+            print(f"{r['name']:<25} {mse_delta:+.2f}%       {rel_l2_delta:+.2f}%       {ece_delta:+.2f}%       {corr_delta:+.2f}%")
+
+    print("="*80)
+
+    # Save summary to JSON
+    summary = {
+        'baseline': baseline_result,
+        'ablation_variants': results[1:],
+        'experiment_config': {
+            'pde_type': pde_type,
+            'epochs': epochs,
+            'train_size': len(train_loader.dataset),
+            'val_size': len(val_loader.dataset),
+            'test_size': len(test_loader.dataset)
+        }
+    }
+
+    with open(exp_dir / 'experiment8_summary.json', 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"\n{'='*80}")
+    print("ABLATION STUDY COMPLETE!")
+    print(f"Results saved to: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    return {
+        'results': results,
+        'summary': summary,
+        'output_dir': str(exp_dir)
+    }
+
+
 def create_default_config(pde_type: str) -> dict:
     """Create default configuration for a PDE type."""
     config = {
@@ -912,10 +1601,10 @@ Examples:
 
     # Mode selection
     parser.add_argument('--mode', type=str, required=True,
-                        choices=['fno_ebm', 'comprehensive', 'conformal', 'evidential', 'baseline'],
+                        choices=['fno_ebm', 'comprehensive', 'conformal', 'evidential', 'baseline', 'experiment'],
                         help='Experiment mode: fno_ebm (original), comprehensive (all 17 methods), '
                              'conformal (single CP method), evidential (single EDL method), '
-                             'baseline (single cross-family baseline)')
+                             'baseline (single cross-family baseline), experiment (run specific experiment)')
 
     # Required arguments
     parser.add_argument('--data_path', type=str, required=True,
@@ -927,6 +1616,10 @@ Examples:
     # Method-specific arguments
     parser.add_argument('--method', type=str, default=None,
                         help='Specific method name (for conformal or evidential mode)')
+
+    # Experiment-specific arguments
+    parser.add_argument('--exp_id', type=int, default=None,
+                        help='Experiment ID (for experiment mode): 3=Epistemic vs Aleatoric, 8=Ablation Studies')
 
     # Optional arguments
     parser.add_argument('--nu_values', nargs='+', type=float, default=None,
@@ -1039,6 +1732,30 @@ Examples:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         train_baseline_method(args.method, dataset, config_dict, output_dir)
+
+    elif args.mode == 'experiment':
+        # Run specific experiment
+        if not args.exp_id:
+            raise ValueError("--exp_id required for experiment mode. "
+                           "Options: 3 (Epistemic vs Aleatoric Decomposition), "
+                           "8 (Ablation Studies)")
+
+        if args.exp_id == 3:
+            experiment_epistemic_aleatoric(
+                data_path=args.data_path,
+                pde_type=args.pde_type,
+                config_dict=config_dict,
+                output_dir=args.output_dir
+            )
+        elif args.exp_id == 8:
+            experiment_ablation(
+                data_path=args.data_path,
+                pde_type=args.pde_type,
+                config_dict=config_dict,
+                output_dir=args.output_dir
+            )
+        else:
+            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 8")
 
 
 if __name__ == '__main__':
