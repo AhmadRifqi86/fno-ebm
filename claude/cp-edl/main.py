@@ -1032,7 +1032,7 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     validation = {
         'epistemic_decrease_pct': float(epi_decrease),
         'aleatoric_variation_pct': float(ale_variation),
-        'validation_passed': epi_decrease > 20 and ale_variation < 15
+        'validation_passed': bool(epi_decrease > 20 and ale_variation < 15)
     }
 
     if validation['validation_passed']:
@@ -1115,7 +1115,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'baseline',
             'description': 'Full model with all components',
             'use_skip_connections': True,
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'deep',
             'use_batch_norm': False,
             'fourier_only': False,
@@ -1125,7 +1125,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'no_skip_connections',
             'description': 'Remove skip connections (Fourier only in layers)',
             'use_skip_connections': False,
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'deep',
             'use_batch_norm': False,
             'fourier_only': False,
@@ -1135,7 +1135,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'no_activations',
             'description': 'Remove GELU activations between layers',
             'use_skip_connections': True,
-            'use_activations': False,
+            'use_activations': None,
             'head_depth': 'deep',
             'use_batch_norm': False,
             'fourier_only': False,
@@ -1145,7 +1145,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'shallow_heads',
             'description': 'Use shallow evidential heads (64 hidden)',
             'use_skip_connections': True,
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'shallow',
             'use_batch_norm': False,
             'fourier_only': False,
@@ -1155,7 +1155,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'linear_heads',
             'description': 'Use linear evidential heads (no hidden layer)',
             'use_skip_connections': True,
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'linear',
             'use_batch_norm': False,
             'fourier_only': False,
@@ -1165,7 +1165,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'with_batch_norm',
             'description': 'Add batch normalization after each layer',
             'use_skip_connections': True,
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'deep',
             'use_batch_norm': True,
             'fourier_only': False,
@@ -1175,7 +1175,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'fourier_only',
             'description': 'Remove all Conv layers (pure Fourier)',
             'use_skip_connections': True,  # Irrelevant when fourier_only=True
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'deep',
             'use_batch_norm': False,
             'fourier_only': True,
@@ -1185,7 +1185,7 @@ def experiment_ablation(data_path: str, pde_type: str,
             'name': 'with_residual',
             'description': 'Add residual connection from input to output',
             'use_skip_connections': True,
-            'use_activations': True,
+            'use_activations': F.gelu,
             'head_depth': 'deep',
             'use_batch_norm': False,
             'fourier_only': False,
@@ -1300,12 +1300,22 @@ def experiment_ablation(data_path: str, pde_type: str,
         mean_aleatoric = aleatoric.mean().item()
         mean_total = total_unc.mean().item()
 
+        # Compute errors
+        errors = (predictions - targets).abs()
+
         # Calibration error
-        ece = expected_calibration_error(predictions, targets, total_unc, n_bins=10)
+        ece = expected_calibration_error(total_unc, errors, 10)
 
         # Uncertainty-error correlation
-        errors = (predictions - targets).abs()
         unc_err_corr = uncertainty_error_correlation(total_unc, errors)
+
+        # Convert activation function to string for JSON serialization
+        activation_str = None
+        if ablation_cfg['use_activations'] is not None:
+            if ablation_cfg['use_activations'] == F.gelu:
+                activation_str = 'gelu'
+            elif callable(ablation_cfg['use_activations']):
+                activation_str = ablation_cfg['use_activations'].__name__
 
         # Store results
         result = {
@@ -1322,7 +1332,13 @@ def experiment_ablation(data_path: str, pde_type: str,
             'unc_err_correlation': unc_err_corr,
             'final_train_loss': trainer.train_losses[-1] if trainer.train_losses else 0.0,
             'final_val_loss': trainer.val_losses[-1] if trainer.val_losses else 0.0,
-            **ablation_cfg  # Include ablation flags
+            # Include ablation flags with JSON-serializable values
+            'use_skip_connections': ablation_cfg['use_skip_connections'],
+            'use_activations': activation_str,
+            'head_depth': ablation_cfg['head_depth'],
+            'use_batch_norm': ablation_cfg['use_batch_norm'],
+            'fourier_only': ablation_cfg['fourier_only'],
+            'residual_connection': ablation_cfg['residual_connection']
         }
 
         results.append(result)

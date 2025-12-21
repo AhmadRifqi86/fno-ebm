@@ -1500,7 +1500,7 @@ class AblationEvidentialFNO2d(nn.Module):
                 x = self.batch_norms[i](x)
 
             # Activation (if enabled and not last layer)
-            if self.use_activations and i < self.n_layers - 1:
+            if (self.use_activations is not None) and (i < self.n_layers - 1):
                 x = self.use_activations(x)
 
         # Add residual connection from input (if enabled)
