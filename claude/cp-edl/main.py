@@ -21,10 +21,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from config import Config, Factory, get_baseline_configs, get_conformal_methods_configs, get_evidential_methods_configs
+from torch.utils.data import DataLoader, Subset
 from datautils import (
     load_pde_data, create_dataloaders, create_dataloaders_with_calibration,
     create_kfold_splits, create_stratified_splits, create_ensemble_splits,
-    create_ood_test_data, get_calibration_dataset, create_subset_loader
+    create_ood_test_data, get_calibration_dataset, create_subset_loader,
+    load_ns_exp4
 )
 from fno import (
     FNO2d, FNOTrainer, EvidentialFNO2d, AblationEvidentialFNO2d, EvidentialFNOTrainer,
@@ -1512,6 +1514,323 @@ def experiment_ablation(data_path: str, pde_type: str,
     }
 
 
+def experiment_ood_detection(id_data_path: str, ood_data_path: str,
+                             config_dict: dict,
+                             output_dir: str = 'experiments') -> Dict:
+    """
+    Experiment 4: OOD Detection using Reynolds Number.
+
+    Trains evidential model on ID data (Re=1000, 2000, 3000) and evaluates
+    OOD detection performance on higher Reynolds numbers (Re=5000, 10000).
+    Uses total uncertainty as OOD score and computes AUROC.
+
+    Args:
+        id_data_path: Path to in-distribution training data
+        ood_data_path: Path to out-of-distribution test data
+        config_dict: Configuration dictionary
+        output_dir: Output directory
+
+    Returns:
+        Dictionary with experimental results including AUROC
+    """
+    # Setup output directory
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    exp_dir = Path(output_dir) / f"experiment4_ood_detection_{timestamp}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT 4: OOD Detection via Reynolds Number")
+    print(f"Output: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    # Load ID training data (Re=1000, 2000, 3000)
+    print("Loading ID training data (Re=1000, 2000, 3000)...")
+    id_dataset, id_reynolds = load_ns_exp4(
+        filepath=id_data_path,
+        reynolds_numbers=[1000.0, 2000.0, 3000.0],
+        time_pairs=5
+    )
+    print(f"ID dataset size: {len(id_dataset)}")
+    print(f"Reynolds distribution: {np.unique(id_reynolds, return_counts=True)}")
+
+    # Load OOD test data (Re=5000, 10000)
+    print("\nLoading OOD test data (Re=5000, 10000)...")
+    ood_dataset, ood_reynolds = load_ns_exp4(
+        filepath=ood_data_path,
+        reynolds_numbers=[5000.0, 10000.0],
+        time_pairs=5
+    )
+    print(f"OOD dataset size: {len(ood_dataset)}")
+    print(f"Reynolds distribution: {np.unique(ood_reynolds, return_counts=True)}")
+
+    # Create dataloaders
+    config = Config(config_dict)
+    train_loader, val_loader, _ = create_dataloaders(
+        id_dataset,
+        train_ratio=0.8,
+        val_ratio=0.1,
+        batch_size=config.batch_size,
+        seed=42
+    )
+
+    # Create ID test loader (from same distribution as training)
+    id_test_loader = DataLoader(
+        Subset(id_dataset, list(range(int(0.9 * len(id_dataset)), len(id_dataset)))),
+        batch_size=config.batch_size,
+        shuffle=False
+    )
+
+    # Create OOD test loader
+    ood_test_loader = DataLoader(
+        ood_dataset,
+        batch_size=config.batch_size,
+        shuffle=False
+    )
+
+    print(f"\nTrain: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}")
+    print(f"ID Test: {len(id_test_loader.dataset)}, OOD Test: {len(ood_test_loader.dataset)}")
+
+    # Create evidential model
+    print("\nInitializing evidential model...")
+    model = EvidentialFNO2d(
+        modes1=12,
+        modes2=12,
+        width=32,
+        n_layers=4,
+        in_channels=3,
+        nu_min=1.0,
+        alpha_min=1.0,
+        beta_min=0.0
+    )
+    model = model.to(config.device)
+
+    # Get method config
+    method_configs = get_evidential_methods_configs()
+    method_config = method_configs.get('der_nig')
+
+    # Setup optimizer and scheduler
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=10, verbose=True
+    )
+
+    # Setup trainer config
+    trainer_config = Config({
+        'device': config.device,
+        'lr': 1e-3,
+        'weight_decay': 1e-5,
+        'enable_tracking': False,
+        'log_dir': str(exp_dir / 'logs'),
+        'experiment_name': 'exp4_ood_detection',
+        'checkpoint_dir': str(exp_dir / 'checkpoints'),
+        'save_every': 1000,
+        'use_tensorboard': False
+    })
+
+    # Create trainer
+    trainer = EvidentialFNOTrainer(
+        model=model,
+        config=trainer_config,
+        method_name='der_nig',
+        optimizer=optimizer,
+        scheduler=scheduler,
+        method_config=method_config,
+        save_flag=False
+    )
+
+    # Train
+    epochs = config_dict.get('epochs', 100)
+    print(f"\nTraining evidential model for {epochs} epochs...")
+    trainer.train(train_loader, val_loader, epochs=epochs)
+
+    # Evaluate on ID test set
+    print("\nEvaluating on ID test set (same distribution)...")
+    model.eval()
+
+    id_uncertainties = []
+    id_errors = []
+    id_predictions = []
+    id_targets = []
+
+    with torch.no_grad():
+        for x, y in id_test_loader:
+            x, y = x.to(config.device), y.to(config.device)
+
+            # Get evidential parameters
+            gamma, nu, alpha, beta = model(x)
+
+            # Compute uncertainties
+            uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+            total_unc = uq_dict['total']
+
+            # Compute errors
+            error = (gamma - y).abs()
+
+            id_uncertainties.append(total_unc.cpu().numpy())
+            id_errors.append(error.cpu().numpy())
+            id_predictions.append(gamma.cpu().numpy())
+            id_targets.append(y.cpu().numpy())
+
+    id_uncertainties = np.concatenate(id_uncertainties)
+    id_errors = np.concatenate(id_errors)
+    id_predictions = np.concatenate(id_predictions)
+    id_targets = np.concatenate(id_targets)
+
+    # Evaluate on OOD test set
+    print("Evaluating on OOD test set (Re=5000, 10000)...")
+    ood_uncertainties = []
+    ood_errors = []
+    ood_predictions = []
+    ood_targets = []
+
+    with torch.no_grad():
+        for x, y in ood_test_loader:
+            x, y = x.to(config.device), y.to(config.device)
+
+            # Get evidential parameters
+            gamma, nu, alpha, beta = model(x)
+
+            # Compute uncertainties
+            uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+            total_unc = uq_dict['total']
+
+            # Compute errors
+            error = (gamma - y).abs()
+
+            ood_uncertainties.append(total_unc.cpu().numpy())
+            ood_errors.append(error.cpu().numpy())
+            ood_predictions.append(gamma.cpu().numpy())
+            ood_targets.append(y.cpu().numpy())
+
+    ood_uncertainties = np.concatenate(ood_uncertainties)
+    ood_errors = np.concatenate(ood_errors)
+    ood_predictions = np.concatenate(ood_predictions)
+    ood_targets = np.concatenate(ood_targets)
+
+    # Compute metrics
+    id_mse = ((id_predictions - id_targets)**2).mean()
+    ood_mse = ((ood_predictions - ood_targets)**2).mean()
+
+    id_mean_unc = id_uncertainties.mean()
+    ood_mean_unc = ood_uncertainties.mean()
+
+    print(f"\n{'='*70}")
+    print("RESULTS:")
+    print(f"{'='*70}")
+    print(f"ID Test MSE: {id_mse:.6f}")
+    print(f"OOD Test MSE: {ood_mse:.6f}")
+    print(f"ID Mean Uncertainty: {id_mean_unc:.6f}")
+    print(f"OOD Mean Uncertainty: {ood_mean_unc:.6f}")
+    print(f"Uncertainty Ratio (OOD/ID): {ood_mean_unc / (id_mean_unc + 1e-8):.3f}")
+
+    # Compute AUROC for OOD detection
+    # Label: 0 for ID, 1 for OOD
+    # Score: Total uncertainty (higher for OOD)
+    from sklearn.metrics import roc_auc_score, roc_curve
+
+    y_true = np.concatenate([
+        np.zeros(len(id_uncertainties)),  # ID = 0
+        np.ones(len(ood_uncertainties))   # OOD = 1
+    ])
+
+    y_score = np.concatenate([
+        id_uncertainties.flatten(),
+        ood_uncertainties.flatten()
+    ])
+
+    auroc = roc_auc_score(y_true, y_score)
+    fpr, tpr, thresholds = roc_curve(y_true, y_score)
+
+    print(f"\nOOD Detection AUROC: {auroc:.4f}")
+
+    # Save results
+    results = {
+        'id_mse': float(id_mse),
+        'ood_mse': float(ood_mse),
+        'id_mean_uncertainty': float(id_mean_unc),
+        'ood_mean_uncertainty': float(ood_mean_unc),
+        'uncertainty_ratio': float(ood_mean_unc / (id_mean_unc + 1e-8)),
+        'auroc': float(auroc)
+    }
+
+    with open(exp_dir / 'experiment4_results.json', 'w') as f:
+        json.dump(results, f, indent=2)
+
+    # Generate plots
+    print("\nGenerating plots...")
+
+    # Plot 1: Uncertainty distributions (ID vs OOD)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Histogram
+    axes[0].hist(id_uncertainties.flatten(), bins=50, alpha=0.6, label='ID (Re=1k-3k)', density=True, color='blue')
+    axes[0].hist(ood_uncertainties.flatten(), bins=50, alpha=0.6, label='OOD (Re=5k-10k)', density=True, color='red')
+    axes[0].set_xlabel('Total Uncertainty', fontsize=12)
+    axes[0].set_ylabel('Density', fontsize=12)
+    axes[0].set_title('Uncertainty Distribution: ID vs OOD', fontsize=14)
+    axes[0].legend(fontsize=10)
+    axes[0].grid(alpha=0.3)
+
+    # Box plot
+    axes[1].boxplot([id_uncertainties.flatten(), ood_uncertainties.flatten()],
+                   labels=['ID (Re=1k-3k)', 'OOD (Re=5k-10k)'])
+    axes[1].set_ylabel('Total Uncertainty', fontsize=12)
+    axes[1].set_title('Uncertainty Comparison', fontsize=14)
+    axes[1].grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment4_uncertainty_distribution.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Plot 2: ROC Curve
+    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    ax.plot(fpr, tpr, linewidth=2, label=f'AUROC = {auroc:.4f}')
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random (AUROC = 0.5)')
+    ax.set_xlabel('False Positive Rate', fontsize=12)
+    ax.set_ylabel('True Positive Rate', fontsize=12)
+    ax.set_title('ROC Curve: OOD Detection via Uncertainty', fontsize=14)
+    ax.legend(fontsize=11, loc='lower right')
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment4_roc_curve.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Plot 3: Uncertainty vs Error scatter (ID and OOD)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # ID
+    axes[0].scatter(id_uncertainties.flatten()[:1000], id_errors.flatten()[:1000], alpha=0.3, s=10)
+    axes[0].set_xlabel('Total Uncertainty', fontsize=12)
+    axes[0].set_ylabel('Absolute Error', fontsize=12)
+    axes[0].set_title('ID: Uncertainty vs Error', fontsize=14)
+    axes[0].grid(alpha=0.3)
+
+    # OOD
+    axes[1].scatter(ood_uncertainties.flatten()[:1000], ood_errors.flatten()[:1000], alpha=0.3, s=10, color='red')
+    axes[1].set_xlabel('Total Uncertainty', fontsize=12)
+    axes[1].set_ylabel('Absolute Error', fontsize=12)
+    axes[1].set_title('OOD: Uncertainty vs Error', fontsize=14)
+    axes[1].grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment4_uncertainty_vs_error.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"\n{'='*80}")
+    print("EXPERIMENT 4 COMPLETE!")
+    print(f"Results saved to: {exp_dir}")
+    print(f"AUROC: {auroc:.4f}")
+    print(f"{'='*80}\n")
+
+    return {
+        'results': results,
+        'auroc': auroc,
+        'output_dir': str(exp_dir)
+    }
+
+
 def create_default_config(pde_type: str) -> dict:
     """Create default configuration for a PDE type."""
     config = {
@@ -1635,7 +1954,9 @@ Examples:
 
     # Experiment-specific arguments
     parser.add_argument('--exp_id', type=int, default=None,
-                        help='Experiment ID (for experiment mode): 3=Epistemic vs Aleatoric, 8=Ablation Studies')
+                        help='Experiment ID (for experiment mode): 3=Epistemic vs Aleatoric, 4=OOD Detection, 8=Ablation Studies')
+    parser.add_argument('--ood_data_path', type=str, default=None,
+                        help='Path to OOD test data (for experiment 4)')
 
     # Optional arguments
     parser.add_argument('--nu_values', nargs='+', type=float, default=None,
@@ -1754,12 +2075,24 @@ Examples:
         if not args.exp_id:
             raise ValueError("--exp_id required for experiment mode. "
                            "Options: 3 (Epistemic vs Aleatoric Decomposition), "
+                           "4 (OOD Detection), "
                            "8 (Ablation Studies)")
 
         if args.exp_id == 3:
             experiment_epistemic_aleatoric(
                 data_path=args.data_path,
                 pde_type=args.pde_type,
+                config_dict=config_dict,
+                output_dir=args.output_dir
+            )
+        elif args.exp_id == 4:
+            # OOD Detection experiment
+            if not args.ood_data_path:
+                raise ValueError("--ood_data_path required for experiment 4")
+
+            experiment_ood_detection(
+                id_data_path=args.data_path,
+                ood_data_path=args.ood_data_path,
                 config_dict=config_dict,
                 output_dir=args.output_dir
             )
@@ -1771,7 +2104,7 @@ Examples:
                 output_dir=args.output_dir
             )
         else:
-            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 8")
+            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 4, 8")
 
 
 if __name__ == '__main__':
