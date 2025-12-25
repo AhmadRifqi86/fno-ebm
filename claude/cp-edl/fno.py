@@ -2323,7 +2323,7 @@ class EvidentialFNOTrainer:
     """
 
     def __init__(self, model, config, method_name='der_nig', optimizer=None, scheduler=None,
-                 loss_fn=None, method_config=None, save_flag: bool = False):
+                 loss_fn=None, method_config=None, save_flag: bool = False, reg_fn=None):
         self.model = model
         self.config = config
         self.method_name = method_name
@@ -2347,6 +2347,10 @@ class EvidentialFNOTrainer:
         # Method-specific parameters
         self.method_config = method_config if method_config is not None else {}
         self.reg_weight = self.method_config.get('reg_weight', 0.01)
+
+        # Regularization function (for evidential methods)
+        self.reg_fn = reg_fn
+        self.max_epochs = self.method_config.get('max_epochs', 100)  # For annealed regularization
 
         # Setup loss function
         if loss_fn is not None:
@@ -2395,19 +2399,59 @@ class EvidentialFNOTrainer:
         self.logger = logging.getLogger(__name__)
 
     def _setup_default_loss_fn(self):
-        """Setup default loss function based on method_name."""
-        from customs import (evidential_loss, improved_evidential_loss,
-                            natural_nig_loss, prior_network_loss)
+        """Setup default loss function based on method_name and regularization function."""
+        from customs import (evidential_loss, improved_evidential_loss, general_evidential_loss,
+                            improved_evidential_regularization, natural_nig_loss,
+                            prior_network_loss, annealed_regularization)
         import torch.nn.functional as F
 
         if self.method_name == 'der_nig':
-            self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
-                gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
-            )
+            if self.reg_fn is not None:
+                # Use general_evidential_loss with custom regularization
+                # Check if it's annealed regularization (needs epoch)
+                if self.reg_fn.__name__ == 'annealed_regularization':
+                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                        gamma, nu, alpha, beta, y,
+                        reg_fn=self.reg_fn,
+                        reg_weight=self.reg_weight,
+                        epoch=self.current_epoch,
+                        max_epochs=self.max_epochs
+                    )
+                else:
+                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                        gamma, nu, alpha, beta, y,
+                        reg_fn=self.reg_fn,
+                        reg_weight=self.reg_weight
+                    )
+            else:
+                # Default standard evidential loss
+                self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
+                    gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+                )
         elif self.method_name == 'improved_der':
-            self.loss_fn = lambda gamma, nu, alpha, beta, y: improved_evidential_loss(
-                gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
-            )
+            if self.reg_fn is not None:
+                # Use general_evidential_loss with custom regularization
+                if self.reg_fn.__name__ == 'annealed_regularization':
+                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                        gamma, nu, alpha, beta, y,
+                        reg_fn=self.reg_fn,
+                        reg_weight=self.reg_weight,
+                        epoch=self.current_epoch,
+                        max_epochs=self.max_epochs
+                    )
+                else:
+                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                        gamma, nu, alpha, beta, y,
+                        reg_fn=self.reg_fn,
+                        reg_weight=self.reg_weight
+                    )
+            else:
+                # Default improved evidential loss (uses improved_evidential_regularization)
+                self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                    gamma, nu, alpha, beta, y,
+                    reg_fn=improved_evidential_regularization,
+                    reg_weight=self.reg_weight
+                )
         elif self.method_name == 'natural_posterior':
             self.loss_fn = lambda gamma, nu, alpha, beta, y: (
                 natural_nig_loss(gamma, nu, alpha, beta, y),
@@ -2427,9 +2471,25 @@ class EvidentialFNOTrainer:
             )
         else:
             # Default to DER-NIG
-            self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
-                gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
-            )
+            if self.reg_fn is not None:
+                if self.reg_fn.__name__ == 'annealed_regularization':
+                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                        gamma, nu, alpha, beta, y,
+                        reg_fn=self.reg_fn,
+                        reg_weight=self.reg_weight,
+                        epoch=self.current_epoch,
+                        max_epochs=self.max_epochs
+                    )
+                else:
+                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+                        gamma, nu, alpha, beta, y,
+                        reg_fn=self.reg_fn,
+                        reg_weight=self.reg_weight
+                    )
+            else:
+                self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
+                    gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+                )
 
     def train_step(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
         """

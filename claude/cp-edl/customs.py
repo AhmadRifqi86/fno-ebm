@@ -1212,6 +1212,227 @@ def improved_evidential_loss(gamma, nu, alpha, beta, y, reg_weight=0.01):
 
 
 # ============================================================================
+# ADDITIONAL REGULARIZATION SCHEMES (for comparison)
+# ============================================================================
+
+def uncertainty_aware_regularization(gamma, nu, alpha, beta, y):
+    """
+    Uncertainty-Aware Regularization (Amini et al. 2020).
+
+    Regularize based on prediction uncertainty rather than raw evidence.
+    Penalizes high uncertainty when errors are large, and low uncertainty
+    when errors are large (overconfidence).
+
+    Formula: R = error² / (σ²_total + ε)
+
+    Args:
+        gamma, nu, alpha, beta: Evidential parameters
+        y: Ground truth
+
+    Returns:
+        reg: Regularization loss
+    """
+    error = (y - gamma) ** 2
+
+    # Compute total uncertainty
+    alpha_safe = torch.clamp(alpha, min=1.01)
+    aleatoric = beta / (alpha_safe - 1)
+    epistemic = beta / (nu * (alpha_safe - 1))
+    total_unc = aleatoric + epistemic
+
+    # Penalize large errors with low uncertainty (overconfidence)
+    # Add small epsilon to prevent division by zero
+    reg = error / (total_unc + 1e-6)
+
+    return reg.mean()
+
+
+def annealed_regularization(gamma, nu, alpha, beta, y, epoch=0, max_epochs=100):
+    """
+    Annealed Regularization (Time-dependent).
+
+    Gradually reduce regularization strength during training.
+    Strong at start (prevent bad initialization), weak at end (allow refinement).
+
+    Formula: R = λ(t) × |y - γ| × (2ν + α)
+    where λ(t) = 0.1 + 0.9 × (1 - t/T)
+
+    Args:
+        gamma, nu, alpha, beta: Evidential parameters
+        y: Ground truth
+        epoch: Current epoch
+        max_epochs: Total number of epochs
+
+    Returns:
+        reg: Regularization loss
+    """
+    error = torch.abs(y - gamma)
+    evidence = 2 * nu + alpha
+
+    # Annealing schedule: starts at 1.0, decays to 0.1
+    anneal_factor = 0.1 + 0.9 * max(0.0, 1.0 - epoch / max(1, max_epochs))
+
+    reg = anneal_factor * (error * evidence).mean()
+
+    return reg
+
+
+def l2_evidence_regularization(gamma, nu, alpha, beta, y):
+    """
+    L2 Evidence Regularization.
+
+    L2 penalty on evidence parameters to prevent unbounded growth.
+    Encourages conservative uncertainty estimates.
+
+    Formula: R = error × (ν + α) + λ_L2 × (ν² + α²)
+
+    Args:
+        gamma, nu, alpha, beta: Evidential parameters
+        y: Ground truth
+
+    Returns:
+        reg: Regularization loss
+    """
+    error = (y - gamma) ** 2
+
+    # L2 penalty on ν and α (evidence parameters)
+    evidence_penalty = (nu ** 2 + alpha ** 2).mean()
+
+    # Combined: error-based + L2 penalty
+    # Weight L2 term with 0.01 to balance magnitudes
+    reg = (error * (nu + alpha)).mean() + 0.01 * evidence_penalty
+
+    return reg
+
+
+def adaptive_regularization(gamma, nu, alpha, beta, y):
+    """
+    Adaptive Regularization (Error-dependent weight).
+
+    Adaptively weight regularization based on error magnitude.
+    Stronger penalty for large errors, weaker for small errors.
+
+    Formula: R = (exp(|y - γ|) - 1) × (2ν + α)
+
+    Args:
+        gamma, nu, alpha, beta: Evidential parameters
+        y: Ground truth
+
+    Returns:
+        reg: Regularization loss
+    """
+    error = torch.abs(y - gamma)
+    evidence = 2 * nu + alpha
+
+    # Adaptive weighting: error acts as its own weight
+    # Large errors → strong penalty, small errors → weak penalty
+    # Use exp(e) - 1 ≈ e for small e, but grows faster for large e
+    adaptive_weight = torch.exp(error) - 1
+
+    reg = (adaptive_weight * evidence).mean()
+
+    return reg
+
+
+def kl_divergence_regularization(gamma, nu, alpha, beta, y, prior_nu=1.0, prior_alpha=1.0):
+    """
+    KL Divergence Regularization.
+
+    KL divergence from prior NIG distribution.
+    Encourages parameters to stay close to uninformative prior.
+
+    Formula: R = KL(NIG(γ,ν,α,β) || NIG_prior) + error × (ν + α)
+
+    Args:
+        gamma, nu, alpha, beta: Evidential parameters
+        y: Ground truth
+        prior_nu: Prior value for ν (default: 1.0)
+        prior_alpha: Prior value for α (default: 1.0)
+
+    Returns:
+        reg: Regularization loss
+    """
+    # KL(NIG || Prior) for Normal-Inverse-Gamma
+    # For ν (precision parameter of gamma): KL ∝ (ν/ν₀ - log(ν/ν₀) - 1)
+    kl_nu = 0.5 * (nu / prior_nu - torch.log(nu / prior_nu + 1e-8) - 1)
+
+    # For α (shape parameter): KL ∝ (α - α₀ - ψ(α) + ψ(α₀))
+    # Approximate with simpler form: (α - α₀)²
+    kl_alpha = (alpha - prior_alpha) ** 2
+
+    kl_total = (kl_nu + kl_alpha).mean()
+
+    # Combine with error-based penalty
+    error = (y - gamma) ** 2
+    error_penalty = (error * (nu + alpha)).mean()
+
+    reg = kl_total + error_penalty
+
+    return reg
+
+
+# ============================================================================
+# GENERAL EVIDENTIAL LOSS (accepts regularization function)
+# ============================================================================
+
+def general_evidential_loss(gamma, nu, alpha, beta, y,
+                           reg_fn=None, reg_weight=0.01, **reg_kwargs):
+    """
+    General evidential loss function that accepts any regularization scheme.
+
+    Args:
+        gamma, nu, alpha, beta: Evidential parameters from model
+        y: Ground truth
+        reg_fn: Regularization function (default: evidential_regularization)
+                Should have signature: reg_fn(gamma, nu, alpha, beta, y, **kwargs)
+        reg_weight: Weight for regularization term (default: 0.01)
+        **reg_kwargs: Additional keyword arguments for regularization function
+
+    Returns:
+        loss: Total loss
+        loss_dict: Dictionary with loss components
+
+    Examples:
+        # Standard DER
+        loss, _ = general_evidential_loss(gamma, nu, alpha, beta, y)
+
+        # Improved DER
+        loss, _ = general_evidential_loss(gamma, nu, alpha, beta, y,
+                                         reg_fn=improved_evidential_regularization)
+
+        # Uncertainty-aware
+        loss, _ = general_evidential_loss(gamma, nu, alpha, beta, y,
+                                         reg_fn=uncertainty_aware_regularization)
+
+        # Annealed
+        loss, _ = general_evidential_loss(gamma, nu, alpha, beta, y,
+                                         reg_fn=annealed_regularization,
+                                         epoch=10, max_epochs=100)
+    """
+    # NIG negative log-likelihood
+    nll = nig_nll(gamma, nu, alpha, beta, y)
+
+    # Apply regularization
+    if reg_fn is None:
+        # Default to standard evidential regularization
+        reg = evidential_regularization(gamma, nu, alpha, beta, y)
+    else:
+        # Use custom regularization function
+        reg = reg_fn(gamma, nu, alpha, beta, y, **reg_kwargs)
+
+    # Total loss
+    total_loss = nll + reg_weight * reg
+
+    loss_dict = {
+        'nll': nll.item(),
+        'reg': reg.item(),
+        'total': total_loss.item()
+    }
+
+    return total_loss, loss_dict
+
+
+# ============================================================================
 # 3. BAYESIAN FNO
 # ============================================================================
 

@@ -43,6 +43,10 @@ from customs import (
     nig_nll, evidential_loss, evidential_uncertainty, evidential_regularization,
     improved_evidential_loss, improved_evidential_regularization,
     natural_nig_loss, prior_network_loss,
+    # Additional Regularization Schemes
+    uncertainty_aware_regularization, annealed_regularization,
+    l2_evidence_regularization, adaptive_regularization,
+    kl_divergence_regularization, general_evidential_loss,
     # Cross-family
     bayesian_elbo_loss,
     # Evaluation
@@ -345,8 +349,34 @@ def train_conformal_method(method_name: str, dataset, config_dict: dict,
     return metrics
 
 
+def get_regularization_function(reg_name: str):
+    """
+    Get regularization function by name.
+
+    Args:
+        reg_name: Name of regularization scheme
+
+    Returns:
+        Regularization function or None
+    """
+    if reg_name is None:
+        return None
+
+    reg_map = {
+        'standard': evidential_regularization,
+        'improved': improved_evidential_regularization,
+        'uncertainty_aware': uncertainty_aware_regularization,
+        'annealed': annealed_regularization,
+        'l2_evidence': l2_evidence_regularization,
+        'adaptive': adaptive_regularization,
+        'kl_divergence': kl_divergence_regularization
+    }
+
+    return reg_map.get(reg_name, None)
+
+
 def train_evidential_method(method_name: str, dataset, config_dict: dict,
-                            output_dir: Path) -> Dict:
+                            output_dir: Path, reg_name: str = None) -> Dict:
     """
     Train and evaluate an Evidential Deep Learning method.
 
@@ -447,6 +477,15 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
         'use_tensorboard': False
     })
 
+    # Get regularization function if specified
+    reg_fn = get_regularization_function(reg_name)
+    if reg_name:
+        print(f"Using regularization: {reg_name}")
+
+    # Add max_epochs to method_config for annealed regularization
+    if reg_name == 'annealed':
+        method_config['max_epochs'] = epochs
+
     # Create trainer with method-specific configuration
     trainer = EvidentialFNOTrainer(
         model=model,
@@ -454,7 +493,8 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
         method_name=method_name,
         optimizer=optimizer,
         scheduler=scheduler,
-        method_config=method_config
+        method_config=method_config,
+        reg_fn=reg_fn
     )
 
     # Train
@@ -1728,14 +1768,18 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     # Score: Total uncertainty (higher for OOD)
     from sklearn.metrics import roc_auc_score, roc_curve
 
+    # Compute mean uncertainty per sample (average over spatial dimensions)
+    id_unc_per_sample = id_uncertainties.reshape(len(id_uncertainties), -1).mean(axis=1)
+    ood_unc_per_sample = ood_uncertainties.reshape(len(ood_uncertainties), -1).mean(axis=1)
+
     y_true = np.concatenate([
-        np.zeros(len(id_uncertainties)),  # ID = 0
-        np.ones(len(ood_uncertainties))   # OOD = 1
+        np.zeros(len(id_unc_per_sample)),  # ID = 0
+        np.ones(len(ood_unc_per_sample))   # OOD = 1
     ])
 
     y_score = np.concatenate([
-        id_uncertainties.flatten(),
-        ood_uncertainties.flatten()
+        id_unc_per_sample,
+        ood_unc_per_sample
     ])
 
     auroc = roc_auc_score(y_true, y_score)
@@ -1958,6 +2002,16 @@ Examples:
     parser.add_argument('--ood_data_path', type=str, default=None,
                         help='Path to OOD test data (for experiment 4)')
 
+    # Regularization scheme selection (for evidential methods)
+    parser.add_argument('--regularization', type=str, default=None,
+                        choices=['standard', 'improved', 'uncertainty_aware', 'annealed',
+                                'l2_evidence', 'adaptive', 'kl_divergence'],
+                        help='Regularization scheme for evidential methods. '
+                             'Options: standard (DER), improved (log barrier), '
+                             'uncertainty_aware (inverse unc), annealed (time-decay), '
+                             'l2_evidence (L2 penalty), adaptive (exp error), '
+                             'kl_divergence (KL prior). Default: depends on method')
+
     # Optional arguments
     parser.add_argument('--nu_values', nargs='+', type=float, default=None,
                         help='Nu values to train on (for 1D PDEs only)')
@@ -2053,10 +2107,11 @@ Examples:
                            "posterior_networks, natural_posterior, dirichlet_evidential")
 
         dataset = load_pde_data(args.data_path, args.pde_type, max_samples=500)
-        output_dir = Path(args.output_dir) / f"evidential_{args.method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        reg_suffix = f"_{args.regularization}" if args.regularization else ""
+        output_dir = Path(args.output_dir) / f"evidential_{args.method}{reg_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        train_evidential_method(args.method, dataset, config_dict, output_dir)
+        train_evidential_method(args.method, dataset, config_dict, output_dir, reg_name=args.regularization)
 
     elif args.mode == 'baseline':
         # Run single baseline method
