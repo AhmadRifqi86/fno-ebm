@@ -1098,6 +1098,465 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     }
 
 
+def experiment_regularization_comparison(data_path: str, pde_type: str,
+                                         config_dict: dict,
+                                         output_dir: str = 'experiments') -> Dict:
+    """
+    Experiment 5: Regularization Comparison.
+
+    Systematically compares all 7 regularization schemes for evidential methods:
+    1. standard - Linear error penalty
+    2. improved - Log barrier (bounded gradients)
+    3. uncertainty_aware - Inverse uncertainty weighting
+    4. annealed - Time-decaying weight
+    5. l2_evidence - L2 penalty on evidence
+    6. adaptive - Exponential error weighting
+    7. kl_divergence - KL divergence from prior
+
+    For each regularization, tracks:
+    - Epistemic/Aleatoric uncertainty across training sizes
+    - Prediction accuracy (MSE, MAE)
+    - Calibration quality (ECE)
+    - Uncertainty-error correlation
+
+    Args:
+        data_path: Path to data file
+        pde_type: PDE type
+        config_dict: Configuration dictionary
+        output_dir: Output directory
+
+    Returns:
+        Dictionary with experimental results
+    """
+    # Setup output directory
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    exp_dir = Path(output_dir) / f"experiment5_reg_comparison_{pde_type}_{timestamp}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT 5: Regularization Comparison")
+    print(f"PDE: {pde_type}")
+    print(f"Output: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    # All regularization schemes to compare
+    regularizations = [
+        'standard',
+        'improved',
+        'uncertainty_aware',
+        'annealed',
+        'l2_evidence',
+        'adaptive',
+        'kl_divergence'
+    ]
+
+    print(f"Regularization schemes to compare: {len(regularizations)}")
+    for i, reg in enumerate(regularizations, 1):
+        print(f"  {i}. {reg}")
+    print()
+
+    # Load full dataset
+    print("Loading dataset...")
+    dataset = load_pde_data(data_path, pde_type, max_samples=5000)
+    print(f"Total dataset size: {len(dataset)}")
+
+    # Create fixed test set
+    config = Config(config_dict)
+    _, _, test_loader = create_dataloaders(
+        dataset,
+        train_ratio=0.8,
+        val_ratio=0.1,
+        batch_size=config.batch_size,
+        seed=config.seed if hasattr(config, 'seed') else 42
+    )
+    print(f"Fixed test set size: {len(test_loader.dataset)}")
+
+    # Training data sizes to test (same as Experiment 3)
+    train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    train_sizes = [n for n in train_sizes if n <= len(dataset)]
+    print(f"\nTraining sizes to test: {train_sizes}")
+
+    # Store all results
+    all_results = []
+
+    # Get method config for evidential training
+    method_configs = get_evidential_methods_configs()
+    method_config = method_configs.get('der_nig')
+
+    # Loop over each regularization scheme
+    for reg_name in regularizations:
+        print(f"\n{'='*70}")
+        print(f"REGULARIZATION: {reg_name}")
+        print(f"{'='*70}")
+
+        # Get regularization function
+        reg_fn = get_regularization_function(reg_name)
+
+        # Loop over training data sizes
+        for n_train in train_sizes:
+            print(f"\n  Training with N={n_train} samples...")
+
+            # Create subset loader
+            train_loader = create_subset_loader(
+                dataset,
+                n_samples=n_train,
+                batch_size=config.batch_size,
+                seed=config.seed if hasattr(config, 'seed') else 42
+            )
+
+            # Create evidential model
+            model = EvidentialFNO2d(
+                modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
+                nu_min=1.0, alpha_min=1.0, beta_min=0.0
+            )
+            model = model.to(config.device)
+
+            # Create optimizer and scheduler
+            optimizer_config = {
+                'type': 'adam',
+                'lr': method_config.get('lr', 1e-4),
+                'weight_decay': 0.0
+            }
+            optimizer = Factory.create_optimizer(optimizer_config, model.parameters())
+
+            scheduler_config = {
+                'type': 'exponential_lr',
+                'gamma': 0.93
+            }
+            scheduler = Factory.create_scheduler(scheduler_config, optimizer)
+
+            # Setup trainer config
+            trainer_config = Config({
+                'device': config.device,
+                'lr': method_config.get('lr', 1e-4),
+                'weight_decay': 0.0,
+                'enable_tracking': False,
+                'log_dir': str(exp_dir / 'logs'),
+                'experiment_name': f'exp5_{reg_name}_n{n_train}',
+                'checkpoint_dir': str(exp_dir / 'checkpoints'),
+                'save_every': 50,
+                'use_tensorboard': False
+            })
+
+            # Add max_epochs for annealed regularization
+            epochs = config_dict.get('epochs', 200)
+            if reg_name == 'annealed':
+                method_config['max_epochs'] = epochs
+
+            # Create trainer with regularization function
+            trainer = EvidentialFNOTrainer(
+                model=model,
+                config=trainer_config,
+                method_name='der_nig',
+                optimizer=optimizer,
+                scheduler=scheduler,
+                method_config=method_config,
+                reg_fn=reg_fn
+            )
+
+            # Train
+            trainer.train(train_loader, test_loader, epochs=epochs)
+
+            # Evaluate on test set
+            print(f"  Evaluating on test set...")
+            model.eval()
+            all_aleatoric = []
+            all_epistemic = []
+            all_mse = []
+            all_mae = []
+            all_predictions = []
+            all_targets = []
+            all_total_unc = []
+
+            with torch.no_grad():
+                for x, y in test_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+
+                    # Get evidential parameters
+                    gamma, nu, alpha, beta = model(x)
+
+                    # Compute uncertainties
+                    uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+
+                    # Compute prediction errors
+                    mse = F.mse_loss(gamma, y, reduction='none').mean(dim=(1, 2, 3))
+                    mae = F.l1_loss(gamma, y, reduction='none').mean(dim=(1, 2, 3))
+
+                    all_aleatoric.append(uq_dict['aleatoric'].cpu().numpy())
+                    all_epistemic.append(uq_dict['epistemic'].cpu().numpy())
+                    all_total_unc.append(uq_dict['total'].cpu().numpy())
+                    all_mse.append(mse.cpu().numpy())
+                    all_mae.append(mae.cpu().numpy())
+                    all_predictions.append(gamma.cpu().numpy())
+                    all_targets.append(y.cpu().numpy())
+
+            # Aggregate results
+            aleatoric = np.concatenate(all_aleatoric).mean()
+            epistemic = np.concatenate(all_epistemic).mean()
+            total_unc = np.concatenate(all_total_unc).mean()
+            mse_val = np.concatenate(all_mse).mean()
+            mae_val = np.concatenate(all_mae).mean()
+
+            # Compute ECE (Expected Calibration Error)
+            all_preds_flat = np.concatenate([p.flatten() for p in all_predictions])
+            all_targets_flat = np.concatenate([t.flatten() for t in all_targets])
+            all_unc_flat = np.concatenate([u.flatten() for u in all_total_unc])
+
+            # Compute calibration error using binned approach
+            n_bins = 10
+            ece = expected_calibration_error(
+                torch.from_numpy(all_preds_flat),
+                torch.from_numpy(all_targets_flat),
+                torch.from_numpy(all_unc_flat),
+                n_bins=n_bins
+            )
+
+            # Compute uncertainty-error correlation
+            errors_flat = np.abs(all_preds_flat - all_targets_flat)
+            corr = np.corrcoef(errors_flat, all_unc_flat)[0, 1]
+
+            print(f"  Results: Ale={aleatoric:.6f}, Epi={epistemic:.6f}, "
+                  f"MSE={mse_val:.6f}, MAE={mae_val:.6f}, ECE={ece:.6f}, Corr={corr:.3f}")
+
+            all_results.append({
+                'regularization': reg_name,
+                'n_train': n_train,
+                'aleatoric': float(aleatoric),
+                'epistemic': float(epistemic),
+                'total_uncertainty': float(total_unc),
+                'mse': float(mse_val),
+                'mae': float(mae_val),
+                'ece': float(ece),
+                'uncertainty_error_corr': float(corr)
+            })
+
+    # Save results to CSV
+    results_df = pd.DataFrame(all_results)
+    results_df.to_csv(exp_dir / 'experiment5_results.csv', index=False)
+    print(f"\n{'='*70}")
+    print(f"Results saved to: {exp_dir / 'experiment5_results.csv'}")
+    print(f"{'='*70}")
+
+    # Generate comparison plots
+    print("\nGenerating comparison plots...")
+
+    try:
+        # Create comprehensive comparison figure
+        fig = plt.figure(figsize=(20, 12))
+        gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
+
+        # Define colors for each regularization
+        colors = plt.cm.tab10(np.linspace(0, 1, len(regularizations)))
+        color_map = {reg: colors[i] for i, reg in enumerate(regularizations)}
+
+        # Plot 1: Epistemic Uncertainty vs Training Size
+        ax1 = fig.add_subplot(gs[0, 0])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax1.plot(reg_data['n_train'], reg_data['epistemic'], 'o-',
+                    label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        ax1.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax1.set_ylabel('Epistemic Uncertainty', fontsize=11)
+        ax1.set_title('Epistemic vs N (should ∝ 1/N)', fontsize=12, fontweight='bold')
+        ax1.legend(fontsize=8, ncol=2)
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xscale('log')
+
+        # Plot 2: Aleatoric Uncertainty vs Training Size
+        ax2 = fig.add_subplot(gs[0, 1])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax2.plot(reg_data['n_train'], reg_data['aleatoric'], 's-',
+                    label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        ax2.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax2.set_ylabel('Aleatoric Uncertainty', fontsize=11)
+        ax2.set_title('Aleatoric vs N (should be constant)', fontsize=12, fontweight='bold')
+        ax2.legend(fontsize=8, ncol=2)
+        ax2.grid(True, alpha=0.3)
+        ax2.set_xscale('log')
+
+        # Plot 3: Log-log Epistemic (validate 1/N slope)
+        ax3 = fig.add_subplot(gs[0, 2])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax3.loglog(reg_data['n_train'], reg_data['epistemic'], 'o-',
+                      label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        # Add reference 1/N line
+        n_vals = np.array(train_sizes)
+        ref_epi = results_df.groupby('regularization')['epistemic'].first().mean()
+        reference = ref_epi * (train_sizes[0] / n_vals)
+        ax3.plot(n_vals, reference, '--', color='black', alpha=0.5, linewidth=2, label='1/N reference')
+        ax3.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax3.set_ylabel('Epistemic (log scale)', fontsize=11)
+        ax3.set_title('Log-Log: Epistemic ∝ 1/N Validation', fontsize=12, fontweight='bold')
+        ax3.legend(fontsize=8, ncol=2)
+        ax3.grid(True, alpha=0.3)
+
+        # Plot 4: MSE vs Training Size
+        ax4 = fig.add_subplot(gs[1, 0])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax4.plot(reg_data['n_train'], reg_data['mse'], 'o-',
+                    label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        ax4.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax4.set_ylabel('Mean Squared Error', fontsize=11)
+        ax4.set_title('Prediction Accuracy (MSE)', fontsize=12, fontweight='bold')
+        ax4.legend(fontsize=8, ncol=2)
+        ax4.grid(True, alpha=0.3)
+        ax4.set_xscale('log')
+        ax4.set_yscale('log')
+
+        # Plot 5: MAE vs Training Size
+        ax5 = fig.add_subplot(gs[1, 1])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax5.plot(reg_data['n_train'], reg_data['mae'], 's-',
+                    label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        ax5.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax5.set_ylabel('Mean Absolute Error', fontsize=11)
+        ax5.set_title('Prediction Accuracy (MAE)', fontsize=12, fontweight='bold')
+        ax5.legend(fontsize=8, ncol=2)
+        ax5.grid(True, alpha=0.3)
+        ax5.set_xscale('log')
+        ax5.set_yscale('log')
+
+        # Plot 6: ECE (Calibration Error) vs Training Size
+        ax6 = fig.add_subplot(gs[1, 2])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax6.plot(reg_data['n_train'], reg_data['ece'], 'o-',
+                    label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        ax6.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax6.set_ylabel('Expected Calibration Error', fontsize=11)
+        ax6.set_title('Calibration Quality (lower is better)', fontsize=12, fontweight='bold')
+        ax6.legend(fontsize=8, ncol=2)
+        ax6.grid(True, alpha=0.3)
+        ax6.set_xscale('log')
+
+        # Plot 7: Uncertainty-Error Correlation vs Training Size
+        ax7 = fig.add_subplot(gs[2, 0])
+        for reg_name in regularizations:
+            reg_data = results_df[results_df['regularization'] == reg_name]
+            ax7.plot(reg_data['n_train'], reg_data['uncertainty_error_corr'], 'o-',
+                    label=reg_name, color=color_map[reg_name], linewidth=2, markersize=6)
+        ax7.set_xlabel('Training Data Size (N)', fontsize=11)
+        ax7.set_ylabel('Uncertainty-Error Correlation', fontsize=11)
+        ax7.set_title('Uncertainty Quality (higher is better)', fontsize=12, fontweight='bold')
+        ax7.legend(fontsize=8, ncol=2)
+        ax7.grid(True, alpha=0.3)
+        ax7.set_xscale('log')
+        ax7.axhline(0, color='black', linestyle='--', alpha=0.3)
+
+        # Plot 8: Final Performance Comparison (N=max)
+        ax8 = fig.add_subplot(gs[2, 1])
+        max_n_data = results_df[results_df['n_train'] == max(train_sizes)]
+        x_pos = np.arange(len(regularizations))
+        mse_vals = [max_n_data[max_n_data['regularization'] == reg]['mse'].values[0]
+                   for reg in regularizations]
+        bars = ax8.bar(x_pos, mse_vals, color=[color_map[reg] for reg in regularizations])
+        ax8.set_xticks(x_pos)
+        ax8.set_xticklabels(regularizations, rotation=45, ha='right', fontsize=9)
+        ax8.set_ylabel('MSE', fontsize=11)
+        ax8.set_title(f'Final MSE Comparison (N={max(train_sizes)})', fontsize=12, fontweight='bold')
+        ax8.grid(True, alpha=0.3, axis='y')
+
+        # Plot 9: Final ECE Comparison (N=max)
+        ax9 = fig.add_subplot(gs[2, 2])
+        ece_vals = [max_n_data[max_n_data['regularization'] == reg]['ece'].values[0]
+                   for reg in regularizations]
+        bars = ax9.bar(x_pos, ece_vals, color=[color_map[reg] for reg in regularizations])
+        ax9.set_xticks(x_pos)
+        ax9.set_xticklabels(regularizations, rotation=45, ha='right', fontsize=9)
+        ax9.set_ylabel('ECE', fontsize=11)
+        ax9.set_title(f'Final ECE Comparison (N={max(train_sizes)})', fontsize=12, fontweight='bold')
+        ax9.grid(True, alpha=0.3, axis='y')
+
+        plt.suptitle('Experiment 5: Comprehensive Regularization Comparison',
+                    fontsize=16, fontweight='bold', y=0.995)
+        plt.savefig(exp_dir / 'experiment5_comparison.png', dpi=150, bbox_inches='tight')
+        print(f"Comparison plot saved to: {exp_dir / 'experiment5_comparison.png'}")
+        plt.close()
+
+    except Exception as e:
+        print(f"Warning: Could not generate comparison plot: {e}")
+
+    # Generate summary statistics
+    print("\n" + "="*70)
+    print("SUMMARY STATISTICS")
+    print("="*70)
+
+    summary = []
+    for reg_name in regularizations:
+        reg_data = results_df[results_df['regularization'] == reg_name]
+
+        # Check epistemic decrease
+        epi_start = reg_data['epistemic'].iloc[0]
+        epi_end = reg_data['epistemic'].iloc[-1]
+        epi_decrease_pct = (epi_start - epi_end) / epi_start * 100
+
+        # Check aleatoric variation
+        ale_std = reg_data['aleatoric'].std()
+        ale_mean = reg_data['aleatoric'].mean()
+        ale_variation_pct = (ale_std / ale_mean) * 100
+
+        # Get final performance
+        final_mse = reg_data['mse'].iloc[-1]
+        final_ece = reg_data['ece'].iloc[-1]
+        final_corr = reg_data['uncertainty_error_corr'].iloc[-1]
+
+        summary.append({
+            'regularization': reg_name,
+            'epistemic_decrease_pct': float(epi_decrease_pct),
+            'aleatoric_variation_pct': float(ale_variation_pct),
+            'final_mse': float(final_mse),
+            'final_ece': float(final_ece),
+            'final_unc_error_corr': float(final_corr),
+            'validation_passed': bool(epi_decrease_pct > 20 and ale_variation_pct < 15)
+        })
+
+        print(f"\n{reg_name}:")
+        print(f"  Epistemic decrease: {epi_decrease_pct:.1f}%")
+        print(f"  Aleatoric variation: {ale_variation_pct:.1f}%")
+        print(f"  Final MSE: {final_mse:.6f}")
+        print(f"  Final ECE: {final_ece:.6f}")
+        print(f"  Final Corr: {final_corr:.3f}")
+        print(f"  Validation: {'PASSED' if summary[-1]['validation_passed'] else 'FAILED'}")
+
+    # Save summary
+    summary_df = pd.DataFrame(summary)
+    summary_df.to_csv(exp_dir / 'experiment5_summary.csv', index=False)
+    print(f"\nSummary saved to: {exp_dir / 'experiment5_summary.csv'}")
+
+    # Find best regularization
+    print("\n" + "="*70)
+    print("BEST REGULARIZATION SCHEMES")
+    print("="*70)
+
+    best_mse = summary_df.loc[summary_df['final_mse'].idxmin()]
+    best_ece = summary_df.loc[summary_df['final_ece'].idxmin()]
+    best_corr = summary_df.loc[summary_df['final_unc_error_corr'].idxmax()]
+
+    print(f"\nBest MSE: {best_mse['regularization']} ({best_mse['final_mse']:.6f})")
+    print(f"Best ECE: {best_ece['regularization']} ({best_ece['final_ece']:.6f})")
+    print(f"Best Uncertainty-Error Correlation: {best_corr['regularization']} ({best_corr['final_unc_error_corr']:.3f})")
+
+    print(f"\n{'='*80}")
+    print("EXPERIMENT 5 COMPLETE!")
+    print(f"Results saved to: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    return {
+        'results': all_results,
+        'summary': summary,
+        'output_dir': str(exp_dir),
+        'best_schemes': {
+            'mse': best_mse['regularization'],
+            'ece': best_ece['regularization'],
+            'correlation': best_corr['regularization']
+        }
+    }
+
+
 def experiment_ablation(data_path: str, pde_type: str,
                         config_dict: dict,
                         output_dir: str = 'experiments') -> Dict:
@@ -1998,7 +2457,9 @@ Examples:
 
     # Experiment-specific arguments
     parser.add_argument('--exp_id', type=int, default=None,
-                        help='Experiment ID (for experiment mode): 3=Epistemic vs Aleatoric, 4=OOD Detection, 8=Ablation Studies')
+                        help='Experiment ID (for experiment mode): '
+                             '3=Epistemic vs Aleatoric, 4=OOD Detection, '
+                             '5=Regularization Comparison, 8=Ablation Studies')
     parser.add_argument('--ood_data_path', type=str, default=None,
                         help='Path to OOD test data (for experiment 4)')
 
@@ -2131,6 +2592,7 @@ Examples:
             raise ValueError("--exp_id required for experiment mode. "
                            "Options: 3 (Epistemic vs Aleatoric Decomposition), "
                            "4 (OOD Detection), "
+                           "5 (Regularization Comparison), "
                            "8 (Ablation Studies)")
 
         if args.exp_id == 3:
@@ -2151,6 +2613,14 @@ Examples:
                 config_dict=config_dict,
                 output_dir=args.output_dir
             )
+        elif args.exp_id == 5:
+            # Regularization Comparison experiment
+            experiment_regularization_comparison(
+                data_path=args.data_path,
+                pde_type=args.pde_type,
+                config_dict=config_dict,
+                output_dir=args.output_dir
+            )
         elif args.exp_id == 8:
             experiment_ablation(
                 data_path=args.data_path,
@@ -2159,7 +2629,7 @@ Examples:
                 output_dir=args.output_dir
             )
         else:
-            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 4, 8")
+            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 4, 5, 8")
 
 
 if __name__ == '__main__':
