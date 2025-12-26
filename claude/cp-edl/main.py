@@ -366,7 +366,7 @@ def get_regularization_function(reg_name: str):
         'standard': evidential_regularization,
         'improved': improved_evidential_regularization,
         'uncertainty_aware': uncertainty_aware_regularization,
-        'annealed': annealed_regularization,
+        #'annealed': annealed_regularization,
         'l2_evidence': l2_evidence_regularization,
         'adaptive': adaptive_regularization,
         'kl_divergence': kl_divergence_regularization
@@ -1144,7 +1144,7 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
         'standard',
         'improved',
         'uncertainty_aware',
-        'annealed',
+        #'annealed',
         'l2_evidence',
         'adaptive',
         'kl_divergence'
@@ -1302,17 +1302,18 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
             all_targets_flat = np.concatenate([t.flatten() for t in all_targets])
             all_unc_flat = np.concatenate([u.flatten() for u in all_total_unc])
 
-            # Compute calibration error using binned approach
-            n_bins = 10
+            # Compute actual errors
+            errors_flat = np.abs(all_preds_flat - all_targets_flat)
+
+            # Compute calibration error
+            # predicted_std = uncertainty, actual_error = absolute error
             ece = expected_calibration_error(
-                torch.from_numpy(all_preds_flat),
-                torch.from_numpy(all_targets_flat),
-                torch.from_numpy(all_unc_flat),
-                n_bins=n_bins
+                predicted_std=torch.from_numpy(all_unc_flat),
+                actual_error=torch.from_numpy(errors_flat),
+                n_bins=10
             )
 
             # Compute uncertainty-error correlation
-            errors_flat = np.abs(all_preds_flat - all_targets_flat)
             corr = np.corrcoef(errors_flat, all_unc_flat)[0, 1]
 
             print(f"  Results: Ale={aleatoric:.6f}, Epi={epistemic:.6f}, "
