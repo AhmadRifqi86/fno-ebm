@@ -896,7 +896,8 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     print(f"Fixed test set size: {len(test_loader.dataset)}")
 
     # Training data sizes to test
-    train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    #train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    train_sizes = [8000]
     # Filter out sizes larger than dataset
     train_sizes = [n for n in train_sizes if n <= len(dataset)]
 
