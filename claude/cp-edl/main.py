@@ -1173,7 +1173,8 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
     print(f"Fixed test set size: {len(test_loader.dataset)}")
 
     # Training data sizes to test (same as Experiment 3)
-    train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    #train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    train_sizes = [8000]
     train_sizes = [n for n in train_sizes if n <= len(dataset)]
     print(f"\nTraining sizes to test: {train_sizes}")
 
@@ -1208,7 +1209,8 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
             # Create evidential model
             model = EvidentialFNO2d(
                 modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
-                nu_min=1.0, alpha_min=1.0, beta_min=0.0
+                #nu_min=1.0, alpha_min=1.0, beta_min=0.0
+                nu_min=0.01, alpha_min=1.01, beta_min=0.01
             )
             model = model.to(config.device)
 
