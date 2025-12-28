@@ -884,16 +884,15 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     dataset = load_pde_data(data_path, pde_type, max_samples=5000)
     print(f"Total dataset size: {len(dataset)}")
 
-    # Create fixed validation and test sets
+    # Create fixed test set
     config = Config(config_dict)
-    _, val_loader, test_loader = create_dataloaders(
+    _, _, test_loader = create_dataloaders(
         dataset,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
-    print(f"Fixed validation set size: {len(val_loader.dataset)}")
     print(f"Fixed test set size: {len(test_loader.dataset)}")
 
     # Training data sizes to test
@@ -920,12 +919,10 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
             seed=config.seed if hasattr(config, 'seed') else 42
         )
 
-        # Create evidential model with correct initialization bounds
+        # Create evidential model
         model = EvidentialFNO2d(
             modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
-            nu_min=0.01,    # Correct: allows low evidence when uncertain
-            alpha_min=1.01, # Correct: minimum shape parameter > 1
-            beta_min=0.01   # Correct: minimum scale parameter
+            nu_min=1.0, alpha_min=1.0, beta_min=0.0
         )
         model = model.to(config.device)
 
@@ -970,10 +967,10 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
             method_config=method_config
         )
 
-        # Train with validation set (NOT test set - prevents data leakage)
+        # Train
         epochs = config_dict.get('epochs', 200)
         print(f"Training for {epochs} epochs...")
-        trainer.train(train_loader, val_loader, epochs=epochs)
+        trainer.train(train_loader, test_loader, epochs=epochs)
 
         # Evaluate uncertainty on test set
         print("\nEvaluating uncertainties on test set...")
@@ -1163,22 +1160,19 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
     dataset = load_pde_data(data_path, pde_type, max_samples=5000)
     print(f"Total dataset size: {len(dataset)}")
 
-    # Create fixed validation and test sets
+    # Create fixed test set
     config = Config(config_dict)
-    _, val_loader, test_loader = create_dataloaders(
+    _, _, test_loader = create_dataloaders(
         dataset,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
-    print(f"Fixed validation set size: {len(val_loader.dataset)}")
     print(f"Fixed test set size: {len(test_loader.dataset)}")
 
     # Training data sizes to test (same as Experiment 3)
-    #train_sizes = [100, 200, 500, 1000, 2000, 5000]
-    #train_sizes = [3000,7000]
-    train_sizes = [8000]
+    train_sizes = [100, 200, 500, 1000, 2000, 5000]
     train_sizes = [n for n in train_sizes if n <= len(dataset)]
     print(f"\nTraining sizes to test: {train_sizes}")
 
@@ -1210,13 +1204,10 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
                 seed=config.seed if hasattr(config, 'seed') else 42
             )
 
-            # Create evidential model with correct initialization bounds
-            # Using standard evidential parameter bounds for fair comparison
+            # Create evidential model
             model = EvidentialFNO2d(
                 modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
-                nu_min=0.01,    # Correct: allows low evidence when uncertain
-                alpha_min=1.01, # Correct: minimum shape parameter > 1
-                beta_min=0.01   # Correct: minimum scale parameter
+                nu_min=1.0, alpha_min=1.0, beta_min=0.0
             )
             model = model.to(config.device)
 
@@ -1263,8 +1254,8 @@ def experiment_regularization_comparison(data_path: str, pde_type: str,
                 reg_fn=reg_fn
             )
 
-            # Train with validation set (NOT test set - prevents data leakage)
-            trainer.train(train_loader, val_loader, epochs=epochs)
+            # Train
+            trainer.train(train_loader, test_loader, epochs=epochs)
 
             # Evaluate on test set
             print(f"  Evaluating on test set...")
@@ -1715,16 +1706,16 @@ def experiment_ablation(data_path: str, pde_type: str,
         print(f"Description: {ablation_cfg['description']}")
         print(f"{'='*80}\n")
 
-        # Create model with ablation configuration and correct initialization bounds
+        # Create model with ablation configuration
         model = AblationEvidentialFNO2d(
             modes1=12,
             modes2=12,
             width=32,
             n_layers=4,
             in_channels=3,
-            nu_min=0.01,    # Correct: allows low evidence when uncertain
-            alpha_min=1.01, # Correct: minimum shape parameter > 1
-            beta_min=0.01,  # Correct: minimum scale parameter
+            nu_min=1.0,
+            alpha_min=1.0,
+            beta_min=0.0,
             use_skip_connections=ablation_cfg['use_skip_connections'],
             use_activations=ablation_cfg['use_activations'],
             head_depth=ablation_cfg['head_depth'],
@@ -2099,7 +2090,7 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     print(f"\nTrain: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}")
     print(f"ID Test: {len(id_test_loader.dataset)}, OOD Test: {len(ood_test_loader.dataset)}")
 
-    # Create evidential model with correct initialization bounds
+    # Create evidential model
     print("\nInitializing evidential model...")
     model = EvidentialFNO2d(
         modes1=12,
@@ -2107,9 +2098,9 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
         width=32,
         n_layers=4,
         in_channels=3,
-        nu_min=0.01,    # Correct: allows low evidence when uncertain
-        alpha_min=1.01, # Correct: minimum shape parameter > 1
-        beta_min=0.01   # Correct: minimum scale parameter
+        nu_min=1.0,
+        alpha_min=1.0,
+        beta_min=0.0
     )
     model = model.to(config.device)
 
