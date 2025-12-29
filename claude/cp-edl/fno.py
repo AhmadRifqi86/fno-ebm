@@ -2428,30 +2428,30 @@ class EvidentialFNOTrainer:
                 self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
                     gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
                 )
-        elif self.method_name == 'improved_der':
-            if self.reg_fn is not None:
-                # Use general_evidential_loss with custom regularization
-                if self.reg_fn.__name__ == 'annealed_regularization':
-                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
-                        gamma, nu, alpha, beta, y,
-                        reg_fn=self.reg_fn,
-                        reg_weight=self.reg_weight,
-                        epoch=self.current_epoch,
-                        max_epochs=self.max_epochs
-                    )
-                else:
-                    self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
-                        gamma, nu, alpha, beta, y,
-                        reg_fn=self.reg_fn,
-                        reg_weight=self.reg_weight
-                    )
-            else:
-                # Default improved evidential loss (uses improved_evidential_regularization)
-                self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
-                    gamma, nu, alpha, beta, y,
-                    reg_fn=improved_evidential_regularization,
-                    reg_weight=self.reg_weight
-                )
+        # elif self.method_name == 'improved_der':
+        #     if self.reg_fn is not None:
+        #         # Use general_evidential_loss with custom regularization
+        #         if self.reg_fn.__name__ == 'annealed_regularization':
+        #             self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+        #                 gamma, nu, alpha, beta, y,
+        #                 reg_fn=self.reg_fn,
+        #                 reg_weight=self.reg_weight,
+        #                 epoch=self.current_epoch,
+        #                 max_epochs=self.max_epochs
+        #             )
+        #         else:
+        #             self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+        #                 gamma, nu, alpha, beta, y,
+        #                 reg_fn=self.reg_fn,
+        #                 reg_weight=self.reg_weight
+        #             )
+        #     else:
+        #         # Default improved evidential loss (uses improved_evidential_regularization)
+        #         self.loss_fn = lambda gamma, nu, alpha, beta, y: general_evidential_loss(
+        #             gamma, nu, alpha, beta, y,
+        #             reg_fn=improved_evidential_regularization,
+        #             reg_weight=self.reg_weight
+        #         )
         elif self.method_name == 'natural_posterior':
             self.loss_fn = lambda gamma, nu, alpha, beta, y: (
                 natural_nig_loss(gamma, nu, alpha, beta, y),

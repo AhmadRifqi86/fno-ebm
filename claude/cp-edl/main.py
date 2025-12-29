@@ -409,7 +409,7 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
 
     # Create model
     print("\nInitializing evidential model...")
-    if method_name in ['der_nig', 'improved_der', 'natural_posterior']:
+    if method_name in ['der_nig', 'natural_posterior']:
         model = EvidentialFNO2d(
             modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
             nu_min=method_config['nu_min'],
@@ -478,6 +478,9 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
     })
 
     # Get regularization function if specified
+    if reg_name is None:
+        reg_name = method_name
+        
     reg_fn = get_regularization_function(reg_name)
     if reg_name:
         print(f"Using regularization: {reg_name}")
