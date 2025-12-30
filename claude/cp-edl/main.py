@@ -375,17 +375,21 @@ def get_regularization_function(reg_name: str):
     return reg_map.get(reg_name, None)
 
 
-def train_evidential_method(method_name: str, dataset, config_dict: dict,
-                            output_dir: Path, reg_name: str = None) -> Dict:
+def train_evidential_method(method_name: str, data_path: str, pde_type: str,
+                            config_dict: dict, output_dir: Path,
+                            reg_name: str = None, max_samples: int = 500) -> Dict:
     """
     Train and evaluate an Evidential Deep Learning method.
 
     Args:
         method_name: 'der_nig', 'improved_der', 'prior_networks', 'posterior_networks',
                     'natural_posterior', 'dirichlet_evidential'
-        dataset: PDEDataset
+        data_path: Path to data file
+        pde_type: PDE type ('burgers', 'advection', etc.)
         config_dict: Configuration dictionary
         output_dir: Output directory
+        reg_name: Regularization scheme name
+        max_samples: Maximum samples to load
 
     Returns:
         Dictionary with metrics (ECE, correlation, epistemic/aleatoric split, etc.)
@@ -398,14 +402,22 @@ def train_evidential_method(method_name: str, dataset, config_dict: dict,
     print(f"EVIDENTIAL METHOD: {method_name.upper()}")
     print(f"{'='*70}")
 
-    # Standard 2-way split for EDL
-    train_loader, val_loader, test_loader = create_dataloaders(
-        dataset,
+    # Load RAW dataset (NO LEAKAGE MODE)
+    print("\nLoading RAW dataset...")
+    X_raw, U_raw = load_pde_data(data_path, pde_type, max_samples=max_samples, return_raw=True)
+    print(f"Total dataset size: {len(X_raw)}")
+
+    # Create train/val/test splits with NO LEAKAGE
+    # This splits FIRST, then normalizes with TRAIN stats only
+    from datautils import create_dataloaders_no_leakage
+    train_loader, val_loader, test_loader = create_dataloaders_no_leakage(
+        X_raw, U_raw,
         train_ratio=0.85,
         val_ratio=0.05,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
+    print(f"Train: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}, Test: {len(test_loader.dataset)}")
 
     # Create model
     print("\nInitializing evidential model...")
@@ -819,7 +831,14 @@ def run_comprehensive_comparison(data_path: str, pde_type: str,
     print(f"{'#'*80}")
     for method in all_methods['edl']:
         try:
-            metrics = train_evidential_method(method, dataset, config_dict, exp_dir)
+            metrics = train_evidential_method(
+                method_name=method,
+                data_path=data_path,
+                pde_type=pde_type,
+                config_dict=config_dict,
+                output_dir=exp_dir,
+                max_samples=500
+            )
             results[f'EDL_{method}'] = metrics
         except Exception as e:
             print(f"Error running {method}: {e}")
@@ -2633,12 +2652,19 @@ Examples:
                            "Options: der_nig, improved_der, prior_networks, "
                            "posterior_networks, natural_posterior, dirichlet_evidential")
 
-        dataset = load_pde_data(args.data_path, args.pde_type, max_samples=500)
         reg_suffix = f"_{args.regularization}" if args.regularization else ""
         output_dir = Path(args.output_dir) / f"evidential_{args.method}{reg_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        train_evidential_method(args.method, dataset, config_dict, output_dir, reg_name=args.regularization)
+        train_evidential_method(
+            method_name=args.method,
+            data_path=args.data_path,
+            pde_type=args.pde_type,
+            config_dict=config_dict,
+            output_dir=output_dir,
+            reg_name=args.regularization,
+            max_samples=500
+        )
 
     elif args.mode == 'baseline':
         # Run single baseline method
