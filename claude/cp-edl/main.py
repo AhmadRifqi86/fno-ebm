@@ -889,23 +889,29 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     dataset = load_pde_data(data_path, pde_type, max_samples=5000)
     print(f"Total dataset size: {len(dataset)}")
 
-    # Create fixed val and test sets - use all three loaders from create_dataloaders
+    # Create fixed train/val/test sets - get all three loaders from create_dataloaders
     config = Config(config_dict)
-    _, val_loader, test_loader = create_dataloaders(
+    full_train_loader, val_loader, test_loader = create_dataloaders(
         dataset,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
+    print(f"Full training set size: {len(full_train_loader.dataset)}")
     print(f"Fixed validation set size: {len(val_loader.dataset)}")
     print(f"Fixed test set size: {len(test_loader.dataset)}")
+
+    # Get the training indices from the full_train_loader
+    # The dataset from create_dataloaders is a Subset, so we need to get its indices
+    train_indices = full_train_loader.dataset.indices
+    print(f"Training indices range: {min(train_indices)} to {max(train_indices)}")
 
     # Training data sizes to test
     train_sizes = [100, 200, 500, 1000, 2000, 5000]
     #train_sizes = [8000]
-    # Filter out sizes larger than dataset
-    train_sizes = [n for n in train_sizes if n <= len(dataset)]
+    # Filter out sizes larger than available training data
+    train_sizes = [n for n in train_sizes if n <= len(train_indices)]
 
     print(f"\nTraining sizes to test: {train_sizes}")
 
@@ -918,13 +924,15 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         print(f"Training with N={n_train} samples")
         print(f"{'='*70}")
 
-        # Create subset loader
-        train_loader = create_subset_loader(
-            dataset,
-            n_samples=n_train,
-            batch_size=config.batch_size,
-            seed=config.seed if hasattr(config, 'seed') else 42
-        )
+        # Create subset loader by sampling ONLY from training indices
+        # This prevents data leakage into val/test sets
+        rng = np.random.RandomState(seed=config.seed if hasattr(config, 'seed') else 42)
+        sampled_train_indices = rng.choice(train_indices, size=n_train, replace=False)
+
+        # Create subset and loader
+        train_subset = Subset(dataset, sampled_train_indices.tolist())
+        train_loader = DataLoader(train_subset, batch_size=config.batch_size, shuffle=True)
+        print(f"Created training subset: {n_train} samples from training set only")
 
         # Create evidential model
         model = EvidentialFNO2d(
