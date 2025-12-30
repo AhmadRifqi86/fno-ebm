@@ -855,7 +855,8 @@ def run_comprehensive_comparison(data_path: str, pde_type: str,
 
 def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
                                    config_dict: dict,
-                                   output_dir: str = 'experiments') -> Dict:
+                                   output_dir: str = 'experiments',
+                                   reg_name: str = None) -> Dict:
     """
     Experiment 3: Epistemic vs Aleatoric Decomposition.
 
@@ -867,6 +868,7 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         pde_type: PDE type
         config_dict: Configuration dictionary
         output_dir: Output directory
+        reg_name: Regularization scheme name (e.g., 'standard', 'improved', etc.)
 
     Returns:
         Dictionary with experimental results
@@ -887,20 +889,21 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     dataset = load_pde_data(data_path, pde_type, max_samples=5000)
     print(f"Total dataset size: {len(dataset)}")
 
-    # Create fixed test set
+    # Create fixed val and test sets - use all three loaders from create_dataloaders
     config = Config(config_dict)
-    _, _, test_loader = create_dataloaders(
+    _, val_loader, test_loader = create_dataloaders(
         dataset,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
+    print(f"Fixed validation set size: {len(val_loader.dataset)}")
     print(f"Fixed test set size: {len(test_loader.dataset)}")
 
     # Training data sizes to test
-    #train_sizes = [100, 200, 500, 1000, 2000, 5000]
-    train_sizes = [8000]
+    train_sizes = [100, 200, 500, 1000, 2000, 5000]
+    #train_sizes = [8000]
     # Filter out sizes larger than dataset
     train_sizes = [n for n in train_sizes if n <= len(dataset)]
 
@@ -961,6 +964,16 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
             'use_tensorboard': False
         })
 
+        # Get regularization function if specified
+        reg_fn = get_regularization_function(reg_name)
+        if reg_name:
+            print(f"Using regularization: {reg_name}")
+
+        # Add max_epochs for annealed regularization
+        epochs = config_dict.get('epochs', 200)
+        if reg_name == 'annealed':
+            method_config['max_epochs'] = epochs
+
         # Create trainer
         trainer = EvidentialFNOTrainer(
             model=model,
@@ -968,13 +981,13 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
             method_name='der_nig',
             optimizer=optimizer,
             scheduler=scheduler,
-            method_config=method_config
+            method_config=method_config,
+            reg_fn=reg_fn
         )
 
-        # Train
-        epochs = config_dict.get('epochs', 200)
+        # Train - use val_loader for validation, not test_loader
         print(f"Training for {epochs} epochs...")
-        trainer.train(train_loader, test_loader, epochs=epochs)
+        trainer.train(train_loader, val_loader, epochs=epochs)
 
         # Evaluate uncertainty on test set
         print("\nEvaluating uncertainties on test set...")
@@ -2022,7 +2035,8 @@ def experiment_ablation(data_path: str, pde_type: str,
 
 def experiment_ood_detection(id_data_path: str, ood_data_path: str,
                              config_dict: dict,
-                             output_dir: str = 'experiments') -> Dict:
+                             output_dir: str = 'experiments',
+                             reg_name: str = None) -> Dict:
     """
     Experiment 4: OOD Detection using Reynolds Number.
 
@@ -2035,6 +2049,7 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
         ood_data_path: Path to out-of-distribution test data
         config_dict: Configuration dictionary
         output_dir: Output directory
+        reg_name: Regularization scheme name (e.g., 'standard', 'improved', etc.)
 
     Returns:
         Dictionary with experimental results including AUROC
@@ -2069,21 +2084,14 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     print(f"OOD dataset size: {len(ood_dataset)}")
     print(f"Reynolds distribution: {np.unique(ood_reynolds, return_counts=True)}")
 
-    # Create dataloaders
+    # Create dataloaders - use all three loaders from create_dataloaders
     config = Config(config_dict)
-    train_loader, val_loader, _ = create_dataloaders(
+    train_loader, val_loader, id_test_loader = create_dataloaders(
         id_dataset,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=42
-    )
-
-    # Create ID test loader (from same distribution as training)
-    id_test_loader = DataLoader(
-        Subset(id_dataset, list(range(int(0.9 * len(id_dataset)), len(id_dataset)))),
-        batch_size=config.batch_size,
-        shuffle=False
     )
 
     # Create OOD test loader
@@ -2101,7 +2109,7 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     model = EvidentialFNO2d(
         modes1=12,
         modes2=12,
-        width=32,
+        width=64,  # Increased from 32 to 64 for better capacity
         n_layers=4,
         in_channels=3,
         nu_min=1.0,
@@ -2113,6 +2121,16 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     # Get method config
     method_configs = get_evidential_methods_configs()
     method_config = method_configs.get('der_nig')
+
+    # Get regularization function if specified
+    reg_fn = get_regularization_function(reg_name)
+    if reg_name:
+        print(f"Using regularization: {reg_name}")
+
+    # Add max_epochs for annealed regularization
+    epochs = config_dict.get('epochs', 200)  # Increased from 100 to 200 for better uncertainty learning
+    if reg_name == 'annealed':
+        method_config['max_epochs'] = epochs
 
     # Setup optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
@@ -2141,11 +2159,12 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
         optimizer=optimizer,
         scheduler=scheduler,
         method_config=method_config,
+        reg_fn=reg_fn,
         save_flag=False
     )
 
     # Train
-    epochs = config_dict.get('epochs', 100)
+    epochs = config_dict.get('epochs', 200)  # Increased from 100 to 200 for better uncertainty learning
     print(f"\nTraining evidential model for {epochs} epochs...")
     trainer.train(train_loader, val_loader, epochs=epochs)
 
