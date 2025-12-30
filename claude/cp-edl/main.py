@@ -26,7 +26,7 @@ from datautils import (
     load_pde_data, create_dataloaders, create_dataloaders_with_calibration,
     create_kfold_splits, create_stratified_splits, create_ensemble_splits,
     create_ood_test_data, get_calibration_dataset, create_subset_loader,
-    load_ns_exp4
+    load_ns_exp4, PDEDataset
 )
 from fno import (
     FNO2d, FNOTrainer, EvidentialFNO2d, AblationEvidentialFNO2d, EvidentialFNOTrainer,
@@ -884,15 +884,17 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     print(f"Output: {exp_dir}")
     print(f"{'='*80}\n")
 
-    # Load full dataset
-    print("Loading dataset...")
-    dataset = load_pde_data(data_path, pde_type, max_samples=5000)
-    print(f"Total dataset size: {len(dataset)}")
+    # Load RAW dataset (NO LEAKAGE MODE)
+    print("Loading RAW dataset...")
+    X_raw, U_raw = load_pde_data(data_path, pde_type, max_samples=5000, return_raw=True)
+    print(f"Total dataset size: {len(X_raw)}")
 
-    # Create fixed train/val/test sets - get all three loaders from create_dataloaders
+    # Create fixed train/val/test sets using NO LEAKAGE approach
+    # This splits FIRST, then normalizes with TRAIN stats only
     config = Config(config_dict)
-    full_train_loader, val_loader, test_loader = create_dataloaders(
-        dataset,
+    from datautils import create_dataloaders_no_leakage
+    full_train_loader, val_loader, test_loader = create_dataloaders_no_leakage(
+        X_raw, U_raw,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
@@ -902,16 +904,16 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
     print(f"Fixed validation set size: {len(val_loader.dataset)}")
     print(f"Fixed test set size: {len(test_loader.dataset)}")
 
-    # Get the training indices from the full_train_loader
-    # The dataset from create_dataloaders is a Subset, so we need to get its indices
-    train_indices = full_train_loader.dataset.indices
-    print(f"Training indices range: {min(train_indices)} to {max(train_indices)}")
+    # Get the full training dataset for creating subsets
+    # We'll use this to create smaller training sets while keeping val/test fixed
+    full_train_dataset = full_train_loader.dataset
+    n_train_total = len(full_train_dataset)
 
     # Training data sizes to test
     train_sizes = [100, 200, 500, 1000, 2000, 5000]
     #train_sizes = [8000]
     # Filter out sizes larger than available training data
-    train_sizes = [n for n in train_sizes if n <= len(train_indices)]
+    train_sizes = [n for n in train_sizes if n <= n_train_total]
 
     print(f"\nTraining sizes to test: {train_sizes}")
 
@@ -924,13 +926,13 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         print(f"Training with N={n_train} samples")
         print(f"{'='*70}")
 
-        # Create subset loader by sampling ONLY from training indices
+        # Create subset loader by sampling ONLY from training dataset
         # This prevents data leakage into val/test sets
         rng = np.random.RandomState(seed=config.seed if hasattr(config, 'seed') else 42)
-        sampled_train_indices = rng.choice(train_indices, size=n_train, replace=False)
+        sampled_indices = rng.choice(n_train_total, size=n_train, replace=False)
 
-        # Create subset and loader
-        train_subset = Subset(dataset, sampled_train_indices.tolist())
+        # Create subset and loader from the training dataset
+        train_subset = Subset(full_train_dataset, sampled_indices.tolist())
         train_loader = DataLoader(train_subset, batch_size=config.batch_size, shuffle=True)
         print(f"Created training subset: {n_train} samples from training set only")
 
@@ -2072,37 +2074,67 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     print(f"Output: {exp_dir}")
     print(f"{'='*80}\n")
 
-    # Load ID training data (Re=1000, 2000, 3000)
-    print("Loading ID training data (Re=1000, 2000, 3000)...")
-    id_dataset, id_reynolds = load_ns_exp4(
+    # Load ID training data (Re=1000, 2000, 3000) - RAW MODE (NO LEAKAGE)
+    print("Loading ID training data (Re=1000, 2000, 3000) in RAW mode...")
+    X_id_raw, U_id_raw, id_reynolds = load_ns_exp4(
         filepath=id_data_path,
         reynolds_numbers=[1000.0, 2000.0, 3000.0],
-        time_pairs=5
+        time_pairs=5,
+        return_raw=True
     )
-    print(f"ID dataset size: {len(id_dataset)}")
+    print(f"ID dataset size: {len(X_id_raw)}")
     print(f"Reynolds distribution: {np.unique(id_reynolds, return_counts=True)}")
 
-    # Load OOD test data (Re=5000, 10000)
-    print("\nLoading OOD test data (Re=5000, 10000)...")
-    ood_dataset, ood_reynolds = load_ns_exp4(
-        filepath=ood_data_path,
-        reynolds_numbers=[5000.0, 10000.0],
-        time_pairs=5
-    )
-    print(f"OOD dataset size: {len(ood_dataset)}")
-    print(f"Reynolds distribution: {np.unique(ood_reynolds, return_counts=True)}")
-
-    # Create dataloaders - use all three loaders from create_dataloaders
+    # Create ID train/val/test splits with NO LEAKAGE
+    # This computes normalization on TRAINING DATA ONLY
     config = Config(config_dict)
-    train_loader, val_loader, id_test_loader = create_dataloaders(
-        id_dataset,
+    from datautils import create_dataloaders_no_leakage
+    train_loader, val_loader, id_test_loader = create_dataloaders_no_leakage(
+        X_id_raw, U_id_raw,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=42
     )
 
-    # Create OOD test loader
+    # Get the normalization stats from training data for OOD dataset
+    train_dataset = train_loader.dataset
+    u_mean = train_dataset.u_mean
+    u_std = train_dataset.u_std
+    x_min = train_dataset.x_min
+    x_max = train_dataset.x_max
+    y_min = train_dataset.y_min
+    y_max = train_dataset.y_max
+    x_fields_mean = train_dataset.x_fields_mean
+    x_fields_std = train_dataset.x_fields_std
+
+    # Load OOD test data (Re=5000, 10000) - RAW MODE
+    print("\nLoading OOD test data (Re=5000, 10000) in RAW mode...")
+    X_ood_raw, U_ood_raw, ood_reynolds = load_ns_exp4(
+        filepath=ood_data_path,
+        reynolds_numbers=[5000.0, 10000.0],
+        time_pairs=5,
+        return_raw=True
+    )
+    print(f"OOD dataset size: {len(X_ood_raw)}")
+    print(f"Reynolds distribution: {np.unique(ood_reynolds, return_counts=True)}")
+
+    # Create OOD dataset using SAME normalization stats as ID training data
+    print("\nCreating OOD dataset with ID training normalization stats...")
+    ood_dataset = PDEDataset(
+        X_ood_raw, U_ood_raw,
+        normalize_output=True,
+        normalize_input=True,
+        normalize_coords=True,
+        precomputed_u_mean=u_mean,  # ← Using ID TRAIN stats!
+        precomputed_u_std=u_std,
+        precomputed_x_min=x_min,
+        precomputed_x_max=x_max,
+        precomputed_y_min=y_min,
+        precomputed_y_max=y_max,
+        precomputed_x_fields_mean=x_fields_mean if x_fields_mean else None,
+        precomputed_x_fields_std=x_fields_std if x_fields_std else None
+    )
     ood_test_loader = DataLoader(
         ood_dataset,
         batch_size=config.batch_size,

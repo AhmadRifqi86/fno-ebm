@@ -21,7 +21,16 @@ class PDEDataset(Dataset):
                  normalize_output: bool = True,
                  normalize_input: bool = True,
                  normalize_coords: bool = True,
-                 cache_path: str = None):
+                 cache_path: str = None,
+                 # Pre-computed normalization stats (for avoiding data leakage)
+                 precomputed_u_mean: float = None,
+                 precomputed_u_std: float = None,
+                 precomputed_x_min: float = None,
+                 precomputed_x_max: float = None,
+                 precomputed_y_min: float = None,
+                 precomputed_y_max: float = None,
+                 precomputed_x_fields_mean: list = None,
+                 precomputed_x_fields_std: list = None):
         """
         Args:
             X: (n_samples, nx, ny, in_channels) - [x, y, input_field, ...]
@@ -30,6 +39,9 @@ class PDEDataset(Dataset):
             normalize_input: Normalize input fields (beyond x,y) to N(0,1)
             normalize_coords: Normalize x,y to [-1, 1]
             cache_path: Path to save/load cached normalized dataset
+            precomputed_*: Pre-computed normalization statistics (computed on train set only)
+                          to avoid data leakage. If provided, these will be used instead
+                          of computing stats from the current data.
         """
         self.n_samples, self.nx, self.ny, self.in_channels = X.shape
         self.normalize_coords = normalize_coords
@@ -46,27 +58,54 @@ class PDEDataset(Dataset):
         # IN-PLACE normalization to save memory
         # Coordinate normalization
         if normalize_coords:
-            self.x_min, self.x_max = X[..., 0].min(), X[..., 0].max()
-            self.y_min, self.y_max = X[..., 1].min(), X[..., 1].max()
-            # Normalize IN-PLACE
+            if precomputed_x_min is not None:
+                # Use precomputed stats (no data leakage)
+                self.x_min = precomputed_x_min
+                self.x_max = precomputed_x_max
+                self.y_min = precomputed_y_min
+                self.y_max = precomputed_y_max
+            else:
+                # Compute from current data (OLD BEHAVIOR - potential leakage)
+                self.x_min, self.x_max = X[..., 0].min(), X[..., 0].max()
+                self.y_min, self.y_max = X[..., 1].min(), X[..., 1].max()
+
+            # Normalize IN-PLACE using stats
             X[..., 0] = 2 * (X[..., 0] - self.x_min) / (self.x_max - self.x_min + 1e-8) - 1
             X[..., 1] = 2 * (X[..., 1] - self.y_min) / (self.y_max - self.y_min + 1e-8) - 1
 
         # Input field normalization (channels 2+) IN-PLACE
         if normalize_input and self.in_channels > 2:
-            for ch in range(2, self.in_channels):
+            if precomputed_x_fields_mean is not None:
+                # Use precomputed stats (no data leakage)
+                self.x_fields_mean = precomputed_x_fields_mean
+                self.x_fields_std = precomputed_x_fields_std
+            else:
+                # Compute from current data (OLD BEHAVIOR - potential leakage)
+                for ch in range(2, self.in_channels):
+                    field = X[..., ch]
+                    mean, std = field.mean(), field.std()
+                    self.x_fields_mean.append(mean)
+                    self.x_fields_std.append(std)
+
+            # Normalize IN-PLACE using stats
+            for ch_idx, ch in enumerate(range(2, self.in_channels)):
                 field = X[..., ch]
-                mean, std = field.mean(), field.std()
-                self.x_fields_mean.append(mean)
-                self.x_fields_std.append(std)
-                # Normalize IN-PLACE
+                mean = self.x_fields_mean[ch_idx]
+                std = self.x_fields_std[ch_idx]
                 X[..., ch] = (field - mean) / (std + 1e-8)
 
         # Output normalization IN-PLACE
         if normalize_output:
-            self.u_mean = U.mean()
-            self.u_std = U.std()
-            # Normalize IN-PLACE
+            if precomputed_u_mean is not None:
+                # Use precomputed stats (no data leakage)
+                self.u_mean = precomputed_u_mean
+                self.u_std = precomputed_u_std
+            else:
+                # Compute from current data (OLD BEHAVIOR - potential leakage)
+                self.u_mean = U.mean()
+                self.u_std = U.std()
+
+            # Normalize IN-PLACE using stats
             U[:] = (U - self.u_mean) / self.u_std
 
         # Convert to PyTorch tensors (X and U are already modified in-place)
@@ -156,7 +195,8 @@ class PDEDataset(Dataset):
 
 
 def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
-                 time_step_spacing: int = 10, max_pairs_per_sample: int = 20) -> PDEDataset:
+                 time_step_spacing: int = 10, max_pairs_per_sample: int = 20,
+                 return_raw: bool = False):
     """
     Load 1D PDE data (.hdf5): Burgers/Advection with multiple nu values.
 
@@ -168,9 +208,10 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
         max_samples: Max samples per nu value
         time_step_spacing: Spacing between input and output time steps (default: 10)
         max_pairs_per_sample: Max number of pairs to extract per sample (None = all possible)
+        return_raw: If True, return (X, U) raw arrays instead of PDEDataset
 
     Returns:
-        PDEDataset
+        PDEDataset if return_raw=False, else tuple of (X, U) numpy arrays
     """
     with h5py.File(filepath, 'r') as f:
         # PDEBench format: single 'tensor' with all nu values stacked
@@ -268,6 +309,8 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
             print(f"Actual pairs loaded: {pair_idx}")
             print(f"Memory usage: X={X_array.nbytes / (1024**2):.2f} MB, U={U_array.nbytes / (1024**2):.2f} MB")
 
+            if return_raw:
+                return X_array, U_array
             return PDEDataset(X_array, U_array)
 
         else:
@@ -360,10 +403,12 @@ def load_hdf5_1d(filepath: str, nu_values: list = None, max_samples: int = None,
             print(f"Actual pairs loaded: {pair_idx}")
             print(f"Memory usage: X={X_array.nbytes / (1024**2):.2f} MB, U={U_array.nbytes / (1024**2):.2f} MB")
 
+            if return_raw:
+                return X_array, U_array
             return PDEDataset(X_array, U_array)
 
 
-def load_h5_2d(filepath: str, max_samples: int = None) -> PDEDataset:
+def load_h5_2d(filepath: str, max_samples: int = None, return_raw: bool = False):
     """
     Load 2D diffusion-reaction data (.h5 format).
 
@@ -417,10 +462,12 @@ def load_h5_2d(filepath: str, max_samples: int = None) -> PDEDataset:
         X = np.stack(X_list)
         U = np.stack(U_list)
 
+    if return_raw:
+        return X, U
     return PDEDataset(X, U)
 
 
-def load_pt_2d(filepath: str) -> PDEDataset:
+def load_pt_2d(filepath: str, return_raw: bool = False):
     """
     Load Navier-Stokes data (.pt format).
 
@@ -454,11 +501,13 @@ def load_pt_2d(filepath: str) -> PDEDataset:
     # U: (n_samples, n_x, n_y, 1)
     U = output_field[..., np.newaxis]
 
+    if return_raw:
+        return X, U
     return PDEDataset(X, U)
 
 
 def load_ns_exp4(filepath: str, reynolds_numbers: list = None,
-                 time_pairs: int = 5) -> tuple:
+                 time_pairs: int = 5, return_raw: bool = False) -> tuple:
     """
     Load Navier-Stokes data for Experiment 4: OOD Detection.
 
@@ -482,9 +531,11 @@ def load_ns_exp4(filepath: str, reynolds_numbers: list = None,
         filepath: Path to .pt file
         reynolds_numbers: List of Reynolds numbers to load (None = all)
         time_pairs: Number of (input, output) pairs to create per sample
+        return_raw: If True, return raw (X, U, reynolds_array) without creating PDEDataset
 
     Returns:
-        PDEDataset with metadata containing Reynolds numbers for each sample
+        If return_raw=False: (PDEDataset, reynolds_array)
+        If return_raw=True: (X, U, reynolds_array) - raw numpy arrays
     """
     data_dict = torch.load(filepath, weights_only=False)
 
@@ -559,7 +610,11 @@ def load_ns_exp4(filepath: str, reynolds_numbers: list = None,
     print(f"Loaded {len(X)} training pairs from {len(all_data)} simulations")
     print(f"Input shape: {X.shape}, Output shape: {U.shape}")
 
-    # Create dataset
+    # Return raw arrays if requested (for no-leakage mode)
+    if return_raw:
+        return X, U, reynolds_array
+
+    # Create dataset (OLD BEHAVIOR - has normalization leakage!)
     dataset = PDEDataset(X, U)
 
     # Attach Reynolds numbers as metadata for OOD detection
@@ -569,7 +624,8 @@ def load_ns_exp4(filepath: str, reynolds_numbers: list = None,
 
 
 def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samples: int = 8000,
-                  time_step_spacing: int = 10, max_pairs_per_sample: int = 100) -> PDEDataset:
+                  time_step_spacing: int = 10, max_pairs_per_sample: int = 100,
+                  return_raw: bool = False):
     """
     Unified loader for all 4 PDEs.
 
@@ -580,21 +636,24 @@ def load_pde_data(filepath: str, pde_type: str, nu_values: list = None, max_samp
         max_samples: Max samples to load
         time_step_spacing: Spacing between input and output time steps (1D PDEs only)
         max_pairs_per_sample: Max pairs to extract per sample (1D PDEs only)
+        return_raw: If True, return (X, U) raw arrays instead of PDEDataset
+                   (for use with create_dataloaders_no_leakage)
 
     Returns:
-        PDEDataset
+        PDEDataset if return_raw=False, else tuple of (X, U) numpy arrays
     """
     filepath = Path(filepath)
 
     if pde_type in ['burgers', 'advection']:
         # 1D PDEs: .hdf5 format
-        return load_hdf5_1d(str(filepath), nu_values, max_samples, time_step_spacing, max_pairs_per_sample)
+        return load_hdf5_1d(str(filepath), nu_values, max_samples, time_step_spacing,
+                           max_pairs_per_sample, return_raw=return_raw)
     elif pde_type == 'diffusion_reaction':
         # 2D: .h5 format
-        return load_h5_2d(str(filepath), max_samples)
+        return load_h5_2d(str(filepath), max_samples, return_raw=return_raw)
     elif pde_type in ['navier_stokes', 'darcy']:
         # 2D: .pt format
-        return load_pt_2d(str(filepath))
+        return load_pt_2d(str(filepath), return_raw=return_raw)
     else:
         raise ValueError(f"Unknown pde_type: {pde_type}")
 
@@ -1038,3 +1097,169 @@ def create_subset_loader(dataset: PDEDataset,
     print(f"Created subset loader: {n_samples} samples (batch_size={batch_size})")
 
     return loader
+
+
+def create_dataloaders_no_leakage(X: np.ndarray, U: np.ndarray,
+                                   train_ratio: float = 0.8,
+                                   val_ratio: float = 0.1,
+                                   batch_size: int = 32,
+                                   seed: int = 42,
+                                   normalize_output: bool = True,
+                                   normalize_input: bool = True,
+                                   normalize_coords: bool = True) -> tuple:
+    """
+    Create dataloaders with NO DATA LEAKAGE.
+
+    CORRECT APPROACH: Splits data FIRST, then computes normalization statistics
+    on training set ONLY, and uses these training stats to normalize val/test sets.
+
+    This is the CORRECT way to avoid data leakage, as opposed to the old approach where:
+    - PDEDataset is created from ALL data (train + val + test)
+    - Normalization stats computed on ALL data ← TEST DATA LEAKED!
+    - Then split into train/val/test ← Too late!
+
+    Args:
+        X: Raw (unnormalized) input array (n_samples, nx, ny, in_channels)
+        U: Raw (unnormalized) output array (n_samples, nx, ny, out_channels)
+        train_ratio: Fraction for training (default: 0.8)
+        val_ratio: Fraction for validation (default: 0.1)
+        batch_size: Batch size
+        seed: Random seed
+        normalize_output: Normalize U to N(0,1) using train stats
+        normalize_input: Normalize input fields using train stats
+        normalize_coords: Normalize x,y to [-1, 1] using train stats
+
+    Returns:
+        train_loader, val_loader, test_loader (all normalized with TRAIN STATS ONLY)
+
+    Example:
+        >>> # Load RAW data (before creating PDEDataset!)
+        >>> X_raw = ...  # (n_samples, nx, ny, 3)
+        >>> U_raw = ...  # (n_samples, nx, ny, 1)
+        >>>
+        >>> # Split first, normalize with train stats
+        >>> train_loader, val_loader, test_loader = create_dataloaders_no_leakage(
+        ...     X_raw, U_raw, train_ratio=0.8, val_ratio=0.1, seed=42
+        ... )
+    """
+    n_total = len(X)
+    n_train = int(train_ratio * n_total)
+    n_val = int(val_ratio * n_total)
+    n_test = n_total - n_train - n_val
+
+    print(f"\n{'='*70}")
+    print("DATA SPLITTING (NO LEAKAGE MODE)")
+    print(f"{'='*70}")
+    print(f"Total samples: {n_total}")
+    print(f"Split: Train={n_train} ({train_ratio*100:.1f}%), "
+          f"Val={n_val} ({val_ratio*100:.1f}%), "
+          f"Test={n_test} ({(1-train_ratio-val_ratio)*100:.1f}%)")
+
+    # STEP 1: Split indices FIRST (before any normalization)
+    indices = np.random.RandomState(seed=seed).permutation(n_total)
+    train_idx = indices[:n_train]
+    val_idx = indices[n_train:n_train+n_val]
+    test_idx = indices[n_train+n_val:]
+
+    # STEP 2: Extract raw data for each split
+    X_train_raw = X[train_idx].copy()  # Copy to avoid modifying original
+    U_train_raw = U[train_idx].copy()
+    X_val_raw = X[val_idx].copy()
+    U_val_raw = U[val_idx].copy()
+    X_test_raw = X[test_idx].copy()
+    U_test_raw = U[test_idx].copy()
+
+    print(f"\nRaw data split complete")
+
+    # STEP 3: Compute normalization statistics on TRAIN SET ONLY
+    print(f"\nComputing normalization statistics on TRAINING SET ONLY...")
+
+    # Coordinate stats (train only)
+    x_min = X_train_raw[..., 0].min() if normalize_coords else None
+    x_max = X_train_raw[..., 0].max() if normalize_coords else None
+    y_min = X_train_raw[..., 1].min() if normalize_coords else None
+    y_max = X_train_raw[..., 1].max() if normalize_coords else None
+
+    # Input field stats (train only)
+    x_fields_mean = []
+    x_fields_std = []
+    in_channels = X_train_raw.shape[-1]
+    if normalize_input and in_channels > 2:
+        for ch in range(2, in_channels):
+            field = X_train_raw[..., ch]
+            mean, std = field.mean(), field.std()
+            x_fields_mean.append(mean)
+            x_fields_std.append(std)
+
+    # Output stats (train only)
+    u_mean = U_train_raw.mean() if normalize_output else 0.0
+    u_std = U_train_raw.std() if normalize_output else 1.0
+
+    print(f"✓ Normalization stats computed from {n_train} training samples ONLY")
+    print(f"  Output: mean={u_mean:.4f}, std={u_std:.4f}")
+    if normalize_coords:
+        print(f"  Coords: x=[{x_min:.4f}, {x_max:.4f}], y=[{y_min:.4f}, {y_max:.4f}]")
+    if x_fields_mean:
+        print(f"  Input fields: {len(x_fields_mean)} channels normalized")
+
+    # STEP 4: Create PDEDataset instances using TRAIN STATS for all splits
+    print(f"\nCreating datasets with TRAIN normalization stats...")
+
+    train_dataset = PDEDataset(
+        X_train_raw, U_train_raw,
+        normalize_output=normalize_output,
+        normalize_input=normalize_input,
+        normalize_coords=normalize_coords,
+        precomputed_u_mean=u_mean,
+        precomputed_u_std=u_std,
+        precomputed_x_min=x_min,
+        precomputed_x_max=x_max,
+        precomputed_y_min=y_min,
+        precomputed_y_max=y_max,
+        precomputed_x_fields_mean=x_fields_mean if x_fields_mean else None,
+        precomputed_x_fields_std=x_fields_std if x_fields_std else None
+    )
+
+    val_dataset = PDEDataset(
+        X_val_raw, U_val_raw,
+        normalize_output=normalize_output,
+        normalize_input=normalize_input,
+        normalize_coords=normalize_coords,
+        precomputed_u_mean=u_mean,  # ← Using TRAIN stats!
+        precomputed_u_std=u_std,    # ← Using TRAIN stats!
+        precomputed_x_min=x_min,
+        precomputed_x_max=x_max,
+        precomputed_y_min=y_min,
+        precomputed_y_max=y_max,
+        precomputed_x_fields_mean=x_fields_mean if x_fields_mean else None,
+        precomputed_x_fields_std=x_fields_std if x_fields_std else None
+    )
+
+    test_dataset = PDEDataset(
+        X_test_raw, U_test_raw,
+        normalize_output=normalize_output,
+        normalize_input=normalize_input,
+        normalize_coords=normalize_coords,
+        precomputed_u_mean=u_mean,  # ← Using TRAIN stats!
+        precomputed_u_std=u_std,    # ← Using TRAIN stats!
+        precomputed_x_min=x_min,
+        precomputed_x_max=x_max,
+        precomputed_y_min=y_min,
+        precomputed_y_max=y_max,
+        precomputed_x_fields_mean=x_fields_mean if x_fields_mean else None,
+        precomputed_x_fields_std=x_fields_std if x_fields_std else None
+    )
+
+    print(f"✓ Train dataset: {len(train_dataset)} samples (normalized with its own stats)")
+    print(f"✓ Val dataset: {len(val_dataset)} samples (normalized with TRAIN stats)")
+    print(f"✓ Test dataset: {len(test_dataset)} samples (normalized with TRAIN stats)")
+
+    # STEP 5: Create DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+
+    print(f"\n✓ NO DATA LEAKAGE: Test set never influenced training normalization!")
+    print(f"{'='*70}\n")
+
+    return train_loader, val_loader, test_loader
