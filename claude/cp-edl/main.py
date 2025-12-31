@@ -958,7 +958,7 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         # Create evidential model
         model = EvidentialFNO2d(
             modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
-            nu_min=1.0, alpha_min=1.0, beta_min=0.01
+            nu_min=1.0, alpha_min=1.0, beta_min=0.1
         )
         model = model.to(config.device)
 
@@ -966,15 +966,16 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         method_configs = get_evidential_methods_configs()
         method_config = method_configs.get('der_nig')
 
-        # Enable beta regularization to prevent uncertainty collapse
-        method_config['beta_reg_weight'] = 0.01
-        method_config['target_beta'] = 0.5
+        # Enable UR-ERN (Uncertainty Regularization) to prevent gradient vanishing
+        # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
+        method_config['ur_weight'] = 0.0
+        method_config['reg_weight'] = 0.001
 
         # Create optimizer and scheduler
         optimizer_config = {
             'type': 'adam',
             'lr': method_config.get('lr', 1e-4),
-            'weight_decay': 0.0
+            'weight_decay': 1e-5
         }
         optimizer = Factory.create_optimizer(optimizer_config, model.parameters())
 
@@ -2187,9 +2188,9 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     method_configs = get_evidential_methods_configs()
     method_config = method_configs.get('der_nig')
 
-    # Enable beta regularization to prevent uncertainty collapse
-    method_config['beta_reg_weight'] = 0.01
-    method_config['target_beta'] = 0.5
+    # Enable UR-ERN (Uncertainty Regularization) to prevent gradient vanishing
+    # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
+    method_config['ur_weight'] = 0.001
 
     # Get regularization function if specified
     reg_fn = get_regularization_function(reg_name)

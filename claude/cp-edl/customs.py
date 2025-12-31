@@ -1103,16 +1103,17 @@ def evidential_regularization(gamma, nu, alpha, beta, y):
 
 
 def evidential_loss(gamma, nu, alpha, beta, y, reg_weight=0.01,
-                    beta_reg_weight=0.0, target_beta=0.5):
+                    ur_weight=0.0):
     """
-    Combined evidential loss = NLL + regularization + optional beta regularization.
+    Combined evidential loss = NLL + regularization + optional UR-ERN.
 
     Args:
         gamma, nu, alpha, beta: Evidential parameters from model
         y: Ground truth
         reg_weight: Weight for evidence regularization (default: 0.01)
-        beta_reg_weight: Weight for beta regularization to prevent collapse (default: 0.0, disabled)
-        target_beta: Target value for beta regularization (default: 0.5)
+        beta_reg_weight: DEPRECATED - kept for backward compatibility
+        target_beta: DEPRECATED - kept for backward compatibility
+        ur_weight: Weight for Uncertainty Regularization (UR-ERN) to prevent gradient vanishing (default: 0.0, disabled)
 
     Returns:
         loss: Total loss
@@ -1124,19 +1125,28 @@ def evidential_loss(gamma, nu, alpha, beta, y, reg_weight=0.01,
     # Evidence regularization
     reg = evidential_regularization(gamma, nu, alpha, beta, y)
 
-    # Optional beta regularization (prevents beta collapse)
-    beta_reg = torch.tensor(0.0, device=beta.device)
-    if beta_reg_weight > 0.0:
-        # L2 penalty to keep beta near target value
-        beta_reg = torch.mean((beta - target_beta) ** 2)
+    # Uncertainty Regularization (UR-ERN)
+    # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
+    # Prevents gradient vanishing in High Uncertainty Area (HUA)
+    ur_term = torch.tensor(0.0, device=gamma.device)
+    if ur_weight > 0.0:
+        # Prediction error
+        error = torch.abs(y - gamma)
+
+        # UR-ERN term: -|y - γ| * log(exp(α - 1) - 1)
+        # This gradient is independent of activation function, preventing gradient vanishing
+        # Add small epsilon to prevent log(0) and numerical issues
+        exp_term = torch.exp(alpha - 1.0) - 1.0 + 1e-8
+        ur_term = -error * torch.log(exp_term)
+        ur_term = torch.mean(ur_term)
 
     # Total loss
-    total_loss = nll + reg_weight * reg + beta_reg_weight * beta_reg
+    total_loss = nll + reg_weight * reg + ur_weight * ur_term
 
     loss_dict = {
         'nll': nll.item(),
         'reg': reg.item(),
-        'beta_reg': beta_reg.item() if beta_reg_weight > 0.0 else 0.0,
+        'ur_term': ur_term.item() if ur_weight > 0.0 else 0.0,
         'total': total_loss.item()
     }
 
