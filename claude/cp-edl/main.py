@@ -958,13 +958,17 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         # Create evidential model
         model = EvidentialFNO2d(
             modes1=12, modes2=12, width=32, n_layers=4, in_channels=3,
-            nu_min=1.0, alpha_min=1.0, beta_min=0.0
+            nu_min=1.0, alpha_min=1.0, beta_min=0.01
         )
         model = model.to(config.device)
 
         # Get method config for evidential training
         method_configs = get_evidential_methods_configs()
         method_config = method_configs.get('der_nig')
+
+        # Enable beta regularization to prevent uncertainty collapse
+        method_config['beta_reg_weight'] = 0.01
+        method_config['target_beta'] = 0.5
 
         # Create optimizer and scheduler
         optimizer_config = {
@@ -1640,15 +1644,17 @@ def experiment_ablation(data_path: str, pde_type: str,
     print(f"Output: {exp_dir}")
     print(f"{'='*80}\n")
 
-    # Load dataset
-    print("Loading dataset...")
-    dataset = load_pde_data(data_path, pde_type, max_samples=5000)
-    print(f"Total dataset size: {len(dataset)}")
+    # Load RAW dataset (NO LEAKAGE MODE)
+    print("Loading RAW dataset...")
+    X_raw, U_raw = load_pde_data(data_path, pde_type, max_samples=5000, return_raw=True)
+    print(f"Total dataset size: {len(X_raw)}")
 
-    # Create train/val/test splits
+    # Create train/val/test splits with NO LEAKAGE
+    # This splits FIRST, then normalizes with TRAIN stats only
     config = Config(config_dict)
-    train_loader, val_loader, test_loader = create_dataloaders(
-        dataset,
+    from datautils import create_dataloaders_no_leakage
+    train_loader, val_loader, test_loader = create_dataloaders_no_leakage(
+        X_raw, U_raw,
         train_ratio=0.7,
         val_ratio=0.15,
         batch_size=config.batch_size,
@@ -2173,13 +2179,17 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
         in_channels=3,
         nu_min=1.0,
         alpha_min=1.0,
-        beta_min=0.0
+        beta_min=0.01
     )
     model = model.to(config.device)
 
     # Get method config
     method_configs = get_evidential_methods_configs()
     method_config = method_configs.get('der_nig')
+
+    # Enable beta regularization to prevent uncertainty collapse
+    method_config['beta_reg_weight'] = 0.01
+    method_config['target_beta'] = 0.5
 
     # Get regularization function if specified
     reg_fn = get_regularization_function(reg_name)

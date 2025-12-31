@@ -1102,34 +1102,44 @@ def evidential_regularization(gamma, nu, alpha, beta, y):
     return reg
 
 
-def evidential_loss(gamma, nu, alpha, beta, y, reg_weight=0.01):
+def evidential_loss(gamma, nu, alpha, beta, y, reg_weight=0.01,
+                    beta_reg_weight=0.0, target_beta=0.5):
     """
-    Combined evidential loss = NLL + regularization.
-    
+    Combined evidential loss = NLL + regularization + optional beta regularization.
+
     Args:
         gamma, nu, alpha, beta: Evidential parameters from model
         y: Ground truth
         reg_weight: Weight for evidence regularization (default: 0.01)
-    
+        beta_reg_weight: Weight for beta regularization to prevent collapse (default: 0.0, disabled)
+        target_beta: Target value for beta regularization (default: 0.5)
+
     Returns:
         loss: Total loss
         loss_dict: Dictionary with loss components
     """
     # NIG negative log-likelihood
     nll = nig_nll(gamma, nu, alpha, beta, y)
-    
+
     # Evidence regularization
     reg = evidential_regularization(gamma, nu, alpha, beta, y)
-    
+
+    # Optional beta regularization (prevents beta collapse)
+    beta_reg = torch.tensor(0.0, device=beta.device)
+    if beta_reg_weight > 0.0:
+        # L2 penalty to keep beta near target value
+        beta_reg = torch.mean((beta - target_beta) ** 2)
+
     # Total loss
-    total_loss = nll + reg_weight * reg
-    
+    total_loss = nll + reg_weight * reg + beta_reg_weight * beta_reg
+
     loss_dict = {
         'nll': nll.item(),
         'reg': reg.item(),
+        'beta_reg': beta_reg.item() if beta_reg_weight > 0.0 else 0.0,
         'total': total_loss.item()
     }
-    
+
     return total_loss, loss_dict
 
 

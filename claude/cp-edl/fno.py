@@ -2348,6 +2348,10 @@ class EvidentialFNOTrainer:
         self.method_config = method_config if method_config is not None else {}
         self.reg_weight = self.method_config.get('reg_weight', 0.01)
 
+        # Beta regularization parameters (optional, for preventing uncertainty collapse)
+        self.beta_reg_weight = self.method_config.get('beta_reg_weight', 0.0)
+        self.target_beta = self.method_config.get('target_beta', 0.5)
+
         # Regularization function (for evidential methods)
         self.reg_fn = reg_fn
         self.max_epochs = self.method_config.get('max_epochs', 100)  # For annealed regularization
@@ -2426,7 +2430,10 @@ class EvidentialFNOTrainer:
             else:
                 # Default standard evidential loss
                 self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
-                    gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+                    gamma, nu, alpha, beta, y,
+                    reg_weight=self.reg_weight,
+                    beta_reg_weight=self.beta_reg_weight,
+                    target_beta=self.target_beta
                 )
         # elif self.method_name == 'improved_der':
         #     if self.reg_fn is not None:
@@ -2488,7 +2495,10 @@ class EvidentialFNOTrainer:
                     )
             else:
                 self.loss_fn = lambda gamma, nu, alpha, beta, y: evidential_loss(
-                    gamma, nu, alpha, beta, y, reg_weight=self.reg_weight
+                    gamma, nu, alpha, beta, y,
+                    reg_weight=self.reg_weight,
+                    beta_reg_weight=self.beta_reg_weight,
+                    target_beta=self.target_beta
                 )
 
     def train_step(self, x: torch.Tensor, y: torch.Tensor) -> tuple:
