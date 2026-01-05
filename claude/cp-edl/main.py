@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from datetime import datetime
@@ -552,16 +553,18 @@ def train_evidential_method(method_name: str, data_path: str, pde_type: str,
     return metrics
 
 
-def train_baseline_method(method_name: str, dataset, config_dict: dict,
-                          output_dir: Path) -> Dict:
+def train_baseline_method(method_name: str, data_path: str, pde_type: str,
+                          config_dict: dict, output_dir: Path, max_samples: int = 500) -> Dict:
     """
     Train and evaluate a cross-family baseline UQ method.
 
     Args:
         method_name: 'mc_dropout', 'ensemble', 'bayesian', 'standard_fno', 'mlp_ebm'
-        dataset: PDEDataset
+        data_path: Path to data file
+        pde_type: PDE type ('burgers', 'advection', etc.)
         config_dict: Configuration dictionary
         output_dir: Output directory
+        max_samples: Maximum samples to load
 
     Returns:
         Dictionary with metrics (uncertainty quality, MSE, MAE, etc.)
@@ -574,14 +577,22 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
     print(f"BASELINE METHOD: {method_name.upper()}")
     print(f"{'='*70}")
 
-    # Standard 2-way split for baselines
-    train_loader, val_loader, test_loader = create_dataloaders(
-        dataset,
+    # Load RAW dataset (NO LEAKAGE MODE)
+    print("\nLoading RAW dataset...")
+    X_raw, U_raw = load_pde_data(data_path, pde_type, max_samples=max_samples, return_raw=True)
+    print(f"Total dataset size: {len(X_raw)}")
+
+    # Create train/val/test splits with NO LEAKAGE
+    # This splits FIRST, then normalizes with TRAIN stats only
+    from datautils import create_dataloaders_no_leakage
+    train_loader, val_loader, test_loader = create_dataloaders_no_leakage(
+        X_raw, U_raw,
         train_ratio=0.8,
         val_ratio=0.1,
         batch_size=config.batch_size,
         seed=config.seed if hasattr(config, 'seed') else 42
     )
+    print(f"Train: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}, Test: {len(test_loader.dataset)}")
 
     # Create model based on method
     print(f"\nInitializing {method_name} model...")
@@ -606,9 +617,13 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
                 pass
 
         # Training loop
-        epochs = 500
+        epochs = 20
+        print(f"\nTraining MC Dropout for {epochs} epochs...")
         for epoch in range(epochs):
+            # Training phase
             model.train()
+            train_loss = 0.0
+            num_batches = 0
             for x, y in train_loader:
                 x, y = x.to(config.device), y.to(config.device)
                 pred = model.forward_single(x)  # Single pass during training
@@ -618,34 +633,64 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
                 loss.backward()
                 optimizer.step()
 
+                train_loss += loss.item()
+                num_batches += 1
+
                 if tracker:
                     tracker.track(loss=loss)
 
-            if (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.6f}")
+            avg_train_loss = train_loss / num_batches
+
+            # Validation phase
+            model.eval()
+            val_loss = 0.0
+            num_val_batches = 0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+                    pred = model.forward_single(x)
+                    loss = F.mse_loss(pred, y)
+                    val_loss += loss.item()
+                    num_val_batches += 1
+
+            avg_val_loss = val_loss / num_val_batches
+
+            # Log every epoch
+            print(f"Epoch [{epoch+1}/{epochs}] Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
 
     elif method_name == 'ensemble':
         n_models = method_config.get('n_models', 5)
         print(f"Training {n_models} ensemble members...")
 
-        # Create ensemble splits
-        ensemble_splits = create_ensemble_splits(
-            dataset, n_models=n_models, bootstrap=True,
-            train_ratio=0.8, batch_size=config.batch_size,
-            seed=config.seed if hasattr(config, 'seed') else 42
-        )
+        # Create bootstrap samples from training set for each ensemble member
+        # Use the existing train_loader dataset which is already leakage-free
+        train_dataset = train_loader.dataset
+        n_train = len(train_dataset)
 
         models = []
-        for i, (train_loader_i, val_loader_i) in enumerate(ensemble_splits):
+        for i in range(n_models):
             print(f"\nTraining ensemble member {i+1}/{n_models}...")
+
+            # Create bootstrap sample (sample with replacement)
+            rng = np.random.RandomState(seed=(config.seed if hasattr(config, 'seed') else 42) + i)
+            bootstrap_indices = rng.choice(n_train, size=n_train, replace=True)
+
+            # Create subset and loader for this ensemble member
+            from torch.utils.data import Subset
+            bootstrap_subset = Subset(train_dataset, bootstrap_indices.tolist())
+            train_loader_i = DataLoader(bootstrap_subset, batch_size=config.batch_size, shuffle=True)
+
             model_i = FNO2d(modes1=12, modes2=12, width=32, n_layers=4, in_channels=3)
             model_i = model_i.to(config.device)
             optimizer_i = torch.optim.Adam(model_i.parameters(), lr=1e-3)
 
             # Training loop for each ensemble member
-            epochs = 500
+            epochs = 20
             for epoch in range(epochs):
+                # Training phase
                 model_i.train()
+                train_loss = 0.0
+                num_batches = 0
                 for x, y in train_loader_i:
                     x, y = x.to(config.device), y.to(config.device)
                     pred = model_i(x)
@@ -655,8 +700,28 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
                     loss.backward()
                     optimizer_i.step()
 
-                if (epoch + 1) % 200 == 0:
-                    print(f"  Epoch {epoch+1}/{epochs}, Loss: {loss.item():.6f}")
+                    train_loss += loss.item()
+                    num_batches += 1
+
+                avg_train_loss = train_loss / num_batches
+
+                # Validation phase
+                model_i.eval()
+                val_loss = 0.0
+                num_val_batches = 0
+                with torch.no_grad():
+                    for x, y in val_loader:
+                        x, y = x.to(config.device), y.to(config.device)
+                        pred = model_i(x)
+                        loss = F.mse_loss(pred, y)
+                        val_loss += loss.item()
+                        num_val_batches += 1
+
+                avg_val_loss = val_loss / num_val_batches
+
+                # Log every 10 epochs for ensemble members
+                if (epoch + 1) % 10 == 0:
+                    print(f"  Epoch [{epoch+1}/{epochs}] Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
 
             models.append(model_i)
 
@@ -684,8 +749,12 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
         # Training loop with ELBO loss
         kl_weight = method_config.get('kl_weight', 0.01)
         epochs = 500
+        print(f"\nTraining Bayesian FNO for {epochs} epochs...")
         for epoch in range(epochs):
+            # Training phase
             model.train()
+            train_loss = 0.0
+            num_batches = 0
             for x, y in train_loader:
                 x, y = x.to(config.device), y.to(config.device)
                 pred = model(x)
@@ -697,11 +766,32 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
                 loss.backward()
                 optimizer.step()
 
+                train_loss += loss.item()
+                num_batches += 1
+
                 if tracker:
                     tracker.track(loss=loss)
 
-            if (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch+1}/{epochs}, NLL: {nll.item():.6f}, KL: {kl.item():.6f}")
+            avg_train_loss = train_loss / num_batches
+
+            # Validation phase
+            model.eval()
+            val_loss = 0.0
+            num_val_batches = 0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+                    pred = model(x)
+                    nll_val = F.mse_loss(pred, y)
+                    kl_val = model.kl_divergence()
+                    loss_val = nll_val + kl_weight * kl_val
+                    val_loss += loss_val.item()
+                    num_val_batches += 1
+
+            avg_val_loss = val_loss / num_val_batches
+
+            # Log every epoch
+            print(f"Epoch [{epoch+1}/{epochs}] Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
 
     elif method_name == 'standard_fno':
         # Standard FNO without UQ
@@ -721,8 +811,12 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
 
         # Standard training loop
         epochs = 500
+        print(f"\nTraining Standard FNO for {epochs} epochs...")
         for epoch in range(epochs):
+            # Training phase
             model.train()
+            train_loss = 0.0
+            num_batches = 0
             for x, y in train_loader:
                 x, y = x.to(config.device), y.to(config.device)
                 pred = model(x)
@@ -732,11 +826,30 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
                 loss.backward()
                 optimizer.step()
 
+                train_loss += loss.item()
+                num_batches += 1
+
                 if tracker:
                     tracker.track(loss=loss)
 
-            if (epoch + 1) % 100 == 0:
-                print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.6f}")
+            avg_train_loss = train_loss / num_batches
+
+            # Validation phase
+            model.eval()
+            val_loss = 0.0
+            num_val_batches = 0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+                    pred = model(x)
+                    loss = F.mse_loss(pred, y)
+                    val_loss += loss.item()
+                    num_val_batches += 1
+
+            avg_val_loss = val_loss / num_val_batches
+
+            # Log every epoch
+            print(f"Epoch [{epoch+1}/{epochs}] Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
 
     elif method_name == 'mlp_ebm':
         # Train FNO + MLP-EBM (original approach from train_fno_ebm)
@@ -752,7 +865,10 @@ def train_baseline_method(method_name: str, dataset, config_dict: dict,
     print("\nEvaluating baseline method...")
     metrics = evaluate_uq_method(model, test_loader, method_name=method_name, device=config.device)
 
+    print(f"ECE: {metrics.get('ece', 0):.4f}, Correlation: {metrics.get('correlation', 0):.3f}")
+    print(f"NLL: {metrics.get('nll', 0):.6f}, rel_l2: {metrics.get('rel_l2', 0):.3f}")
     print(f"MSE: {metrics.get('mse', 0):.6f}, MAE: {metrics.get('mae', 0):.6f}")
+    print(f"coverage: {metrics.get('coverage', 0):.3f}, interval_width: {metrics.get('interval_width', 0):.6f}")
 
     # Save results
     with open(output_dir / f'{method_name}_baseline_results.json', 'w') as f:
@@ -851,7 +967,7 @@ def run_comprehensive_comparison(data_path: str, pde_type: str,
         print(f"{'#'*80}")
         for method in all_methods['baseline']:
             try:
-                metrics = train_baseline_method(method, dataset, config_dict, exp_dir)
+                metrics = train_baseline_method(method, data_path, pde_type, config_dict, exp_dir, max_samples=500)
                 results[f'BASELINE_{method}'] = metrics
             except Exception as e:
                 print(f"Error running {method}: {e}")
@@ -969,7 +1085,7 @@ def experiment_epistemic_aleatoric(data_path: str, pde_type: str,
         # Enable UR-ERN (Uncertainty Regularization) to prevent gradient vanishing
         # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
         method_config['ur_weight'] = 0.0
-        method_config['reg_weight'] = 0.001
+        method_config['reg_weight'] = 0.1
 
         # Create optimizer and scheduler
         optimizer_config = {
@@ -2072,13 +2188,17 @@ def experiment_ablation(data_path: str, pde_type: str,
 def experiment_ood_detection(id_data_path: str, ood_data_path: str,
                              config_dict: dict,
                              output_dir: str = 'experiments',
-                             reg_name: str = None) -> Dict:
+                             reg_name: str = None,
+                             method_name: str = 'evidential') -> Dict:
     """
     Experiment 4: OOD Detection using Reynolds Number.
 
-    Trains evidential model on ID data (Re=1000, 2000, 3000) and evaluates
+    Trains model on ID data (Re=1000, 2000, 3000) and evaluates
     OOD detection performance on higher Reynolds numbers (Re=5000, 10000).
     Uses total uncertainty as OOD score and computes AUROC.
+
+    Args:
+        method_name: 'evidential', 'mc_dropout', or 'ensemble'
 
     Args:
         id_data_path: Path to in-distribution training data
@@ -2170,73 +2290,205 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
     print(f"\nTrain: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}")
     print(f"ID Test: {len(id_test_loader.dataset)}, OOD Test: {len(ood_test_loader.dataset)}")
 
-    # Create evidential model
-    print("\nInitializing evidential model...")
-    model = EvidentialFNO2d(
-        modes1=12,
-        modes2=12,
-        width=64,  # Increased from 32 to 64 for better capacity
-        n_layers=4,
-        in_channels=3,
-        nu_min=1.0,
-        alpha_min=1.0,
-        beta_min=0.01
-    )
-    model = model.to(config.device)
+    # Create model based on method
+    print(f"\nInitializing {method_name} model...")
 
-    # Get method config
-    method_configs = get_evidential_methods_configs()
-    method_config = method_configs.get('der_nig')
+    if method_name == 'mc_dropout':
+        model = MCDropoutFNO2d(
+            modes1=12,
+            modes2=12,
+            width=64,
+            n_layers=4,
+            in_channels=3,
+            dropout_rate=0.1,
+            n_samples=30
+        )
+        model = model.to(config.device)
 
-    # Enable UR-ERN (Uncertainty Regularization) to prevent gradient vanishing
-    # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
-    method_config['ur_weight'] = 0.001
+    elif method_name == 'ensemble':
+        # Will train ensemble later
+        ensemble_size = 5
+        models = []
 
-    # Get regularization function if specified
-    reg_fn = get_regularization_function(reg_name)
-    if reg_name:
-        print(f"Using regularization: {reg_name}")
+    else:  # evidential (default)
+        model = EvidentialFNO2d(
+            modes1=12,
+            modes2=12,
+            width=64,  # Increased from 32 to 64 for better capacity
+            n_layers=4,
+            in_channels=3,
+            nu_min=1.0,
+            alpha_min=1.0,
+            beta_min=0.01
+        )
+        model = model.to(config.device)
 
-    # Add max_epochs for annealed regularization
-    epochs = config_dict.get('epochs', 200)  # Increased from 100 to 200 for better uncertainty learning
-    if reg_name == 'annealed':
-        method_config['max_epochs'] = epochs
+    epochs = config_dict.get('epochs', 200)
 
-    # Setup optimizer and scheduler
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=10, verbose=True
-    )
+    # Training logic depends on method
+    if method_name == 'mc_dropout':
+        # MC Dropout uses standard MSE training
+        print(f"\nTraining MC Dropout model for {epochs} epochs...")
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=10, verbose=True
+        )
+        criterion = nn.MSELoss()
 
-    # Setup trainer config
-    trainer_config = Config({
-        'device': config.device,
-        'lr': 1e-3,
-        'weight_decay': 1e-5,
-        'enable_tracking': False,
-        'log_dir': str(exp_dir / 'logs'),
-        'experiment_name': 'exp4_ood_detection',
-        'checkpoint_dir': str(exp_dir / 'checkpoints'),
-        'save_every': 1000,
-        'use_tensorboard': False
-    })
+        best_val_loss = float('inf')
+        for epoch in range(epochs):
+            # Training
+            model.train()
+            train_loss = 0.0
+            for x, y in train_loader:
+                x, y = x.to(config.device), y.to(config.device)
 
-    # Create trainer
-    trainer = EvidentialFNOTrainer(
-        model=model,
-        config=trainer_config,
-        method_name='der_nig',
-        optimizer=optimizer,
-        scheduler=scheduler,
-        method_config=method_config,
-        reg_fn=reg_fn,
-        save_flag=False
-    )
+                optimizer.zero_grad()
+                # Use forward_single for deterministic training
+                pred = model.forward_single(x)
+                loss = criterion(pred, y)
+                loss.backward()
+                optimizer.step()
 
-    # Train
-    epochs = config_dict.get('epochs', 200)  # Increased from 100 to 200 for better uncertainty learning
-    print(f"\nTraining evidential model for {epochs} epochs...")
-    trainer.train(train_loader, val_loader, epochs=epochs)
+                train_loss += loss.item()
+
+            train_loss /= len(train_loader)
+
+            # Validation
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+                    pred = model.forward_single(x)
+                    loss = criterion(pred, y)
+                    val_loss += loss.item()
+
+            val_loss /= len(val_loader)
+            scheduler.step(val_loss)
+
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+
+    elif method_name == 'ensemble':
+        # Train ensemble of models
+        print(f"\nTraining ensemble of {ensemble_size} models for {epochs} epochs each...")
+        for i in range(ensemble_size):
+            print(f"\n--- Training ensemble member {i+1}/{ensemble_size} ---")
+
+            # Create individual model
+            individual_model = FNO2d(
+                modes1=12,
+                modes2=12,
+                width=64,
+                n_layers=4,
+                in_channels=3
+            ).to(config.device)
+
+            optimizer = torch.optim.Adam(individual_model.parameters(), lr=1e-3, weight_decay=1e-5)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=10, verbose=True
+            )
+            criterion = nn.MSELoss()
+
+            best_val_loss = float('inf')
+            for epoch in range(epochs):
+                # Training
+                individual_model.train()
+                train_loss = 0.0
+                for x, y in train_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+
+                    optimizer.zero_grad()
+                    pred = individual_model(x)
+                    loss = criterion(pred, y)
+                    loss.backward()
+                    optimizer.step()
+
+                    train_loss += loss.item()
+
+                train_loss /= len(train_loader)
+
+                # Validation
+                individual_model.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for x, y in val_loader:
+                        x, y = x.to(config.device), y.to(config.device)
+                        pred = individual_model(x)
+                        loss = criterion(pred, y)
+                        val_loss += loss.item()
+
+                val_loss /= len(val_loader)
+                scheduler.step(val_loss)
+
+                if (epoch + 1) % 10 == 0:
+                    print(f"  Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+
+            models.append(individual_model)
+
+        # Create ensemble wrapper
+        model = FNOEnsemble(models).to(config.device)
+        print(f"\nEnsemble training complete!")
+
+    else:  # evidential
+        # Get method config
+        method_configs = get_evidential_methods_configs()
+        method_config = method_configs.get('der_nig')
+
+        # Enable UR-ERN (Uncertainty Regularization) to prevent gradient vanishing
+        # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
+        method_config['ur_weight'] = 0.0
+
+        # Get regularization function if specified
+        reg_fn = get_regularization_function(reg_name)
+        if reg_name:
+            print(f"Using regularization: {reg_name}")
+
+        # Add max_epochs for annealed regularization
+        if reg_name == 'annealed':
+            method_config['max_epochs'] = epochs
+
+        # Setup optimizer and scheduler
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=10, verbose=True
+        )
+
+        # Setup trainer config
+        trainer_config = Config({
+            'device': config.device,
+            'lr': 1e-3,
+            'weight_decay': 1e-5,
+            'enable_tracking': False,
+            'log_dir': str(exp_dir / 'logs'),
+            'experiment_name': 'exp4_ood_detection',
+            'checkpoint_dir': str(exp_dir / 'checkpoints'),
+            'save_every': 1000,
+            'use_tensorboard': False
+        })
+
+        # Create trainer
+        trainer = EvidentialFNOTrainer(
+            model=model,
+            config=trainer_config,
+            method_name='der_nig',
+            optimizer=optimizer,
+            scheduler=scheduler,
+            method_config=method_config,
+            reg_fn=reg_fn,
+            save_flag=False
+        )
+
+        # Train
+        print(f"\nTraining evidential model for {epochs} epochs...")
+        trainer.train(train_loader, val_loader, epochs=epochs)
 
     # Evaluate on ID test set
     print("\nEvaluating on ID test set (same distribution)...")
@@ -2251,20 +2503,34 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
         for x, y in id_test_loader:
             x, y = x.to(config.device), y.to(config.device)
 
-            # Get evidential parameters
-            gamma, nu, alpha, beta = model(x)
+            if method_name in ['mc_dropout', 'ensemble']:
+                # MC Dropout and Ensemble return (mean, std)
+                mean, std = model(x)
+                total_unc = std
 
-            # Compute uncertainties
-            uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
-            total_unc = uq_dict['total']
+                # Compute errors
+                error = (mean - y).abs()
 
-            # Compute errors
-            error = (gamma - y).abs()
+                id_uncertainties.append(total_unc.cpu().numpy())
+                id_errors.append(error.cpu().numpy())
+                id_predictions.append(mean.cpu().numpy())
+                id_targets.append(y.cpu().numpy())
 
-            id_uncertainties.append(total_unc.cpu().numpy())
-            id_errors.append(error.cpu().numpy())
-            id_predictions.append(gamma.cpu().numpy())
-            id_targets.append(y.cpu().numpy())
+            else:  # evidential
+                # Get evidential parameters
+                gamma, nu, alpha, beta = model(x)
+
+                # Compute uncertainties
+                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                total_unc = uq_dict['total']
+
+                # Compute errors
+                error = (gamma - y).abs()
+
+                id_uncertainties.append(total_unc.cpu().numpy())
+                id_errors.append(error.cpu().numpy())
+                id_predictions.append(gamma.cpu().numpy())
+                id_targets.append(y.cpu().numpy())
 
     id_uncertainties = np.concatenate(id_uncertainties)
     id_errors = np.concatenate(id_errors)
@@ -2282,20 +2548,34 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
         for x, y in ood_test_loader:
             x, y = x.to(config.device), y.to(config.device)
 
-            # Get evidential parameters
-            gamma, nu, alpha, beta = model(x)
+            if method_name in ['mc_dropout', 'ensemble']:
+                # MC Dropout and Ensemble return (mean, std)
+                mean, std = model(x)
+                total_unc = std
 
-            # Compute uncertainties
-            uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
-            total_unc = uq_dict['total']
+                # Compute errors
+                error = (mean - y).abs()
 
-            # Compute errors
-            error = (gamma - y).abs()
+                ood_uncertainties.append(total_unc.cpu().numpy())
+                ood_errors.append(error.cpu().numpy())
+                ood_predictions.append(mean.cpu().numpy())
+                ood_targets.append(y.cpu().numpy())
 
-            ood_uncertainties.append(total_unc.cpu().numpy())
-            ood_errors.append(error.cpu().numpy())
-            ood_predictions.append(gamma.cpu().numpy())
-            ood_targets.append(y.cpu().numpy())
+            else:  # evidential
+                # Get evidential parameters
+                gamma, nu, alpha, beta = model(x)
+
+                # Compute uncertainties
+                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                total_unc = uq_dict['total']
+
+                # Compute errors
+                error = (gamma - y).abs()
+
+                ood_uncertainties.append(total_unc.cpu().numpy())
+                ood_errors.append(error.cpu().numpy())
+                ood_predictions.append(gamma.cpu().numpy())
+                ood_targets.append(y.cpu().numpy())
 
     ood_uncertainties = np.concatenate(ood_uncertainties)
     ood_errors = np.concatenate(ood_errors)
@@ -2419,6 +2699,536 @@ def experiment_ood_detection(id_data_path: str, ood_data_path: str,
 
     print(f"\n{'='*80}")
     print("EXPERIMENT 4 COMPLETE!")
+    print(f"Results saved to: {exp_dir}")
+    print(f"AUROC: {auroc:.4f}")
+    print(f"{'='*80}\n")
+
+    return {
+        'results': results,
+        'auroc': auroc,
+        'output_dir': str(exp_dir)
+    }
+
+
+def experiment_cross_pde_ood_detection(id_data_path: str,
+                                        ood_data_path: str,
+                                        id_pde_type: str,
+                                        ood_pde_type: str,
+                                        config_dict: dict,
+                                        output_dir: str = 'experiments',
+                                        reg_name: str = None,
+                                        method_name: str = 'evidential') -> Dict:
+    """
+    Experiment 9: Cross-PDE OOD Detection.
+
+    Trains model on one PDE type (e.g., Navier-Stokes) and evaluates
+    OOD detection performance on a completely different PDE (e.g., Darcy).
+    This is a true OOD test since neural operators learn different operators.
+    Uses total uncertainty as OOD score and computes AUROC.
+
+    Args:
+        id_data_path: Path to in-distribution training data
+        ood_data_path: Path to out-of-distribution test data
+        id_pde_type: PDE type for ID data (e.g., 'navier_stokes')
+        ood_pde_type: PDE type for OOD data (e.g., 'darcy')
+        config_dict: Configuration dictionary
+        output_dir: Output directory
+        reg_name: Regularization scheme name (e.g., 'standard', 'improved', etc.)
+        method_name: 'evidential', 'mc_dropout', or 'ensemble'
+
+    Returns:
+        Dictionary with experimental results including AUROC
+    """
+    # Setup output directory
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    exp_dir = Path(output_dir) / f"experiment9_cross_pde_ood_{timestamp}"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT 9: Cross-PDE OOD Detection")
+    print(f"ID PDE: {id_pde_type}, OOD PDE: {ood_pde_type}")
+    print(f"Output: {exp_dir}")
+    print(f"{'='*80}\n")
+
+    # Load ID training data - RAW MODE (NO LEAKAGE)
+    print(f"Loading ID training data ({id_pde_type}) in RAW mode...")
+    X_id_raw, U_id_raw = load_pde_data(
+        filepath=id_data_path,
+        pde_type=id_pde_type,
+        return_raw=True
+    )
+    print(f"ID dataset size: {len(X_id_raw)}")
+    print(f"ID data shape: X={X_id_raw.shape}, U={U_id_raw.shape}")
+
+    # Create ID train/val/test splits with NO LEAKAGE
+    # This computes normalization on TRAINING DATA ONLY
+    config = Config(config_dict)
+    from datautils import create_dataloaders_no_leakage
+    train_loader, val_loader, id_test_loader = create_dataloaders_no_leakage(
+        X_id_raw, U_id_raw,
+        train_ratio=0.8,
+        val_ratio=0.1,
+        batch_size=config.batch_size,
+        seed=42
+    )
+
+    # Get the normalization stats from training data for OOD dataset
+    train_dataset = train_loader.dataset
+    u_mean = train_dataset.u_mean
+    u_std = train_dataset.u_std
+    x_min = train_dataset.x_min
+    x_max = train_dataset.x_max
+    y_min = train_dataset.y_min
+    y_max = train_dataset.y_max
+    x_fields_mean = train_dataset.x_fields_mean
+    x_fields_std = train_dataset.x_fields_std
+
+    # Load OOD test data - RAW MODE
+    print(f"\nLoading OOD test data ({ood_pde_type}) in RAW mode...")
+    X_ood_raw, U_ood_raw = load_pde_data(
+        filepath=ood_data_path,
+        pde_type=ood_pde_type,
+        return_raw=True
+    )
+    print(f"OOD dataset size: {len(X_ood_raw)}")
+    print(f"OOD data shape: X={X_ood_raw.shape}, U={U_ood_raw.shape}")
+
+    # Create OOD dataset using SAME normalization stats as ID training data
+    print("\nCreating OOD dataset with ID training normalization stats...")
+    ood_dataset = PDEDataset(
+        X_ood_raw, U_ood_raw,
+        normalize_output=True,
+        normalize_input=True,
+        normalize_coords=True,
+        precomputed_u_mean=u_mean,  # ← Using ID TRAIN stats!
+        precomputed_u_std=u_std,
+        precomputed_x_min=x_min,
+        precomputed_x_max=x_max,
+        precomputed_y_min=y_min,
+        precomputed_y_max=y_max,
+        precomputed_x_fields_mean=x_fields_mean if x_fields_mean else None,
+        precomputed_x_fields_std=x_fields_std if x_fields_std else None
+    )
+    ood_test_loader = DataLoader(
+        ood_dataset,
+        batch_size=config.batch_size,
+        shuffle=False
+    )
+
+    print(f"\nTrain: {len(train_loader.dataset)}, Val: {len(val_loader.dataset)}")
+    print(f"ID Test: {len(id_test_loader.dataset)}, OOD Test: {len(ood_test_loader.dataset)}")
+
+    # Create model based on method
+    print(f"\nInitializing {method_name} model...")
+
+    if method_name == 'mc_dropout':
+        model = MCDropoutFNO2d(
+            modes1=12,
+            modes2=12,
+            width=64,
+            n_layers=4,
+            in_channels=3,
+            dropout_rate=0.1,
+            n_samples=30
+        )
+        model = model.to(config.device)
+
+    elif method_name == 'ensemble':
+        # Will train ensemble later
+        ensemble_size = 5
+        models = []
+
+    else:  # evidential (default)
+        model = EvidentialFNO2d(
+            modes1=12,
+            modes2=12,
+            width=64,
+            n_layers=4,
+            in_channels=3,
+            nu_min=1.0,
+            alpha_min=1.0,
+            beta_min=0.01
+        )
+        model = model.to(config.device)
+
+    epochs = config_dict.get('epochs', 200)
+
+    # Training logic depends on method
+    if method_name == 'mc_dropout':
+        # MC Dropout uses standard MSE training
+        print(f"\nTraining MC Dropout model for {epochs} epochs...")
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=10, verbose=True
+        )
+        criterion = nn.MSELoss()
+
+        best_val_loss = float('inf')
+        for epoch in range(epochs):
+            # Training
+            model.train()
+            train_loss = 0.0
+            for x, y in train_loader:
+                x, y = x.to(config.device), y.to(config.device)
+
+                optimizer.zero_grad()
+                # Use forward_single for deterministic training
+                pred = model.forward_single(x)
+                loss = criterion(pred, y)
+                loss.backward()
+                optimizer.step()
+
+                train_loss += loss.item()
+
+            train_loss /= len(train_loader)
+
+            # Validation
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for x, y in val_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+                    pred = model.forward_single(x)
+                    loss = criterion(pred, y)
+                    val_loss += loss.item()
+
+            val_loss /= len(val_loader)
+            scheduler.step(val_loss)
+
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+
+    elif method_name == 'ensemble':
+        # Train ensemble of models
+        print(f"\nTraining ensemble of {ensemble_size} models for {epochs} epochs each...")
+        for i in range(ensemble_size):
+            print(f"\n--- Training ensemble member {i+1}/{ensemble_size} ---")
+
+            # Create individual model
+            individual_model = FNO2d(
+                modes1=12,
+                modes2=12,
+                width=64,
+                n_layers=4,
+                in_channels=3
+            ).to(config.device)
+
+            optimizer = torch.optim.Adam(individual_model.parameters(), lr=1e-3, weight_decay=1e-5)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=10, verbose=True
+            )
+            criterion = nn.MSELoss()
+
+            best_val_loss = float('inf')
+            for epoch in range(epochs):
+                # Training
+                individual_model.train()
+                train_loss = 0.0
+                for x, y in train_loader:
+                    x, y = x.to(config.device), y.to(config.device)
+
+                    optimizer.zero_grad()
+                    pred = individual_model(x)
+                    loss = criterion(pred, y)
+                    loss.backward()
+                    optimizer.step()
+
+                    train_loss += loss.item()
+
+                train_loss /= len(train_loader)
+
+                # Validation
+                individual_model.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for x, y in val_loader:
+                        x, y = x.to(config.device), y.to(config.device)
+                        pred = individual_model(x)
+                        loss = criterion(pred, y)
+                        val_loss += loss.item()
+
+                val_loss /= len(val_loader)
+                scheduler.step(val_loss)
+
+                if (epoch + 1) % 10 == 0:
+                    print(f"  Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
+
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+
+            models.append(individual_model)
+
+        # Create ensemble wrapper
+        model = FNOEnsemble(models).to(config.device)
+        print(f"\nEnsemble training complete!")
+
+    else:  # evidential
+        # Get method config
+        method_configs = get_evidential_methods_configs()
+        method_config = method_configs.get('der_nig')
+
+        # Enable UR-ERN (Uncertainty Regularization) to prevent gradient vanishing
+        # From "Uncertainty Regularized Evidential Regression" (Oh et al., AAAI 2024)
+        method_config['ur_weight'] = 0.0
+
+        # Get regularization function if specified
+        reg_fn = get_regularization_function(reg_name)
+        if reg_name:
+            print(f"Using regularization: {reg_name}")
+
+        # Add max_epochs for annealed regularization
+        if reg_name == 'annealed':
+            method_config['max_epochs'] = epochs
+
+        # Setup optimizer and scheduler
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=10, verbose=True
+        )
+
+        # Setup trainer config
+        trainer_config = Config({
+            'device': config.device,
+            'lr': 1e-3,
+            'weight_decay': 1e-5,
+            'enable_tracking': False,
+            'log_dir': str(exp_dir / 'logs'),
+            'experiment_name': 'exp9_cross_pde_ood',
+            'checkpoint_dir': str(exp_dir / 'checkpoints'),
+            'save_every': 1000,
+            'use_tensorboard': False
+        })
+
+        # Create trainer
+        trainer = EvidentialFNOTrainer(
+            model=model,
+            config=trainer_config,
+            method_name='der_nig',
+            optimizer=optimizer,
+            scheduler=scheduler,
+            method_config=method_config,
+            reg_fn=reg_fn,
+            save_flag=False
+        )
+
+        # Train
+        print(f"\nTraining evidential model for {epochs} epochs...")
+        trainer.train(train_loader, val_loader, epochs=epochs)
+
+    # Evaluate on ID test set
+    print(f"\nEvaluating on ID test set ({id_pde_type})...")
+    model.eval()
+
+    id_uncertainties = []
+    id_errors = []
+    id_predictions = []
+    id_targets = []
+
+    with torch.no_grad():
+        for x, y in id_test_loader:
+            x, y = x.to(config.device), y.to(config.device)
+
+            if method_name in ['mc_dropout', 'ensemble']:
+                # MC Dropout and Ensemble return (mean, std)
+                mean, std = model(x)
+                total_unc = std
+
+                # Compute errors
+                error = (mean - y).abs()
+
+                id_uncertainties.append(total_unc.cpu().numpy())
+                id_errors.append(error.cpu().numpy())
+                id_predictions.append(mean.cpu().numpy())
+                id_targets.append(y.cpu().numpy())
+
+            else:  # evidential
+                # Get evidential parameters
+                gamma, nu, alpha, beta = model(x)
+
+                # Compute uncertainties
+                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                total_unc = uq_dict['total']
+
+                # Compute errors
+                error = (gamma - y).abs()
+
+                id_uncertainties.append(total_unc.cpu().numpy())
+                id_errors.append(error.cpu().numpy())
+                id_predictions.append(gamma.cpu().numpy())
+                id_targets.append(y.cpu().numpy())
+
+    id_uncertainties = np.concatenate(id_uncertainties)
+    id_errors = np.concatenate(id_errors)
+    id_predictions = np.concatenate(id_predictions)
+    id_targets = np.concatenate(id_targets)
+
+    # Evaluate on OOD test set
+    print(f"Evaluating on OOD test set ({ood_pde_type})...")
+    ood_uncertainties = []
+    ood_errors = []
+    ood_predictions = []
+    ood_targets = []
+
+    with torch.no_grad():
+        for x, y in ood_test_loader:
+            x, y = x.to(config.device), y.to(config.device)
+
+            if method_name in ['mc_dropout', 'ensemble']:
+                # MC Dropout and Ensemble return (mean, std)
+                mean, std = model(x)
+                total_unc = std
+
+                # Compute errors
+                error = (mean - y).abs()
+
+                ood_uncertainties.append(total_unc.cpu().numpy())
+                ood_errors.append(error.cpu().numpy())
+                ood_predictions.append(mean.cpu().numpy())
+                ood_targets.append(y.cpu().numpy())
+
+            else:  # evidential
+                # Get evidential parameters
+                gamma, nu, alpha, beta = model(x)
+
+                # Compute uncertainties
+                uq_dict = evidential_uncertainty(gamma, nu, alpha, beta)
+                total_unc = uq_dict['total']
+
+                # Compute errors
+                error = (gamma - y).abs()
+
+                ood_uncertainties.append(total_unc.cpu().numpy())
+                ood_errors.append(error.cpu().numpy())
+                ood_predictions.append(gamma.cpu().numpy())
+                ood_targets.append(y.cpu().numpy())
+
+    ood_uncertainties = np.concatenate(ood_uncertainties)
+    ood_errors = np.concatenate(ood_errors)
+    ood_predictions = np.concatenate(ood_predictions)
+    ood_targets = np.concatenate(ood_targets)
+
+    # Compute metrics
+    id_mse = ((id_predictions - id_targets)**2).mean()
+    ood_mse = ((ood_predictions - ood_targets)**2).mean()
+
+    id_mean_unc = id_uncertainties.mean()
+    ood_mean_unc = ood_uncertainties.mean()
+
+    print(f"\n{'='*70}")
+    print("RESULTS:")
+    print(f"{'='*70}")
+    print(f"ID ({id_pde_type}) Test MSE: {id_mse:.6f}")
+    print(f"OOD ({ood_pde_type}) Test MSE: {ood_mse:.6f}")
+    print(f"ID Mean Uncertainty: {id_mean_unc:.6f}")
+    print(f"OOD Mean Uncertainty: {ood_mean_unc:.6f}")
+    print(f"Uncertainty Ratio (OOD/ID): {ood_mean_unc / (id_mean_unc + 1e-8):.3f}")
+
+    # Compute AUROC for OOD detection
+    # Label: 0 for ID, 1 for OOD
+    # Score: Total uncertainty (higher for OOD)
+    from sklearn.metrics import roc_auc_score, roc_curve
+
+    # Compute mean uncertainty per sample (average over spatial dimensions)
+    id_unc_per_sample = id_uncertainties.reshape(len(id_uncertainties), -1).mean(axis=1)
+    ood_unc_per_sample = ood_uncertainties.reshape(len(ood_uncertainties), -1).mean(axis=1)
+
+    y_true = np.concatenate([
+        np.zeros(len(id_unc_per_sample)),  # ID = 0
+        np.ones(len(ood_unc_per_sample))   # OOD = 1
+    ])
+
+    y_score = np.concatenate([
+        id_unc_per_sample,
+        ood_unc_per_sample
+    ])
+
+    auroc = roc_auc_score(y_true, y_score)
+    fpr, tpr, thresholds = roc_curve(y_true, y_score)
+
+    print(f"\nOOD Detection AUROC: {auroc:.4f}")
+
+    # Save results
+    results = {
+        'id_pde_type': id_pde_type,
+        'ood_pde_type': ood_pde_type,
+        'id_mse': float(id_mse),
+        'ood_mse': float(ood_mse),
+        'id_mean_uncertainty': float(id_mean_unc),
+        'ood_mean_uncertainty': float(ood_mean_unc),
+        'uncertainty_ratio': float(ood_mean_unc / (id_mean_unc + 1e-8)),
+        'auroc': float(auroc)
+    }
+
+    with open(exp_dir / 'experiment9_results.json', 'w') as f:
+        json.dump(results, f, indent=2)
+
+    # Generate plots
+    print("\nGenerating plots...")
+
+    # Plot 1: Uncertainty distributions (ID vs OOD)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Histogram
+    axes[0].hist(id_uncertainties.flatten(), bins=50, alpha=0.6, label=f'ID ({id_pde_type})', density=True, color='blue')
+    axes[0].hist(ood_uncertainties.flatten(), bins=50, alpha=0.6, label=f'OOD ({ood_pde_type})', density=True, color='red')
+    axes[0].set_xlabel('Total Uncertainty', fontsize=12)
+    axes[0].set_ylabel('Density', fontsize=12)
+    axes[0].set_title('Uncertainty Distribution: ID vs OOD', fontsize=14)
+    axes[0].legend(fontsize=10)
+    axes[0].grid(alpha=0.3)
+
+    # Box plot
+    axes[1].boxplot([id_uncertainties.flatten(), ood_uncertainties.flatten()],
+                   labels=[f'ID ({id_pde_type})', f'OOD ({ood_pde_type})'])
+    axes[1].set_ylabel('Total Uncertainty', fontsize=12)
+    axes[1].set_title('Uncertainty Comparison', fontsize=14)
+    axes[1].grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment9_uncertainty_distribution.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Plot 2: ROC Curve
+    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+
+    ax.plot(fpr, tpr, linewidth=2, label=f'AUROC = {auroc:.4f}')
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random (AUROC = 0.5)')
+    ax.set_xlabel('False Positive Rate', fontsize=12)
+    ax.set_ylabel('True Positive Rate', fontsize=12)
+    ax.set_title(f'ROC Curve: Cross-PDE OOD Detection\n({id_pde_type} → {ood_pde_type})', fontsize=14)
+    ax.legend(fontsize=11, loc='lower right')
+    ax.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment9_roc_curve.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Plot 3: Uncertainty vs Error scatter (ID and OOD)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # ID
+    axes[0].scatter(id_uncertainties.flatten()[:1000], id_errors.flatten()[:1000], alpha=0.3, s=10)
+    axes[0].set_xlabel('Total Uncertainty', fontsize=12)
+    axes[0].set_ylabel('Absolute Error', fontsize=12)
+    axes[0].set_title(f'ID ({id_pde_type}): Uncertainty vs Error', fontsize=14)
+    axes[0].grid(alpha=0.3)
+
+    # OOD
+    axes[1].scatter(ood_uncertainties.flatten()[:1000], ood_errors.flatten()[:1000], alpha=0.3, s=10, color='red')
+    axes[1].set_xlabel('Total Uncertainty', fontsize=12)
+    axes[1].set_ylabel('Absolute Error', fontsize=12)
+    axes[1].set_title(f'OOD ({ood_pde_type}): Uncertainty vs Error', fontsize=14)
+    axes[1].grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(exp_dir / 'experiment9_uncertainty_vs_error.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"\n{'='*80}")
+    print("EXPERIMENT 9 COMPLETE!")
     print(f"Results saved to: {exp_dir}")
     print(f"AUROC: {auroc:.4f}")
     print(f"{'='*80}\n")
@@ -2554,10 +3364,14 @@ Examples:
     # Experiment-specific arguments
     parser.add_argument('--exp_id', type=int, default=None,
                         help='Experiment ID (for experiment mode): '
-                             '3=Epistemic vs Aleatoric, 4=OOD Detection, '
-                             '5=Regularization Comparison, 8=Ablation Studies')
+                             '3=Epistemic vs Aleatoric, 4=OOD Detection (Reynolds), '
+                             '5=Regularization Comparison, 8=Ablation Studies, '
+                             '9=Cross-PDE OOD Detection')
     parser.add_argument('--ood_data_path', type=str, default=None,
-                        help='Path to OOD test data (for experiment 4)')
+                        help='Path to OOD test data (for experiments 4 and 9)')
+    parser.add_argument('--ood_pde_type', type=str, default=None,
+                        choices=['burgers', 'advection', 'diffusion_reaction', 'navier_stokes', 'darcy'],
+                        help='PDE type for OOD data (for experiment 9)')
 
     # Regularization scheme selection (for evidential methods)
     parser.add_argument('--regularization', type=str, default=None,
@@ -2683,11 +3497,10 @@ Examples:
             raise ValueError("--method required for baseline mode. "
                            "Options: mc_dropout, ensemble, bayesian, standard_fno, mlp_ebm")
 
-        dataset = load_pde_data(args.data_path, args.pde_type, max_samples=500)
         output_dir = Path(args.output_dir) / f"baseline_{args.method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        train_baseline_method(args.method, dataset, config_dict, output_dir)
+        train_baseline_method(args.method, args.data_path, args.pde_type, config_dict, output_dir, max_samples=500)
 
     elif args.mode == 'experiment':
         # Run specific experiment
@@ -2703,7 +3516,8 @@ Examples:
                 data_path=args.data_path,
                 pde_type=args.pde_type,
                 config_dict=config_dict,
-                output_dir=args.output_dir
+                output_dir=args.output_dir,
+                reg_name=args.regularization
             )
         elif args.exp_id == 4:
             # OOD Detection experiment
@@ -2731,8 +3545,25 @@ Examples:
                 config_dict=config_dict,
                 output_dir=args.output_dir
             )
+        elif args.exp_id == 9:
+            # Cross-PDE OOD Detection experiment
+            if not args.ood_data_path:
+                raise ValueError("--ood_data_path required for experiment 9")
+            if not args.ood_pde_type:
+                raise ValueError("--ood_pde_type required for experiment 9")
+
+            experiment_cross_pde_ood_detection(
+                id_data_path=args.data_path,
+                ood_data_path=args.ood_data_path,
+                id_pde_type=args.pde_type,
+                ood_pde_type=args.ood_pde_type,
+                config_dict=config_dict,
+                output_dir=args.output_dir,
+                reg_name=args.regularization,
+                method_name=args.method if args.method else 'evidential'
+            )
         else:
-            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 4, 5, 8")
+            raise ValueError(f"Unknown experiment ID: {args.exp_id}. Available: 3, 4, 5, 8, 9")
 
 
 if __name__ == '__main__':

@@ -1804,28 +1804,44 @@ class FNOEnsemble:
             model.load_state_dict(checkpoint['model_state_dict'])
             print(f"Loaded ensemble member {i+1} from {checkpoint_path}")
     
+    def eval(self):
+        """Set all ensemble models to eval mode."""
+        for model in self.models:
+            model.eval()
+        return self
+
+    def train(self, mode=True):
+        """Set all ensemble models to train mode."""
+        for model in self.models:
+            model.train(mode)
+        return self
+
+    def forward(self, x, return_samples=False, return_uncertainty=True):
+        """Forward pass through ensemble (alias for predict)."""
+        return self.predict(x, return_samples=return_samples, return_uncertainty=return_uncertainty)
+
     def predict(self, x, return_samples=False, return_uncertainty=True):
         """
         Predict with ensemble.
         """
         predictions = []
-        
+
         for model in self.models:
             model.eval()
             with torch.no_grad():
                 pred = model(x)
                 predictions.append(pred)
-        
+
         predictions = torch.stack(predictions, dim=0)
-        
+
         if return_samples:
             return predictions
-        
+
         mean = predictions.mean(dim=0)
-        
+
         if not return_uncertainty:
             return mean
-        
+
         std = predictions.std(dim=0)
         return mean, std
     
