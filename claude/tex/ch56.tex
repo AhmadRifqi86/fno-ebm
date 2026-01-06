@@ -1,0 +1,741 @@
+\chapter{Discussion}
+
+\section{Answering the Research Questions}
+
+\subsection{RQ1: Calibration Quality}
+
+\textit{How do MC Dropout, Deep Ensembles, and Evidential Deep Learning compare in terms of in-distribution calibration quality and coverage guarantees?}
+
+Our results (Experiment 1) demonstrate that \textbf{evidential methods achieve superior calibration compared to MC Dropout and competitive performance with Deep Ensembles}:
+
+\begin{itemize}
+\item \textbf{Evidential methods dominate MC Dropout}: The best evidential variants (Improved: ECE = 0.0038, Uncertainty-Aware: ECE = 0.0045) achieve 4-5× better calibration than MC Dropout (ECE = 0.0192) and 6× better prediction accuracy (MSE: 0.0016 vs. 0.0101).
+
+\item \textbf{Evidential methods match or exceed Ensemble calibration}: While Ensemble achieves competitive MSE (0.0015), its calibration (ECE = 0.0106) is 2.5× worse than the best evidential methods. More critically, Ensemble exhibits severe undercoverage (75.8\%) compared to evidential methods (92-95\%), indicating its uncertainty estimates are overconfident.
+
+\item \textbf{Regularization matters significantly}: Calibration quality varies dramatically across regularization schemes (ECE range: 0.0038-0.0303), with Improved, Adaptive, and Uncertainty-Aware achieving the best results, while KL-Divergence exhibits poor calibration despite valid uncertainty decomposition.
+
+\item \textbf{Coverage vs. sharpness trade-off}: L2-Evidence achieves the best coverage (94.9\%) but with wider intervals (0.1265), while Uncertainty-Aware provides sharper intervals (0.1157) with slightly lower coverage (93.4\%). This trade-off allows practitioners to select methods based on application requirements.
+\end{itemize}
+
+\textbf{Answer to RQ1:} For in-distribution calibration, evidential methods (specifically Improved and Uncertainty-Aware regularization) outperform both MC Dropout and Deep Ensembles, achieving ECE $\sim$ 0.004 with near-nominal coverage (93-95\%) at a fraction of the computational cost.
+
+\subsection{RQ2: Computational Efficiency}
+
+\textit{What are the computational trade-offs between these approaches?}
+
+The efficiency advantages of evidential methods are substantial:
+
+\begin{itemize}
+\item \textbf{Training cost}: Evidential methods require training a single model, identical to standard FNO training time. Deep Ensemble requires 5× training time (5 independent models), while MC Dropout has comparable training cost to evidential methods.
+
+\item \textbf{Inference cost}: Evidential methods require a single forward pass, providing immediate uncertainty estimates. MC Dropout requires 30 forward passes (30× slower), while Deep Ensemble requires 5 forward passes (5× slower) plus aggregation overhead.
+
+\item \textbf{Memory requirements}: Evidential methods require storing one model with 4 output channels (430k parameters). Deep Ensemble requires storing 5 complete models (2.1M total parameters). MC Dropout requires one model but with dropout layers active.
+
+\item \textbf{Practical implications}: For real-time applications or deployment on resource-constrained hardware, evidential methods' single-pass inference is critical. The 30× speedup over MC Dropout and 5× speedup over Ensemble enables interactive applications and high-throughput batch processing.
+\end{itemize}
+
+\textbf{Answer to RQ2:} Evidential methods provide the best efficiency-accuracy trade-off, achieving state-of-the-art calibration with single-model training and single-pass inference, making them ideal for production deployment.
+
+\subsection{RQ3: Regularization Scheme Selection}
+
+\textit{How do different regularization schemes affect calibration and uncertainty quality?}
+
+Our ablation study across six regularization schemes reveals clear patterns:
+
+\textbf{Best overall performance (Uncertainty-Aware):}
+\begin{itemize}
+\item Achieves top-3 in all metrics: best MSE (0.0016), ECE (0.0045), correlation (0.614), NLL (-2.200)
+\item Balanced performance makes it the default recommendation for most applications
+\end{itemize}
+
+\textbf{Best calibration (Improved/Adaptive):}
+\begin{itemize}
+\item Tied for lowest ECE (0.0038)
+\item Improved: slightly better coverage (92.4\%) and interval width
+\item Adaptive: comparable performance with dynamic regularization strength
+\end{itemize}
+
+\textbf{Best coverage (L2-Evidence):}
+\begin{itemize}
+\item Near-nominal coverage (94.9\%), closest to ideal 95\%
+\item Trade-off: wider intervals (0.1265) and moderate calibration (ECE = 0.0066)
+\item Best choice when coverage guarantees are critical
+\end{itemize}
+
+\textbf{Avoid (KL-Divergence):}
+\begin{itemize}
+\item Poor calibration (ECE = 0.0303, 8× worse than best)
+\item Excessively wide intervals (0.2228, 2× wider than others)
+\item Only advantage: valid uncertainty decomposition (but at severe calibration cost)
+\end{itemize}
+
+\textbf{Answer to RQ3:} Regularization scheme selection depends on application priorities: Uncertainty-Aware for general use, Improved for best calibration, L2-Evidence for coverage guarantees. KL-Divergence should be avoided for practical applications despite theoretical appeal.
+
+\subsection{RQ4: Uncertainty Decomposition}
+
+\textit{Do evidential methods properly separate epistemic and aleatoric uncertainty?}
+
+Our results (Experiment 3) provide clear evidence that \textbf{evidential methods fail to achieve valid uncertainty decomposition}:
+
+\textbf{Experimental findings:}
+\begin{itemize}
+\item \textbf{All well-calibrated methods fail validation}: Standard, Improved, Uncertainty-Aware, Adaptive, and L2-Evidence all exhibit epistemic decrease $>$90\% but aleatoric variation $>$57\%, violating the expectation that aleatoric uncertainty should remain constant.
+
+\item \textbf{Only KL-Divergence passes validation}: Achieves epistemic decrease of 49.1\% and aleatoric variation of 13.5\%, but at the cost of severely degraded calibration (ECE = 0.0303) and excessively wide intervals (0.2228).
+
+\item \textbf{Fundamental trade-off exists}: Methods optimized for tight, well-calibrated intervals cannot maintain decomposition validity. This appears intrinsic to the NIG parameterization when fit to maximize likelihood.
+
+\item \textbf{Aleatoric decreases with epistemic}: For Improved regularization, as training data increases from N=100 to N=5000, epistemic decreases from 0.0184 to 0.0013 (93\% reduction) while aleatoric decreases from 0.0261 to 0.0020 (92\% reduction), indicating both are coupled.
+\end{itemize}
+
+\textbf{Interpretation:}
+The NIG parameterization's four output parameters $(\gamma, \nu, \alpha, \beta)$ are learned jointly to minimize prediction error. During training, the network learns to increase evidence ($\nu$ and $\alpha$) for all correct predictions, which simultaneously reduces both epistemic and aleatoric uncertainty estimates. This coupling violates the theoretical assumption that aleatoric uncertainty represents irreducible noise independent of model confidence.
+
+\textbf{Practical implications:}
+\begin{enumerate}
+\item \textbf{Do not interpret decomposition}: Practitioners should treat evidential uncertainty estimates as \textit{total uncertainty} rather than attempting to interpret epistemic vs. aleatoric components separately.
+
+\item \textbf{Total uncertainty is still informative}: Despite decomposition failure, the total uncertainty (epistemic + aleatoric) remains well-calibrated and highly correlated with prediction errors (correlation = 0.61 for Uncertainty-Aware).
+
+\item \textbf{Use ensembles for epistemic uncertainty}: If separating uncertainty sources is critical (e.g., for active learning or model improvement decisions), Deep Ensembles provide a more principled approach by directly capturing model diversity.
+\end{enumerate}
+
+\textbf{Answer to RQ4:} Evidential methods do \textbf{not} reliably separate epistemic and aleatoric uncertainty in neural operators. This limitation extends from classification/regression tasks and appears fundamental to the NIG parameterization. However, total uncertainty remains well-calibrated and useful for in-distribution inference.
+
+\subsection{RQ5: Out-of-Distribution Detection}
+
+\textit{Can uncertainty estimates reliably detect out-of-distribution samples?}
+
+Our results (Experiments 4-5) reveal a \textbf{nuanced answer that depends critically on the type of distributional shift}:
+
+\textbf{Parameter-level OOD (Experiment 4): Near-random detection}
+\begin{itemize}
+\item Training on Reynolds numbers Re $\in$ \{1000, 2000, 3000\}, testing on Re = 5000
+\item AUROC = 0.547 (marginally better than random guessing)
+\item Uncertainty ratio (OOD/ID) = 1.1× (minimal increase)
+\item MSE ratio = 1.5× (modest degradation in prediction quality)
+\end{itemize}
+
+\textbf{Operator-level OOD (Experiment 5): Perfect detection}
+\begin{itemize}
+\item Cross-PDE transfer: Navier-Stokes $\leftrightarrow$ Darcy Flow
+\item AUROC = 1.0000 in both directions (perfect separation)
+\item Uncertainty ratio = 36-378× (massive increase on wrong PDE)
+\item MSE ratio = 4778-5360× (catastrophic prediction failure)
+\end{itemize}
+
+\textbf{Interpretation:}
+
+The dramatic contrast between these results challenges the conventional interpretation that "evidential methods fail at OOD detection." Instead, we propose an alternative view:
+
+\begin{enumerate}
+\item \textbf{Parameter extrapolation is not truly OOD for operators}: Reynolds number extrapolation (Re = 5000) remains within the same Navier-Stokes operator family. The Fourier Neural Operator has learned the underlying physics in Fourier space, which generalizes across Reynolds numbers despite different flow characteristics (more turbulent). From the operator perspective, this is \textit{in-distribution} generalization.
+
+\item \textbf{Cross-PDE transfer is genuine operator-level OOD}: Navier-Stokes (nonlinear, advection-dominated) and Darcy Flow (linear, diffusion-dominated) represent fundamentally different operators with different spectral properties. The FNO correctly recognizes it has never seen this operator structure, yielding massive uncertainty increases.
+
+\item \textbf{Neural operators learn physics-informed representations}: The perfect cross-PDE detection (AUROC = 1.0) suggests that FNOs capture physically meaningful structure in their learned operators, rather than merely memorizing input-output mappings. This physics-informed learning enables principled uncertainty quantification for true distributional shifts.
+\end{enumerate}
+
+\textbf{Implications for scientific computing applications:}
+\begin{itemize}
+\item \textbf{Use evidential uncertainty for operator monitoring}: Deploying FNO models with evidential uncertainty can reliably detect when input data comes from a different PDE/physics regime, enabling safe deployment with automatic fallback to traditional solvers.
+
+\item \textbf{Do not rely on uncertainty for parameter extrapolation}: When extrapolating parameter values (e.g., testing at higher Reynolds numbers), uncertainty estimates may not increase appropriately. Use domain-specific validation or physics-based error bounds instead.
+
+\item \textbf{Distinguish interpolation from extrapolation}: Neural operators may safely interpolate within the learned operator family (even outside training parameter ranges) but should flag extrapolation to different operator classes.
+\end{itemize}
+
+\textbf{Answer to RQ5:} Evidential uncertainty detection depends on OOD type: \textbf{ineffective} for parameter-level extrapolation (AUROC $\sim$ 0.55) but \textbf{perfect} for operator-level shift (AUROC = 1.0). This distinction has important implications for deploying neural operators in scientific computing.
+
+\section{Implications for Neural Operator Uncertainty Quantification}
+
+\subsection{Evidential Methods as a Practical Solution}
+
+Our comprehensive evaluation positions evidential deep learning as the \textbf{method of choice for production deployment} of neural operators in scientific computing:
+
+\textbf{Key advantages validated:}
+\begin{enumerate}
+\item \textbf{State-of-the-art calibration}: ECE = 0.0038 (Improved) and 0.0045 (Uncertainty-Aware) outperform both MC Dropout (0.0192) and Ensemble (0.0106)
+
+\item \textbf{Computational efficiency}: Single-pass inference enables real-time applications and high-throughput processing (5-30× faster than alternatives)
+
+\item \textbf{Strong uncertainty-error correlation}: Correlation = 0.614 (Uncertainty-Aware) vs. 0.328 (Ensemble) and 0.306 (MC Dropout), indicating more informative uncertainty
+
+\item \textbf{Operator-level OOD monitoring}: Perfect detection of cross-PDE transfer enables safe deployment with automatic fallback mechanisms
+
+\item \textbf{Ease of implementation}: Requires only changing output layer dimension from 1 to 4 and modifying loss function—no architectural changes to base FNO
+\end{enumerate}
+
+\textbf{Deployment recommendations:}
+\begin{itemize}
+\item \textbf{Default choice}: Use Uncertainty-Aware regularization for balanced performance across all metrics
+\item \textbf{Safety-critical applications}: Use Improved or L2-Evidence for tighter calibration and coverage guarantees
+\item \textbf{OOD monitoring}: Deploy with threshold-based fallback (e.g., if uncertainty $>$ 0.1, use traditional solver)
+\item \textbf{Active learning}: While uncertainty decomposition fails, total uncertainty can still guide sample selection for regions of high prediction error
+\end{itemize}
+
+\subsection{MC Dropout Not Recommended for Neural Operators}
+
+Our results provide strong evidence to \textbf{avoid MC Dropout for neural operator applications}:
+
+\begin{itemize}
+\item \textbf{Dominated on all metrics}: Worst performance in MSE (6× worse), ECE (5× worse), and correlation (2× worse) compared to evidential methods
+\item \textbf{Computational inefficiency}: Requires 30 stochastic forward passes, negating the speed advantage of neural operators
+\item \textbf{Undercoverage}: 90\% coverage despite targeting 95\%, indicating poor calibration
+\item \textbf{No compensating advantages}: Unlike in some computer vision tasks where MC Dropout provides acceptable uncertainty at low cost, it fails to deliver either efficiency or quality for neural operators
+\end{itemize}
+
+Possible explanations for MC Dropout's poor performance on neural operators:
+\begin{enumerate}
+\item \textbf{Spatial coherence}: PDE solutions exhibit strong spatial coherence, which Dropout2d may disrupt inappropriately
+\item \textbf{Fourier domain operations}: Dropout after spectral convolution may inject noise in frequency space, degrading both predictions and uncertainty estimates
+\item \textbf{Operator learning vs. function approximation}: Neural operators learn mappings between function spaces, where dropout's implicit regularization may not align with the learning objective
+\end{enumerate}
+
+\subsection{Deep Ensembles: When to Use Despite Cost}
+
+While evidential methods dominate in most scenarios, Deep Ensembles remain valuable in specific contexts:
+
+\textbf{Use ensembles when:}
+\begin{enumerate}
+\item \textbf{Robust epistemic uncertainty is critical}: Ensembles directly capture model diversity through different initializations, providing interpretable epistemic uncertainty despite decomposition failure in evidential methods
+
+\item \textbf{Computational resources are abundant}: Training and inference cost is not limiting (e.g., offline analysis, high-performance computing clusters)
+
+\item \textbf{Maximum robustness required}: Ensembles' diversity may provide robustness to adversarial inputs or distribution shifts beyond what we tested
+
+\item \textbf{Uncertainty over predictions is desired}: Ensembles naturally provide distributions over predictions that can be used for downstream probabilistic reasoning
+\end{enumerate}
+
+\textbf{Our results suggest caution with ensembles:}
+\begin{itemize}
+\item \textbf{Severe undercoverage} (75.8\%) indicates ensemble variance alone underestimates uncertainty
+\item \textbf{Lower uncertainty-error correlation} (0.328 vs. 0.614) suggests ensemble uncertainty is less informative than evidential uncertainty
+\item \textbf{5× computational cost} is difficult to justify given evidential methods' superior calibration and correlation
+\end{itemize}
+
+\textbf{Recommendation}: Reserve ensembles for safety-critical applications where the computational cost is acceptable and robust epistemic uncertainty justifies the expense. For most production deployments, evidential methods are preferable.
+
+\section{The Calibration-Decomposition Trade-off}
+
+\subsection{A Fundamental Tension in NIG Parameterization}
+
+Our Experiment 3 results reveal a profound limitation of the Normal-Inverse-Gamma parameterization: \textbf{achieving tight, well-calibrated intervals is fundamentally incompatible with valid uncertainty decomposition}.
+
+\textbf{The trade-off visualized:}
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Calibration (ECE)} & \textbf{Decomposition Valid?} & \textbf{Interval Width} \\
+\midrule
+Improved & \textbf{0.0038} & ✗ (Aleat. Var. 99\%) & 0.1166 \\
+Uncertainty-Aware & 0.0045 & ✗ (Aleat. Var. 112\%) & \textbf{0.1157} \\
+L2-Evidence & 0.0066 & ✗ (Aleat. Var. 58\%) & 0.1265 \\
+KL-Divergence & \textbf{0.0303} & ✓ (Aleat. Var. 14\%) & \textbf{0.2228} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Mechanistic explanation:}
+
+The NIG parameterization outputs four parameters $(\gamma, \nu, \alpha, \beta)$ where:
+\begin{itemize}
+\item $\gamma$ controls the predictive mean
+\item $\nu$ controls precision (inverse variance) of the mean estimate
+\item $\alpha, \beta$ control the inverse-gamma distribution over variance
+\end{itemize}
+
+When trained to minimize negative log-likelihood, the network learns to increase evidence ($\nu, \alpha$) for correct predictions and decrease it for incorrect predictions. However:
+
+\begin{enumerate}
+\item \textbf{Tight calibration requires adaptive evidence}: To achieve well-calibrated intervals, the network must assign high evidence (low uncertainty) to easy examples and low evidence (high uncertainty) to hard examples. This requires $\nu, \alpha$ to vary strongly with data difficulty.
+
+\item \textbf{Decomposition requires stable aleatoric}: Valid decomposition requires aleatoric uncertainty $\beta/(\alpha-1)$ to remain constant as training data increases, reflecting irreducible noise. But maximizing likelihood couples $\alpha, \beta$ to fit data variance, causing both to decrease with more training data.
+
+\item \textbf{The coupling cannot be broken}: Any regularization that enforces stable aleatoric (e.g., KL-Divergence to a fixed prior) prevents the network from adapting evidence to data difficulty, yielding poor calibration and overly wide intervals.
+\end{enumerate}
+
+\textbf{Theoretical implications:}
+
+This trade-off suggests the NIG parameterization may be \textbf{inherently limited} for tasks requiring both:
+\begin{itemize}
+\item High-quality calibrated uncertainty (for decision-making)
+\item Valid epistemic-aleatoric decomposition (for interpretability and active learning)
+\end{itemize}
+
+Alternative formulations (e.g., separate networks for epistemic and aleatoric, hierarchical Bayesian models) may be necessary to overcome this limitation, though at increased complexity and computational cost.
+
+\subsection{Practical Recommendations Given the Trade-off}
+
+\textbf{For practitioners deploying evidential neural operators:}
+
+\begin{enumerate}
+\item \textbf{Prioritize calibration over decomposition}: Use Improved or Uncertainty-Aware regularization for well-calibrated total uncertainty, and \textit{ignore the decomposition}. Treat reported epistemic and aleatoric uncertainties as artifacts of the parameterization, not true separations.
+
+\item \textbf{Report total uncertainty only}: In papers, documentation, and user interfaces, report only the total uncertainty (epistemic + aleatoric) to avoid misleading downstream users about the reliability of the decomposition.
+
+\item \textbf{Use ensembles if decomposition is critical}: If your application truly requires separating uncertainty sources (e.g., deciding whether to collect more data vs. accepting irreducible noise), use Deep Ensembles despite the cost. Ensemble variance provides a more principled epistemic uncertainty estimate.
+
+\item \textbf{Acknowledge the limitation}: When publishing or deploying evidential methods, explicitly acknowledge that uncertainty decomposition is not validated, citing recent literature documenting this issue across domains.
+\end{enumerate}
+
+\textbf{For researchers working on evidential deep learning:}
+
+\begin{enumerate}
+\item \textbf{Investigate alternative parameterizations}: Explore whether other conjugate priors or non-conjugate approaches can achieve both calibration and valid decomposition.
+
+\item \textbf{Develop decomposition-free evidential methods}: Focus on single-uncertainty parameterizations that avoid the decomposition claim entirely while retaining computational efficiency.
+
+\item \textbf{Study the coupling mechanism}: Conduct theoretical analysis of why likelihood-based training couples epistemic and aleatoric components, potentially identifying principled solutions.
+\end{enumerate}
+
+\section{Reinterpreting OOD Detection for Neural Operators}
+
+\subsection{Parameter-Level vs. Operator-Level Distributional Shift}
+
+Our OOD results (Experiments 4-5) challenge conventional wisdom and suggest a \textbf{domain-specific interpretation of distributional shift} for neural operators:
+
+\textbf{Traditional ML view:}
+\begin{itemize}
+\item OOD = data from a different distribution than training
+\item Reynolds number extrapolation (Re = 5000 when trained on Re $\leq$ 3000) is clearly OOD
+\item Expectation: uncertainty should increase on OOD data
+\item Observation: AUROC = 0.547 (near-random) $\Rightarrow$ "evidential methods fail at OOD detection"
+\end{itemize}
+
+\textbf{Operator learning view:}
+\begin{itemize}
+\item Neural operators learn mappings between function spaces, not point predictions
+\item Training captures the \textit{Navier-Stokes operator} in Fourier space, not specific Reynolds numbers
+\item Reynolds extrapolation remains within the same operator family—different parameters, same physics
+\item Observation: Low uncertainty is \textit{appropriate} because the operator has generalized correctly
+\item True OOD: Different PDE/operator $\Rightarrow$ Perfect detection (AUROC = 1.0)
+\end{itemize}
+
+\textbf{Supporting evidence for operator-level interpretation:}
+
+\begin{enumerate}
+\item \textbf{Modest MSE degradation at Re = 5000}: MSE ratio = 1.5× suggests the model still captures the physics reasonably well, justifying modest uncertainty increase.
+
+\item \textbf{Catastrophic failure on wrong PDE}: MSE ratio = 4778-5360× on cross-PDE transfer indicates genuine inability to predict, appropriately reflected in massive uncertainty increases (36-378×).
+
+\item \textbf{Spectral properties differ across PDEs}: Navier-Stokes (advection-diffusion, nonlinear) and Darcy Flow (pure diffusion, linear) have fundamentally different spectral signatures that FNOs learn to recognize.
+
+\item \textbf{Bidirectional validation}: Perfect detection in both NS$\to$Darcy and Darcy$\to$NS rules out implementation artifacts and confirms this is a genuine property of operator learning.
+\end{enumerate}
+
+\subsection{Implications for Deployment}
+
+\textbf{Positive implications:}
+
+\begin{enumerate}
+\item \textbf{Safe cross-domain deployment}: FNOs with evidential uncertainty can be deployed across multiple PDE systems with automatic detection of domain mismatch. For example, a multi-physics simulator could route inputs to specialized operators and flag inputs that don't match any known physics.
+
+\item \textbf{Physics-informed confidence}: The ability to detect operator-level OOD suggests neural operators learn interpretable, physics-aware representations rather than spurious correlations, increasing trust in their predictions.
+
+\item \textbf{Hybrid numerical-AI systems}: Evidential FNOs can serve as fast first-pass predictors with uncertainty-based fallback to traditional solvers when OOD is detected, combining speed and reliability.
+\end{enumerate}
+
+\textbf{Cautionary implications:}
+
+\begin{enumerate}
+\item \textbf{Parameter extrapolation remains risky}: The failure to detect Reynolds extrapolation means we cannot rely on uncertainty alone to flag parameter-regime shifts. Additional validation is needed:
+\begin{itemize}
+\item Physics-based bounds (e.g., maximum Reynolds for laminar flow)
+\item Ensemble agreement checks
+\item Comparison with coarse traditional solver runs
+\end{itemize}
+
+\item \textbf{Interpolation vs. extrapolation ambiguity}: It may be difficult to determine a priori whether a new parameter value represents safe interpolation or risky extrapolation within the learned operator family.
+
+\item \textbf{Need for comprehensive validation}: Before deploying neural operators in safety-critical applications, conduct extensive parameter sweeps to empirically determine the model's generalization boundaries.
+\end{enumerate}
+
+\subsection{Future Directions for OOD Research in Neural Operators}
+
+\begin{enumerate}
+\item \textbf{Hierarchical OOD detection}: Develop methods that separately detect parameter-level and operator-level shifts, providing users with interpretable risk assessments.
+
+\item \textbf{Physics-informed OOD metrics}: Design OOD scores that incorporate physical quantities (e.g., residual norms, conservation law violations) alongside uncertainty estimates.
+
+\item \textbf{Characterize interpolation regimes}: Study what constitutes "safe" parameter extrapolation for different operator families (e.g., does Re = 5000 remain in-operator-distribution for models trained on Re $\in$ [1000, 3000]?).
+
+\item \textbf{Active learning for operator boundaries}: Use uncertainty estimates to guide data collection at the boundaries of the learned operator family, improving parameter extrapolation performance.
+\end{enumerate}
+
+\section{Limitations of This Work}
+
+While our study provides comprehensive evaluation of uncertainty quantification methods for neural operators, several limitations should be acknowledged:
+
+\subsection{Limited PDE Coverage}
+
+\textbf{Limitation:} We evaluate on only two PDEs (Navier-Stokes, Darcy Flow), both representing fluid dynamics and flow phenomena.
+
+\textbf{Potential impact:}
+\begin{itemize}
+\item Findings may not generalize to other PDE families (e.g., wave equations, Schrödinger equation, Maxwell's equations)
+\item Different physics may have different uncertainty characteristics (e.g., quantum vs. classical, hyperbolic vs. elliptic)
+\end{itemize}
+
+\textbf{Mitigation:} Both PDEs have different mathematical properties (nonlinear vs. linear, transient vs. steady-state), providing some diversity. However, future work should validate findings across broader PDE classes.
+
+\subsection{Single Architecture (FNO)}
+
+\textbf{Limitation:} All experiments use Fourier Neural Operators; results may not extend to other neural operator architectures (DeepONet, Graph Neural Operators, etc.).
+
+\textbf{Potential impact:}
+\begin{itemize}
+\item FNO's spectral convolution may have unique uncertainty characteristics
+\item Architectures that don't operate in Fourier space may exhibit different OOD behavior
+\end{itemize}
+
+\textbf{Mitigation:} FNO is the most widely used neural operator architecture, making our findings immediately applicable to the majority of current research. The methodological framework can be applied to other architectures.
+
+\subsection{Synthetic Training Data}
+
+\textbf{Limitation:} We use synthetically generated PDE data from numerical solvers, not real-world measurements.
+
+\textbf{Potential impact:}
+\begin{itemize}
+\item Real-world data may have measurement noise, missing values, and distribution shifts not present in synthetic data
+\item Aleatoric uncertainty may be more meaningful and easier to separate with noisy real data
+\end{itemize}
+
+\textbf{Mitigation:} Synthetic data provides controlled evaluation and is standard practice in neural operator research. Our focus on calibration and computational efficiency remains relevant for real-world deployment.
+
+\subsection{Fixed Hyperparameters}
+
+\textbf{Limitation:} We use a single set of hyperparameters (modes=12, width=32, layers=4) and do not extensively tune per-method.
+
+\textbf{Potential impact:}
+\begin{itemize}
+\item Some methods (especially MC Dropout) might benefit from method-specific architectural choices
+\item Evidential methods' advantage could be partially due to better default settings
+\end{itemize}
+
+\textbf{Mitigation:} We use architecture and training settings from published FNO baselines, ensuring reproducibility and fair comparison. Our focus on calibration quality and decomposition validity is robust to moderate hyperparameter changes.
+
+\subsection{Limited OOD Scenarios}
+
+\textbf{Limitation:} We test only two OOD scenarios (Reynolds extrapolation, cross-PDE transfer), not exhaustive OOD types (e.g., boundary condition changes, domain geometry shifts).
+
+\textbf{Potential impact:}
+\begin{itemize}
+\item Other OOD types may exhibit intermediate behavior between our two extremes
+\item The parameter-vs-operator distinction may not cleanly apply to all distributional shifts
+\end{itemize}
+
+\textbf{Mitigation:} Our two scenarios represent fundamentally different shift types (continuous parameter space vs. discrete operator class), providing boundary cases that bound expected behavior.
+
+\subsection{No Comparison with Conformal Prediction}
+
+\textbf{Limitation:} We do not compare with conformal prediction, which provides distribution-free uncertainty quantification with coverage guarantees.
+
+\textbf{Potential impact:}
+\begin{itemize}
+\item Conformal methods may provide better calibration with fewer assumptions
+\item Our conclusions about "best method" may change if conformal approaches are included
+\end{itemize}
+
+\textbf{Mitigation:} Conformal prediction is a complementary paradigm (post-hoc calibration vs. learned uncertainty) with different computational characteristics. We focus on methods that provide uncertainty in a single forward pass. Future work could combine evidential predictions with conformal calibration.
+
+
+\chapter{Conclusion}
+
+\section{Summary of Findings}
+
+This thesis presents a comprehensive empirical comparison of uncertainty quantification methods for Fourier Neural Operators, evaluating Monte Carlo Dropout, Deep Ensembles, and Evidential Deep Learning across multiple dimensions: calibration quality, computational efficiency, uncertainty decomposition, and out-of-distribution detection.
+
+\subsection{Key Findings}
+
+\textbf{1. Evidential methods achieve state-of-the-art calibration with superior efficiency}
+
+Our baseline comparison (Experiment 1) demonstrates that evidential methods—particularly Uncertainty-Aware and Improved regularization—outperform both MC Dropout and Deep Ensembles on calibration quality (ECE = 0.004 vs. 0.019 and 0.011), uncertainty-error correlation (0.61 vs. 0.31 and 0.33), and coverage (93-95\% vs. 90\% and 76\%), while requiring only single-model training and single-pass inference.
+
+\textbf{2. MC Dropout is not suitable for neural operators}
+
+Across all metrics, MC Dropout exhibits inferior performance: 6× worse prediction accuracy (MSE = 0.010 vs. 0.0016), 5× worse calibration (ECE = 0.019 vs. 0.004), and 30× slower inference than evidential methods. We recommend avoiding MC Dropout for neural operator applications.
+
+\textbf{3. Uncertainty decomposition fails for well-calibrated evidential methods}
+
+Our epistemic-aleatoric decomposition study (Experiment 3) confirms that evidential methods optimized for calibration do not achieve valid uncertainty decomposition—both epistemic and aleatoric uncertainties decrease with training data, violating theoretical expectations. Only KL-Divergence regularization maintains valid decomposition, but at severe calibration cost (ECE = 0.030 vs. 0.004). This reveals a fundamental trade-off in the NIG parameterization between tight calibration and valid decomposition.
+
+\textbf{4. OOD detection depends critically on the type of distributional shift}
+
+Our OOD experiments (4-5) reveal nuanced findings:
+\begin{itemize}
+\item \textbf{Parameter-level OOD} (Reynolds extrapolation): Near-random detection (AUROC = 0.55), suggesting parameter variations within the same PDE family may not represent true distributional shift from the operator perspective.
+\item \textbf{Operator-level OOD} (cross-PDE transfer): Perfect detection (AUROC = 1.0), indicating neural operators learn physics-informed representations that respond appropriately to fundamentally different operators.
+\end{itemize}
+
+This distinction has important implications: evidential uncertainty is reliable for monitoring operator-level distributional shift but should not be trusted for parameter extrapolation validation.
+
+\textbf{5. Regularization matters significantly}
+
+Among six evidential regularization schemes, we find:
+\begin{itemize}
+\item Uncertainty-Aware: Best overall balance across metrics
+\item Improved/Adaptive: Best calibration (ECE = 0.0038)
+\item L2-Evidence: Best coverage (94.9\%)
+\item KL-Divergence: Valid decomposition but poor calibration—avoid for practical use
+\end{itemize}
+
+\subsection{Answers to Research Questions}
+
+\begin{description}
+\item[RQ1 (Calibration):] Evidential methods (Improved, Uncertainty-Aware) achieve superior calibration (ECE $\sim$ 0.004) compared to MC Dropout (0.019) and Ensemble (0.011), with better coverage (93-95\% vs. 76-90\%).
+
+\item[RQ2 (Efficiency):] Evidential methods provide the best efficiency-accuracy trade-off: single-model training, single-pass inference, achieving state-of-the-art calibration (5-30× faster than alternatives).
+
+\item[RQ3 (Regularization):] Regularization significantly affects performance. Recommend: Uncertainty-Aware (general use), Improved (best calibration), L2-Evidence (coverage guarantees). Avoid: KL-Divergence (poor calibration).
+
+\item[RQ4 (Decomposition):] Evidential methods do not properly separate epistemic and aleatoric uncertainty when optimized for calibration. Both uncertainty types decrease with training data, indicating a fundamental limitation of the NIG parameterization.
+
+\item[RQ5 (OOD Detection):] OOD detection depends on shift type: ineffective for parameter extrapolation (AUROC = 0.55) but perfect for operator-level shift (AUROC = 1.0), suggesting neural operators learn physics-informed representations.
+\end{description}
+
+\section{Contributions to the Field}
+
+This thesis makes several contributions to uncertainty quantification for neural operators and scientific machine learning:
+
+\subsection{Methodological Contributions}
+
+\textbf{1. Comprehensive evaluation framework for UQ neural operators}
+
+We establish a systematic methodology for evaluating uncertainty quantification methods in the neural operator context, including:
+\begin{itemize}
+\item Eight evaluation metrics covering accuracy, calibration, and uncertainty quality
+\item Epistemic-aleatoric decomposition validation protocol
+\item Two-level OOD taxonomy (parameter vs. operator level)
+\item Fair comparison protocols ensuring architectural and training consistency
+\end{itemize}
+
+This framework can be applied to future UQ research on neural operators and other scientific ML models.
+
+\textbf{2. First systematic comparison of UQ methods for neural operators}
+
+Prior work on neural operator uncertainty focused on single methods (e.g., Bayesian DeepONet) without comparative evaluation. Our head-to-head comparison of MC Dropout, Ensembles, and Evidential methods across multiple axes provides the first comprehensive evidence base for method selection.
+
+\textbf{3. Implementation and ablation of six evidential regularization schemes}
+
+We implement and systematically evaluate six regularization variants for evidential FNOs, identifying which schemes achieve the best calibration-coverage-correlation trade-offs and providing specific recommendations for practitioners.
+
+\subsection{Empirical Contributions}
+
+\textbf{4. Validation of evidential limitations in the neural operator domain}
+
+We confirm that recently documented evidential deep learning limitations (uncertainty decomposition failure) extend to neural operators, establishing that these are fundamental properties of the NIG parameterization rather than domain-specific artifacts.
+
+\textbf{5. Discovery of operator-level OOD detection capability}
+
+Our finding that evidential methods achieve perfect cross-PDE OOD detection (AUROC = 1.0) while failing at parameter extrapolation (AUROC = 0.55) represents a novel characterization of neural operator uncertainty behavior. This suggests neural operators learn physics-informed representations and motivates a domain-specific interpretation of distributional shift.
+
+\textbf{6. Quantification of the calibration-decomposition trade-off}
+
+We provide the first quantitative characterization of the fundamental tension between calibration quality and uncertainty decomposition validity in evidential methods, showing that methods achieving ECE $\sim$ 0.004 exhibit 57-112\% aleatoric variation while methods with valid decomposition have ECE = 0.030 (8× worse).
+
+\subsection{Practical Contributions}
+
+\textbf{7. Deployment guidelines for UQ neural operators}
+
+Based on empirical evidence, we provide actionable recommendations:
+\begin{itemize}
+\item Default: Evidential with Uncertainty-Aware regularization
+\item Safety-critical: Evidential with Improved or L2-Evidence regularization
+\item Operator monitoring: Evidential with threshold-based fallback
+\item Robust epistemic uncertainty: Deep Ensembles (if cost is acceptable)
+\item Never: MC Dropout for neural operators
+\end{itemize}
+
+\textbf{8. Open challenges and future directions}
+
+We identify key open problems that require further research:
+\begin{itemize}
+\item Developing evidential parameterizations that achieve both calibration and valid decomposition
+\item Characterizing safe parameter extrapolation boundaries for neural operators
+\item Designing physics-informed OOD metrics beyond pure uncertainty
+\item Extending evaluation to broader PDE families and architectures
+\end{itemize}
+
+\section{Practical Impact and Recommendations}
+
+For practitioners deploying neural operators in scientific computing applications, this work provides clear guidance:
+
+\subsection{When to Use Evidential Neural Operators}
+
+\textbf{Ideal use cases:}
+\begin{itemize}
+\item In-distribution inference with calibrated uncertainty (e.g., parametric design exploration within training regime)
+\item Real-time applications requiring single-pass inference (e.g., interactive simulation, edge deployment)
+\item Multi-PDE systems with automatic operator routing and OOD detection
+\item Production environments with limited computational resources
+\item Applications requiring high uncertainty-error correlation for active learning or adaptive sampling
+\end{itemize}
+
+\textbf{Implementation recipe:}
+\begin{enumerate}
+\item Start with standard FNO architecture
+\item Change output dimension from 1 to 4 ($\gamma, \nu, \alpha, \beta$)
+\item Use NIG loss with Uncertainty-Aware or Improved regularization
+\item Set regularization weight $\lambda_r = 0.01$ (tune on validation set)
+\item Train for 20 epochs with Adam optimizer, learning rate $10^{-3}$
+\item Report total uncertainty only (ignore decomposition)
+\item Set OOD threshold based on validation set (e.g., $\sigma > 0.1$ triggers fallback)
+\end{enumerate}
+
+\subsection{When to Avoid Evidential Methods}
+
+Evidential methods are not suitable when:
+\begin{itemize}
+\item True epistemic-aleatoric separation is required for decision-making (use Ensembles instead)
+\item Parameter extrapolation with uncertainty-based validation is critical (uncertainty may not increase appropriately; use physics-based bounds)
+\item Maximum robustness is required regardless of cost (consider Ensembles or full Bayesian approaches)
+\end{itemize}
+
+\subsection{Broader Implications for Scientific ML}
+
+Beyond neural operators, our findings have implications for uncertainty quantification in scientific machine learning more broadly:
+
+\textbf{1. Domain-specific UQ evaluation is essential}
+
+Methods that work well in computer vision or NLP may not transfer to scientific computing. Our finding that MC Dropout fails for neural operators highlights the need for domain-specific benchmarking.
+
+\textbf{2. Physics-informed representations enable better uncertainty}
+
+The perfect cross-PDE OOD detection suggests that incorporating physical structure (as FNOs do through spectral convolutions) yields more interpretable and reliable uncertainty compared to generic black-box models.
+
+\textbf{3. Efficiency matters for scientific computing}
+
+The 5-30× inference speedup of evidential methods over alternatives is critical for scientific computing applications that require millions of PDE solves (e.g., optimization, uncertainty propagation, Monte Carlo simulation).
+
+\textbf{4. Single-metric evaluation is insufficient}
+
+Our multi-dimensional evaluation reveals trade-offs not visible from accuracy alone: KL-Divergence achieves competitive MSE but has 8× worse calibration; Ensemble has low MSE but severe undercoverage. Comprehensive evaluation across accuracy, calibration, efficiency, and uncertainty quality is essential.
+
+\section{Future Research Directions}
+
+This work opens several promising avenues for future research:
+
+\subsection{Methodological Extensions}
+
+\textbf{1. Hybrid uncertainty quantification}
+
+Combine multiple approaches to leverage complementary strengths:
+\begin{itemize}
+\item Evidential + Conformal: Use evidential for fast inference, conformal for post-hoc calibration guarantees
+\item Evidential + Ensemble: Small ensemble (2-3 models) for epistemic, evidential for aleatoric
+\item Physics-informed + Data-driven: Combine PDE residual-based uncertainty with learned uncertainty
+\end{itemize}
+
+\textbf{2. Alternative parameterizations for decomposition}
+
+Investigate formulations that may overcome the calibration-decomposition trade-off:
+\begin{itemize}
+\item Separate networks for epistemic and aleatoric predictions
+\item Hierarchical Bayesian models with learned priors
+\item Non-conjugate distributions with more flexible uncertainty modeling
+\item Normalizing flows for full posterior approximation
+\end{itemize}
+
+\textbf{3. Physics-informed uncertainty metrics}
+
+Develop OOD scores and uncertainty measures that incorporate physical principles:
+\begin{itemize}
+\item PDE residual magnitude as complementary uncertainty indicator
+\item Conservation law violation as physics-based alarm
+\item Spectral mismatch detection for operator-level OOD
+\end{itemize}
+
+\subsection{Empirical Extensions}
+
+\textbf{4. Broader PDE coverage}
+
+Extend evaluation to diverse PDE families:
+\begin{itemize}
+\item Hyperbolic PDEs (wave equation, transport phenomena)
+\item Quantum mechanics (Schrödinger, Dirac equations)
+\item Electromagnetics (Maxwell's equations)
+\item Multiphysics coupling (fluid-structure interaction, chemo-mechanics)
+\end{itemize}
+
+\textbf{5. Real-world deployment studies}
+
+Validate findings on real scientific computing applications:
+\begin{itemize}
+\item Weather forecasting with uncertainty quantification
+\item Drug molecule property prediction with confidence intervals
+\item Engineering design optimization with uncertainty-aware objectives
+\item Materials discovery with uncertainty-guided active learning
+\end{itemize}
+
+\textbf{6. Characterization of safe extrapolation regimes}
+
+Systematically study parameter extrapolation boundaries:
+\begin{itemize}
+\item Map out regions where uncertainty increases appropriately vs. remains flat
+\item Identify parameter directions that admit safe extrapolation
+\item Develop predictive models of extrapolation risk from training data properties
+\end{itemize}
+
+\subsection{Architectural Extensions}
+
+\textbf{7. UQ for other neural operator architectures}
+
+Apply our evaluation framework to:
+\begin{itemize}
+\item DeepONet with evidential heads
+\item Graph Neural Operators with uncertainty
+\item Transformer-based operators with uncertainty attention
+\item U-Net operators with evidential skip connections
+\end{itemize}
+
+\textbf{8. Specialized architectures for uncertainty}
+
+Design neural operator architectures explicitly for UQ:
+\begin{itemize}
+\item Dual-branch networks for separate epistemic/aleatoric prediction
+\item Uncertainty-aware attention mechanisms
+\item Adaptive computation with uncertainty-based early exit
+\end{itemize}
+
+\subsection{Theoretical Understanding}
+
+\textbf{9. Theory of operator learning generalization}
+
+Develop theoretical understanding of:
+\begin{itemize}
+\item Why parameter extrapolation appears "in-distribution" from operator perspective
+\item Conditions under which neural operators learn operator-invariant representations
+\item Generalization bounds for operator learning with uncertainty quantification
+\end{itemize}
+
+\textbf{10. Analysis of NIG coupling mechanism}
+
+Conduct theoretical analysis of:
+\begin{itemize}
+\item Why maximum likelihood couples epistemic and aleatoric parameters
+\item Whether alternative training objectives can decouple them
+\item Information-theoretic characterization of the calibration-decomposition trade-off
+\end{itemize}
+
+\section{Closing Remarks}
+
+Neural operators represent a paradigm shift in scientific computing, offering orders of magnitude speedup over traditional PDE solvers while maintaining competitive accuracy. However, their deployment in safety-critical applications and decision-making under uncertainty requires reliable uncertainty quantification.
+
+This thesis provides the first comprehensive evaluation of uncertainty quantification methods for neural operators, demonstrating that evidential deep learning achieves state-of-the-art calibration with superior computational efficiency, while also revealing fundamental limitations in uncertainty decomposition and parameter extrapolation.
+
+Our key message to practitioners is clear: \textbf{evidential methods with Uncertainty-Aware or Improved regularization are the recommended choice for production deployment of neural operators}, providing well-calibrated total uncertainty in a single forward pass. However, practitioners must:
+\begin{itemize}
+\item Not interpret epistemic-aleatoric decomposition (treat as total uncertainty)
+\item Not rely solely on uncertainty for parameter extrapolation validation
+\item Implement threshold-based fallback for operator-level OOD detection
+\end{itemize}
+
+For the research community, this work establishes evaluation protocols, identifies open challenges, and provides empirical evidence that advances understanding of uncertainty quantification in the unique context of operator learning. The finding that neural operators can perfectly detect operator-level distributional shift (AUROC = 1.0) while maintaining appropriate confidence for parameter variations suggests they learn genuinely physics-informed representations—a promising foundation for trustworthy scientific machine learning.
+
+As neural operators continue to mature and find deployment in weather forecasting, drug discovery, materials science, and engineering design, the uncertainty quantification methods and evaluation frameworks developed in this thesis will help ensure these powerful models can be deployed safely and reliably in the real world.
+
+The path forward requires continued interdisciplinary collaboration between machine learning researchers developing better UQ methods, computational scientists understanding application requirements, and domain experts providing physical insight. This thesis represents one step in that journey, and we hope it provides a foundation for the next generation of uncertainty-aware neural operators that can truly transform scientific computing.

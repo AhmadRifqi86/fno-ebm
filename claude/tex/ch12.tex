@@ -249,18 +249,58 @@ Despite extensive work on UQ for standard neural networks, only a few recent pap
 
 \subsection{Evaluation Metrics for Uncertainty Quantification}
 
-We briefly review key metrics for evaluating UQ methods:
+We evaluate UQ methods using metrics that assess predictive accuracy, calibration quality, and uncertainty informativeness:
 
-\textbf{Expected Calibration Error (ECE):} Measures the alignment between predicted uncertainty and actual errors \cite{guo2017calibration}. Lower is better (perfect calibration: ECE = 0).
+\subsubsection{Predictive Accuracy Metrics}
 
-\textbf{Coverage:} Percentage of test samples whose true values fall within predicted confidence intervals. Target: 95\% for 95\% confidence intervals.
+\textbf{Mean Squared Error (MSE):} Measures average squared prediction error:
+\begin{equation}
+    \text{MSE} = \frac{1}{N}\sum_{i=1}^{N} \|y_i - \hat{y}_i\|^2
+\end{equation}
+where $y_i$ is the true output and $\hat{y}_i$ is the predicted mean. Lower is better.
 
-\textbf{Interval Width:} Average width of prediction intervals. Lower is better (sharper), but must maintain coverage.
+\textbf{Mean Absolute Error (MAE):} Measures average absolute prediction error:
+\begin{equation}
+    \text{MAE} = \frac{1}{N}\sum_{i=1}^{N} \|y_i - \hat{y}_i\|
+\end{equation}
+Lower is better; less sensitive to outliers than MSE.
 
-\textbf{Uncertainty-Error Correlation:} Spearman correlation between predicted uncertainty and actual errors. Higher is better (uncertainty should be high when errors are high).
+\textbf{Relative $L^2$ Error:} Normalized prediction error:
+\begin{equation}
+    \text{rel\_l2} = \frac{\|y - \hat{y}\|_2}{\|y\|_2}
+\end{equation}
+Accounts for output magnitude; useful for comparing across different PDEs.
 
-\textbf{Negative Log-Likelihood (NLL):} Probabilistic metric measuring the likelihood assigned to true values under the predictive distribution. More negative is better.
+\subsubsection{Calibration Metrics}
 
-\textbf{AUROC for OOD Detection:} Area under ROC curve for classifying in-distribution vs. out-of-distribution samples using uncertainty as the decision score. 0.5 = random, 1.0 = perfect.
+\textbf{Expected Calibration Error (ECE):} Measures alignment between predicted uncertainty and actual errors \cite{guo2017calibration}. Predictions are binned by uncertainty, and ECE computes the average gap between confidence and accuracy across bins. Lower is better (perfect calibration: ECE = 0).
 
-In Chapter 3, we describe how these metrics are computed in our evaluation framework.
+\textbf{Coverage:} Fraction of test samples whose true values fall within predicted $\alpha$-confidence intervals:
+\begin{equation}
+    \text{Coverage} = \frac{1}{N}\sum_{i=1}^{N} \mathbb{1}\left[y_i \in [\hat{y}_i - z_\alpha\hat{\sigma}_i, \hat{y}_i + z_\alpha\hat{\sigma}_i]\right]
+\end{equation}
+Target: 0.95 for 95\% confidence intervals (i.e., $\alpha = 0.95$, $z_\alpha = 1.96$).
+
+\textbf{Interval Width:} Average width of prediction intervals:
+\begin{equation}
+    \text{Width} = \frac{1}{N}\sum_{i=1}^{N} 2z_\alpha\hat{\sigma}_i
+\end{equation}
+Lower is better (sharper), but coverage must be maintained.
+
+\subsubsection{Uncertainty Quality Metrics}
+
+\textbf{Uncertainty-Error Correlation:} Pearson correlation between predicted uncertainty $\hat{\sigma}_i$ and actual absolute error $|y_i - \hat{y}_i|$:
+\begin{equation}
+    \rho = \text{corr}(\hat{\sigma}, |y - \hat{y}|)
+\end{equation}
+Higher is better; indicates uncertainty is informative about prediction quality.
+
+\textbf{Negative Log-Likelihood (NLL):} Probabilistic metric under Gaussian assumption:
+\begin{equation}
+    \text{NLL} = -\frac{1}{N}\sum_{i=1}^{N} \log p(y_i|\hat{y}_i, \hat{\sigma}_i^2) = \frac{1}{2N}\sum_{i=1}^{N} \left[\log(2\pi\hat{\sigma}_i^2) + \frac{(y_i - \hat{y}_i)^2}{\hat{\sigma}_i^2}\right]
+\end{equation}
+Higher (less negative) is better; jointly evaluates accuracy and calibration.
+
+\textbf{AUROC for OOD Detection:} Area under ROC curve for classifying in-distribution vs. out-of-distribution samples using predicted uncertainty as the decision score. 0.5 = random, 1.0 = perfect detection.
+
+Chapter 3 provides implementation details for computing these metrics on neural operator predictions.
