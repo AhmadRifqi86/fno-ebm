@@ -1,0 +1,288 @@
+\chapter{Methodology}
+
+\section{Fourier Neural Operator Architecture}
+
+All experiments use 2D Fourier Neural Operators (FNO2d) as the base architecture for learning PDE solution operators. The FNO learns mappings between infinite-dimensional function spaces by operating in the Fourier domain.
+
+\subsection{Architecture Details}
+
+Given an input function $u_0: \Omega \rightarrow \mathbb{R}^{d_{in}}$ on a spatial domain $\Omega = [0,1]^2$, the FNO learns the solution operator $\mathcal{G}: u_0 \mapsto u$ where $u: \Omega \rightarrow \mathbb{R}^{d_{out}}$ is the PDE solution.
+
+The architecture consists of three main components:
+
+\textbf{1. Lifting Layer ($P$):} Projects input from low-dimensional space to hidden dimension
+\begin{equation}
+v_0(x) = P(u_0(x)) : \mathbb{R}^{d_{in}} \rightarrow \mathbb{R}^w
+\end{equation}
+where $w = 32$ is the hidden width (channel dimension).
+
+\textbf{2. Fourier Layers ($\mathcal{F}_l$):} Stack of $L = 4$ spectral convolution layers. Each layer $l$ applies:
+\begin{equation}
+v_{l+1}(x) = \sigma\left(\mathcal{K}_l(v_l)(x) + W_l v_l(x)\right)
+\end{equation}
+where:
+\begin{itemize}
+\item $\mathcal{K}_l$ is the Fourier integral operator (spectral convolution)
+\item $W_l$ is a pointwise linear transformation (local convolution)
+\item $\sigma$ is the activation function (GELU)
+\end{itemize}
+
+The Fourier integral operator is defined as:
+\begin{equation}
+\mathcal{K}_l(v)(x) = \mathcal{F}^{-1}\left(R_l \cdot (\mathcal{F}v)\right)(x)
+\end{equation}
+where $\mathcal{F}$ and $\mathcal{F}^{-1}$ denote the Fourier transform and inverse transform, and $R_l \in \mathbb{C}^{w \times w \times m_1 \times m_2}$ are learnable weights in Fourier space.
+
+\textbf{Mode truncation:} We retain only the lowest $m_1 = m_2 = 12$ Fourier modes in each spatial direction, discarding high-frequency components:
+\begin{equation}
+\mathcal{F}v(k_1, k_2) = \begin{cases}
+R_l(k_1, k_2) \cdot \mathcal{F}v(k_1, k_2) & \text{if } |k_1| \leq 12, |k_2| \leq 12 \\
+0 & \text{otherwise}
+\end{cases}
+\end{equation}
+
+\textbf{3. Projection Layer ($Q$):} Maps from hidden dimension to output
+\begin{equation}
+u(x) = Q(v_L(x)) : \mathbb{R}^w \rightarrow \mathbb{R}^{d_{out}}
+\end{equation}
+
+For standard FNO, $d_{out} = 1$ (single output). For evidential FNO, $d_{out} = 4$ (outputs $\gamma, \nu, \alpha, \beta$).
+
+\subsection{Architecture Specifications}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Input channels ($d_{in}$) & 3 (x, y, $u_0$) \\
+Hidden width ($w$) & 32 \\
+Number of Fourier layers ($L$) & 4 \\
+Fourier modes ($m_1, m_2$) & 12 × 12 \\
+Activation function ($\sigma$) & GELU \\
+Output channels ($d_{out}$) & 1 (standard), 4 (evidential) \\
+Spatial resolution & 64 × 64 \\
+Total parameters & $\sim$420k (standard), $\sim$430k (evidential) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The FNO's key advantage is discretization-invariance: once trained on a $64 \times 64$ grid, it can be evaluated on any resolution without retraining, as the Fourier integral operator is defined on continuous functions.
+
+\section{Uncertainty Quantification Methods}
+
+\subsection{MC Dropout}
+
+We implement Monte Carlo Dropout following \cite{gal2016dropout} with the following configuration:
+
+\textbf{Architecture modifications:}
+\begin{itemize}
+\item Dropout type: Dropout2d (spatial dropout for 2D data)
+\item Dropout rate: $p = 0.1$ (10\%)
+\item Dropout placement: After each of the 4 Fourier layers + in projection head
+\end{itemize}
+
+\textbf{Training procedure:}
+\begin{itemize}
+\item Standard training with dropout active
+\item Optimizer: Adam with learning rate $\eta = 10^{-3}$
+\item Epochs: 20
+\item Loss function: Mean squared error (MSE)
+\item Single forward pass per training batch
+\end{itemize}
+
+\textbf{Inference procedure:}
+\begin{itemize}
+\item Number of stochastic forward passes: $T = 30$
+\item Dropout kept active during inference (model set to training mode)
+\item Predictive mean: $\hat{y} = \frac{1}{T}\sum_{t=1}^{T} f_\theta^{(t)}(x)$
+\item Predictive uncertainty: $\hat{\sigma}^2 = \frac{1}{T}\sum_{t=1}^{T} (f_\theta^{(t)}(x) - \hat{y})^2$
+\end{itemize}
+
+where $f_\theta^{(t)}(x)$ denotes the $t$-th stochastic forward pass with different dropout masks.
+
+\subsection{Deep Ensemble}
+
+We implement Deep Ensemble following \cite{lakshminarayanan2017simple} with the following configuration:
+
+\textbf{Ensemble composition:}
+\begin{itemize}
+\item Number of models: $M = 5$
+\item Architecture: Identical FNO2d architecture for all members
+\item Initialization: Different random seeds (42, 43, 44, 45, 46)
+\item Training: Each model trained independently on same data
+\end{itemize}
+
+\textbf{Training procedure (per model):}
+\begin{itemize}
+\item Optimizer: Adam with learning rate $\eta = 10^{-3}$
+\item Epochs: 20
+\item Loss function: MSE
+\item Independent weight initialization (no parameter sharing)
+\end{itemize}
+
+\textbf{Inference procedure:}
+\begin{itemize}
+\item Aggregation method: Ensemble averaging (mean)
+\item Predictive mean: $\hat{y} = \frac{1}{M}\sum_{m=1}^{M} f_{\theta_m}(x)$
+\item Predictive uncertainty: $\hat{\sigma}^2 = \frac{1}{M}\sum_{m=1}^{M} (f_{\theta_m}(x) - \hat{y})^2$
+\end{itemize}
+
+where $\theta_m$ represents the parameters of the $m$-th ensemble member. The ensemble captures epistemic uncertainty through model diversity arising from different random initializations.
+
+\subsection{Evidential Deep Learning}
+
+We implement six variants of evidential deep learning with different regularization schemes, all based on the Normal-Inverse-Gamma (NIG) parameterization. The FNO predicts four parameters $(\gamma, \nu, \alpha, \beta)$ for each spatial location, which define a NIG distribution over the Gaussian likelihood parameters:
+
+\begin{align}
+\mu &\sim \mathcal{N}(\gamma, \sigma^2/\nu) \\
+\sigma^2 &\sim \text{InvGamma}(\alpha, \beta)
+\end{align}
+
+The predictive distribution is a Student's t-distribution with:
+\begin{itemize}
+\item Mean: $\hat{y} = \gamma$
+\item Total variance: $\hat{\sigma}^2 = \frac{\beta}{\alpha - 1}$
+\item Epistemic uncertainty: $\hat{\sigma}_{\text{epi}}^2 = \frac{\beta}{\nu(\alpha - 1)}$
+\item Aleatoric uncertainty: $\hat{\sigma}_{\text{ale}}^2 = \frac{\beta}{\alpha - 1}$
+\end{itemize}
+
+\textbf{Regularization schemes tested:}
+
+\begin{enumerate}
+\item \textbf{Standard}: Original NIG loss \cite{amini2020deep}
+$$\mathcal{L}_{\text{NIG}} = \frac{1}{2\nu}(y - \gamma)^2 + \frac{\alpha}{\nu} + \log\Gamma(\alpha) - \alpha\log(\beta)$$
+
+\item \textbf{Improved}: Additional regularization on evidence \cite{amini2020deep}
+$$\mathcal{L}_{\text{improved}} = \mathcal{L}_{\text{NIG}} + \lambda_r \cdot |\nu - 1|$$
+
+\item \textbf{Uncertainty-Aware}: Adaptive weighting based on prediction error
+$$\mathcal{L}_{\text{UA}} = \mathcal{L}_{\text{NIG}} + \lambda_r \cdot (y - \gamma)^2 \cdot \nu$$
+
+\item \textbf{Adaptive}: Dynamic regularization strength
+$$\mathcal{L}_{\text{adaptive}} = \mathcal{L}_{\text{NIG}} + \lambda_r(t) \cdot f(\nu, \alpha)$$
+
+\item \textbf{L2-Evidence}: L2 penalty on evidence parameter
+$$\mathcal{L}_{\text{L2}} = \mathcal{L}_{\text{NIG}} + \lambda_r \cdot \nu^2$$
+
+\item \textbf{KL-Divergence}: KL divergence to prior distribution
+$$\mathcal{L}_{\text{KL}} = \mathcal{L}_{\text{NIG}} + \lambda_r \cdot \text{KL}(p(\mu, \sigma^2|x) \| p_0(\mu, \sigma^2))$$
+\end{enumerate}
+
+All evidential variants use identical FNO backbone architecture with an expanded output head that predicts the four NIG parameters instead of a single prediction.
+
+\section{Datasets}
+
+\subsection{Navier-Stokes 2D}
+
+\begin{itemize}
+\item \textbf{Physical system}: 2D incompressible viscous flow
+\item \textbf{Governing equation}: $\frac{\partial \omega}{\partial t} + u \cdot \nabla \omega = \nu \nabla^2 \omega$
+\item \textbf{Parameters}: Reynolds numbers Re $\in$ \{1000, 2000, 3000, 5000\}
+\item \textbf{Spatial resolution}: $64 \times 64$ grid
+\item \textbf{Training data}: 5000 samples (Re = 1000, 2000, 3000)
+\item \textbf{Test data (ID)}: 1000 samples (Re = 1000, 2000, 3000)
+\item \textbf{Test data (OOD)}: 1000 samples (Re = 5000)
+\end{itemize}
+
+\subsection{Darcy Flow 2D}
+
+\begin{itemize}
+\item \textbf{Physical system}: Steady-state flow through porous media
+\item \textbf{Governing equation}: $-\nabla \cdot (k(x) \nabla u) = f$
+\item \textbf{Spatial resolution}: $64 \times 64$ grid
+\item \textbf{Training data}: 5000 samples with varying permeability fields
+\item \textbf{Test data}: 1000 samples
+\item \textbf{Use case}: Cross-PDE OOD detection (Experiment 5)
+\end{itemize}
+
+\section{Evaluation Metrics}
+
+We evaluate uncertainty quantification methods using eight metrics:
+
+\subsection{Predictive Accuracy}
+
+\begin{enumerate}
+\item \textbf{Mean Squared Error (MSE)}: $\text{MSE} = \frac{1}{N}\sum_{i=1}^{N} \|y_i - \hat{y}_i\|^2$
+
+\item \textbf{Mean Absolute Error (MAE)}: $\text{MAE} = \frac{1}{N}\sum_{i=1}^{N} \|y_i - \hat{y}_i\|$
+
+\item \textbf{Relative L2 Error}: $\text{rel\_l2} = \frac{\|y - \hat{y}\|_2}{\|y\|_2}$
+\end{enumerate}
+
+\subsection{Calibration Quality}
+
+\begin{enumerate}
+\setcounter{enumi}{3}
+\item \textbf{Expected Calibration Error (ECE)}: Bins predictions by confidence, measures gap between confidence and accuracy
+
+\item \textbf{Coverage}: Fraction of test samples falling within 95\% prediction intervals (ideal: 0.95)
+
+\item \textbf{Interval Width}: Average width of 95\% prediction intervals (narrower is better if coverage maintained)
+\end{enumerate}
+
+\subsection{Uncertainty Quality}
+
+\begin{enumerate}
+\setcounter{enumi}{6}
+\item \textbf{Uncertainty-Error Correlation}: Pearson correlation between predicted uncertainty and actual error (higher indicates more informative uncertainty)
+
+\item \textbf{Negative Log-Likelihood (NLL)}: $\text{NLL} = -\log p(y|\hat{\mu}, \hat{\sigma}^2)$ (higher/less negative is better)
+\end{enumerate}
+
+\subsection{Out-of-Distribution Detection}
+
+\begin{enumerate}
+\setcounter{enumi}{8}
+\item \textbf{AUROC}: Area under ROC curve for classifying ID vs OOD samples based on uncertainty (1.0 = perfect, 0.5 = random)
+\end{enumerate}
+
+\section{Experimental Protocol}
+
+\subsection{Experiment 1: Baseline Comparison}
+
+\begin{itemize}
+\item \textbf{Methods}: 6 evidential variants + Ensemble + MC Dropout (8 total)
+\item \textbf{Data}: Navier-Stokes 2D (5000 train, 1000 test)
+\item \textbf{Metrics}: All 8 metrics (MSE, MAE, rel\_l2, ECE, Coverage, Interval Width, Correlation, NLL)
+\item \textbf{Goal}: Compare accuracy, calibration, and computational efficiency
+\end{itemize}
+
+\subsection{Experiment 3: Epistemic-Aleatoric Decomposition}
+
+\begin{itemize}
+\item \textbf{Methods}: 6 evidential variants
+\item \textbf{Data}: Navier-Stokes with varying training sizes $N \in$ \{100, 200, 500, 1000, 2000, 5000\}
+\item \textbf{Metrics}: Epistemic and aleatoric uncertainty at each $N$
+\item \textbf{Validation criteria}: Epistemic decreases > 50\% AND aleatoric variation < 30\%
+\item \textbf{Goal}: Test whether evidential methods properly decompose uncertainty sources
+\end{itemize}
+
+\subsection{Experiment 4: Parameter Extrapolation OOD}
+
+\begin{itemize}
+\item \textbf{Method}: Evidential (Improved regularization)
+\item \textbf{Train}: Navier-Stokes Re $\in$ \{1000, 2000, 3000\}
+\item \textbf{Test (ID)}: Re $\in$ \{1000, 2000, 3000\}
+\item \textbf{Test (OOD)}: Re = 5000
+\item \textbf{Metric}: AUROC for distinguishing ID vs OOD based on uncertainty
+\item \textbf{Goal}: Test OOD detection for parameter extrapolation
+\end{itemize}
+
+\subsection{Experiment 5: Cross-PDE OOD}
+
+\begin{itemize}
+\item \textbf{Method}: Evidential (Improved regularization)
+\item \textbf{Experiments}:
+\begin{enumerate}
+\item Train on Navier-Stokes, test on Darcy Flow
+\item Train on Darcy Flow, test on Navier-Stokes
+\end{enumerate}
+\item \textbf{Metric}: AUROC for distinguishing training PDE vs other PDE
+\item \textbf{Goal}: Test OOD detection for operator-level distributional shift
+\end{itemize}
+
+\section{Implementation Details}
+
+All experiments were implemented in PyTorch 2.0. Training was performed on NVIDIA A100 GPUs with mixed precision (FP16). Batch size was set to 16 for all methods. No data augmentation was used. All models were trained for 20 epochs with early stopping based on validation loss (patience = 5 epochs).

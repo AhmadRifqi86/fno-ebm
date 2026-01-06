@@ -130,8 +130,8 @@ Epistemic & 0.0142 & 0.0057 & 0.0020 & 0.0007 & 0.0004 & 0.0002 & 98.9 & \multir
 Aleatoric & 0.0539 & 0.0250 & 0.0126 & 0.0067 & 0.0042 & 0.0024 & -- & \\
 \midrule
 \multicolumn{9}{l}{\textit{Adaptive Regularization}} \\
-Epistemic & 0.0311 & 0.0119 & 0.0062 & 0.0024 & 0.0020 & 0.0022 & 93.0 & \multirow{2}{*}{95.2} \\
-Aleatoric & 0.0311 & 0.0119 & 0.0109 & 0.0047 & 0.0040 & 0.0035 & -- & \\
+Epistemic & 0.0297 & 0.0146 & 0.0070 & 0.0023 & 0.0022 & 0.0022 & 92.7 & \multirow{2}{*}{89.0} \\
+Aleatoric & 0.0298 & 0.0146 & 0.0119 & 0.0046 & 0.0040 & 0.0034 & -- & \\
 \midrule
 \multicolumn{9}{l}{\textit{L2-Evidence Regularization}} \\
 Epistemic & 0.0193 & 0.0055 & 0.0035 & 0.0023 & 0.0017 & 0.0014 & 92.6 & \multirow{2}{*}{\textbf{57.7}} \\
@@ -170,7 +170,7 @@ A critical pattern emerges when cross-referencing with baseline calibration (Exp
 \midrule
 Improved & \textbf{0.0038} & 0.1166 & 92.9 & 99.2 & ✗ \\
 Uncertainty-Aware & 0.0045 & \textbf{0.1157} & 98.9 & 112.4 & ✗ \\
-Adaptive & 0.0038 & 0.1171 & 93.0 & 95.2 & ✗ \\
+Adaptive & 0.0038 & 0.1171 & 92.7 & 89.0 & ✗ \\
 Standard & 0.0046 & 0.1162 & 94.0 & 95.0 & ✗ \\
 L2-Evidence & 0.0066 & 0.1265 & 92.6 & 57.7 & ✗ \\
 KL-Divergence & \textbf{0.0303} & \textbf{0.2228} & 49.1 & \textbf{13.5} & ✓ \\
@@ -191,7 +191,7 @@ These findings validate the limitations recently documented for evidential metho
 \begin{enumerate}
 \item \textbf{Epistemic-aleatoric separation is unreliable for deployment}: Methods optimized for calibration (Improved, Uncertainty-Aware) cannot be trusted to separate uncertainty sources, despite providing accurate total uncertainty estimates.
 
-\item \textbf{L2-Evidence as a compromise}: Among well-calibrated methods (ECE < 0.007), L2-Evidence achieves the best aleatoric stability (54.6\% variation), though still failing formal validation. This may be acceptable for applications requiring approximate decomposition.
+\item \textbf{L2-Evidence as a compromise}: Among well-calibrated methods (ECE < 0.007), L2-Evidence achieves the best aleatoric stability (57.7\% variation), though still failing formal validation. This may be acceptable for applications requiring approximate decomposition.
 
 \item \textbf{Use total uncertainty instead}: For practical applications, practitioners should rely on \textit{total uncertainty} (epistemic + aleatoric) from well-calibrated methods rather than attempting to interpret the decomposition.
 
