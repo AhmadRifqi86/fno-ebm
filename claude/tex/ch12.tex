@@ -26,11 +26,11 @@ This thesis investigates the following research questions:
 
     \item \textbf{RQ2 (Efficiency):} What are the computational trade-offs (training time, inference time, memory requirements) between these three approaches for neural operator uncertainty quantification?
 
-    \item \textbf{RQ3 (Regularization):} For evidential methods, how do different regularization schemes (standard, improved, uncertainty-aware, annealed, $L^2$ evidence, KL-divergence) affect calibration and uncertainty quality?
+    \item \textbf{RQ3 (Regularization):} For evidential methods, how do different regularization schemes (standard, improved, uncertainty-aware, Adaptive, $L^2$ evidence, KL-divergence) affect calibration and uncertainty quality?
 
     \item \textbf{RQ4 (Uncertainty Decomposition):} Do evidential methods properly separate epistemic and aleatoric uncertainty for neural operators, or do they exhibit the decomposition failures recently documented in classification and regression tasks? We investigate whether the continuous nature of PDE solving mitigates known issues where both uncertainty types decrease with training data.
 
-    \item \textbf{RQ5 (Out-of-Distribution Detection):} Can uncertainty estimates reliably detect out-of-distribution samples (e.g., PDEs with extrapolated parameter values), given recent findings that evidential methods struggle with OOD detection in other domains? We evaluate whether neural operators present unique properties that improve OOD detection performance.
+    \item \textbf{RQ5 (Out-of-Distribution Detection):} Can uncertainty estimates reliably detect out-of-distribution samples? We distinguish between parameter-level OOD (e.g., Reynolds number extrapolation within the same PDE) and operator-level OOD (cross-PDE transfer). We evaluate whether these two types of distributional shift are detected differently, and whether evidential uncertainty responds appropriately to each.
 \end{enumerate}
 
 \subsection{Contributions}
@@ -44,20 +44,22 @@ This thesis makes the following contributions:
 
     \item \textbf{Systematic Ablation Studies:} We conduct extensive ablation studies on six regularization schemes for evidential methods, identifying \emph{improved regularization} as achieving the best calibration (ECE $\sim$ 0.003) and coverage ($\sim$ 93\%).
 
-    \item \textbf{Multi-PDE Evaluation:} We evaluate all methods across four diverse PDEs (Burgers, Advection, Diffusion-Reaction, Navier-Stokes), demonstrating generalization across different physics and spatial dimensions (1D and 2D).
+    \item \textbf{Multi-PDE Evaluation:} We evaluate all methods on two PDEs (Navier-Stokes and Darcy Flow), demonstrating the methods' effectiveness across different physics: nonlinear incompressible fluid dynamics and steady-state flow through porous media.
 
-    \item \textbf{Empirical Validation of Known Limitations:} We systematically evaluate whether recently documented limitations of evidential methods extend to the neural operator domain. Through carefully designed experiments (Experiment 3: epistemic-aleatoric decomposition, Experiment 4: OOD detection), we confirm that these limitations persist:
+    \item \textbf{Characterization of Evidential Method Behavior:} We systematically evaluate evidential methods across multiple axes through carefully designed experiments:
     \begin{itemize}
-        \item Epistemic-aleatoric decomposition fails: both uncertainty types decrease with training data, consistent with findings in classification tasks
-        \item OOD detection achieves near-random performance: AUROC $\sim$ 0.55 for Reynolds number extrapolation, aligning with recent empirical studies
+        \item \textbf{Uncertainty decomposition} (Experiment 3): Confirm that epistemic-aleatoric separation fails—both uncertainty types decrease with training data, consistent with findings in classification tasks
+        \item \textbf{Parameter-level OOD} (Experiment 4): Near-random detection (AUROC $\sim$ 0.55) for Reynolds extrapolation within the same PDE family
+        \item \textbf{Operator-level OOD} (Experiment 5): Perfect detection (AUROC = 1.0) for cross-PDE transfer, indicating neural operators learn physics-informed representations
     \end{itemize}
-    These results establish that the limitations are fundamental to the NIG parameterization rather than domain-specific, informing method selection for PDE applications.
+    These findings reveal that OOD detection performance depends critically on the \emph{type} of distributional shift, with implications for deployment in scientific computing applications.
 
     \item \textbf{Practical Guidance:} Based on empirical results, we provide decision guidelines for practitioners:
     \begin{itemize}
-        \item Use \emph{Evidential methods} for: in-distribution inference, calibrated prediction intervals, computational efficiency
-        \item Use \emph{Ensembles} for: safety-critical applications, robust epistemic uncertainty, OOD detection
+        \item Use \emph{Evidential methods} for: in-distribution inference, calibrated prediction intervals, operator-level OOD monitoring, computational efficiency
+        \item Use \emph{Ensembles} for: safety-critical applications requiring robust epistemic uncertainty
         \item Avoid \emph{MC Dropout} for neural operators (dominated by other methods on all metrics)
+        \item For \emph{parameter extrapolation}: Uncertainty estimates are unreliable; use domain-specific validation or physics-based bounds
     \end{itemize}
 \end{enumerate}
 
@@ -68,8 +70,9 @@ To ensure focused and rigorous evaluation, we deliberately limit the scope of th
 \textbf{Included in scope:}
 \begin{itemize}
     \item Three UQ methods: MC Dropout, Deep Ensembles, Evidential Deep Learning (NIG)
-    \item Four benchmark PDEs: Burgers, Advection, Diffusion-Reaction, Navier-Stokes
+    \item Two benchmark PDEs: Navier-Stokes (fluid dynamics) and Darcy Flow (porous media)
     \item In-distribution calibration and coverage evaluation
+    \item Out-of-distribution detection: parameter-level (Reynolds extrapolation) and operator-level (cross-PDE)
     \item Computational efficiency comparison
 \end{itemize}
 
@@ -78,7 +81,7 @@ To ensure focused and rigorous evaluation, we deliberately limit the scope of th
     \item Conformal Prediction and Bayesian inference methods (different paradigms with distinct trade-offs)
     \item Physics-informed loss functions (orthogonal to UQ method choice)
     \item Real-world PDE applications (focus on controlled benchmarks for fair comparison)
-    \item Extensive OOD detection beyond Experiment 4 (fundamental limitations identified)
+    \item Time-series PDE forecasting (focus on steady-state and single-timestep predictions)
 \end{itemize}
 
 \textbf{Acknowledged limitations:}
@@ -86,9 +89,9 @@ Based on our experimental findings (detailed in Chapters 4-5), we acknowledge th
 \begin{enumerate}
     \item \textbf{Evidential uncertainty decomposition is unreliable:} Our results (Experiment 3) show that evidential methods do not properly separate epistemic and aleatoric uncertainty, with both decreasing as training data increases. This violates theoretical expectations and limits the interpretability of evidential uncertainty estimates.
 
-    \item \textbf{OOD detection is ineffective:} Our results (Experiment 4) demonstrate that uncertainty-based OOD detection achieves near-random performance (AUROC $\sim$ 0.55), indicating that none of the tested methods reliably identify out-of-distribution samples in the neural operator setting.
+    \item \textbf{Parameter-level OOD detection is ineffective:} Our results (Experiment 4) demonstrate that uncertainty-based OOD detection achieves near-random performance (AUROC $\sim$ 0.55) for parameter extrapolation (e.g., Reynolds number outside training range). However, operator-level OOD detection (Experiment 5) achieves perfect separation (AUROC = 1.0) when testing on fundamentally different PDEs, suggesting that neural operators learn physics-informed representations that respond appropriately to true distributional shift.
 
-    \item \textbf{Focus on in-distribution performance:} Given these limitations, we focus our analysis on in-distribution calibration and efficiency, where evidential methods demonstrate clear advantages.
+    \item \textbf{Primary strength in in-distribution inference:} Evidential methods excel at in-distribution calibration and computational efficiency, making them ideal for production deployments where inputs remain within the training distribution.
 \end{enumerate}
 
 By explicitly acknowledging these limitations upfront, we position this work as an \emph{honest empirical comparison} rather than a claim that any single method solves all UQ challenges for neural operators.
@@ -179,7 +182,7 @@ The predictive mean and uncertainty are then estimated as:
 
 \textbf{Advantages:} Single model, easy to implement, minimal training overhead.
 
-\textbf{Disadvantages:} Requires $T$ forward passes ($T \sim 100$ typically), uncertainty quality sensitive to dropout rate, generally poorly calibrated \cite{ovadia2019can}.
+\textbf{Disadvantages:} Requires $T$ forward passes ($T \sim 30$ in our experiments), uncertainty quality sensitive to dropout rate, generally poorly calibrated \cite{ovadia2019can}.
 
 \subsubsection{Deep Ensembles}
 
