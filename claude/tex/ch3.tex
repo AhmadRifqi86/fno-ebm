@@ -249,7 +249,7 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Compare accuracy, calibration, and computational efficiency
 \end{itemize}
 
-\subsection{Experiment 3: Epistemic-Aleatoric Decomposition}
+\subsection{Experiment 2: Epistemic-Aleatoric Decomposition}
 
 \begin{itemize}
 \item \textbf{Methods}: 6 evidential variants
@@ -259,7 +259,7 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Test whether evidential methods properly decompose uncertainty sources
 \end{itemize}
 
-\subsection{Experiment 4: Parameter Extrapolation OOD}
+\subsection{Experiment 3: Parameter Extrapolation OOD}
 
 \begin{itemize}
 \item \textbf{Method}: Evidential (Improved regularization)
@@ -270,7 +270,7 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Test OOD detection for parameter extrapolation
 \end{itemize}
 
-\subsection{Experiment 5: Cross-PDE OOD}
+\subsection{Experiment 4: Cross-PDE OOD}
 
 \begin{itemize}
 \item \textbf{Method}: Evidential (Improved regularization)
@@ -283,6 +283,8 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Test OOD detection for operator-level distributional shift
 \end{itemize}
 
-\section{Implementation Details}
+\section{Implementation Details} %need to change pytorch version, nvidia device, 
 
-All experiments were implemented in PyTorch 2.0. Training was performed on NVIDIA A100 GPUs with mixed precision (FP16). Batch size was set to 16 for all methods. No data augmentation was used. All models were trained for 20 epochs with early stopping based on validation loss (patience = 5 epochs).
+All experiments were implemented in PyTorch 2.0. Training was performed on NVIDIA A100 GPUs with mixed 
+precision (FP16). Batch size was set to 16 for all methods. No data augmentation was used. All models were 
+trained for 20 epochs with early stopping based on validation loss (patience = 5 epochs).
