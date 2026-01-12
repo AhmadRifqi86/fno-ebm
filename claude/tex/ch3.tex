@@ -24,7 +24,7 @@ where:
 \begin{itemize}
 \item $\mathcal{K}_l$ is the Fourier integral operator (spectral convolution)
 \item $W_l$ is a pointwise linear transformation (local convolution)
-\item $\sigma$ is the activation function (GELU)
+\item $\sigma$ is the activation function (GELU \cite{hendrycks2016gaussian})
 \end{itemize}
 
 The Fourier integral operator is defined as:
@@ -68,7 +68,7 @@ Total parameters & $\sim$420k (standard), $\sim$430k (evidential) \\
 \end{tabular}
 \end{table}
 
-The FNO's key advantage is discretization-invariance: once trained on a $64 \times 64$ grid, it can be evaluated on any resolution without retraining, as the Fourier integral operator is defined on continuous functions.
+The FNO's key advantage is discretization-invariance \cite{li2020fourier}: once trained on a $64 \times 64$ grid, it can be evaluated on any resolution without retraining, as the Fourier integral operator is defined on continuous functions.
 
 \section{Uncertainty Quantification Methods}
 
@@ -78,7 +78,7 @@ We implement Monte Carlo Dropout following \cite{gal2016dropout} with the follow
 
 \textbf{Architecture modifications:}
 \begin{itemize}
-\item Dropout type: Dropout2d (spatial dropout for 2D data)
+\item Dropout type: Dropout2d (spatial dropout \cite{tompson2015efficient} for 2D data)
 \item Dropout rate: $p = 0.1$ (10\%)
 \item Dropout placement: After each of the 4 Fourier layers + in projection head
 \end{itemize}
@@ -86,7 +86,7 @@ We implement Monte Carlo Dropout following \cite{gal2016dropout} with the follow
 \textbf{Training procedure:}
 \begin{itemize}
 \item Standard training with dropout active
-\item Optimizer: Adam with learning rate $\eta = 10^{-3}$
+\item Optimizer: Adam \cite{kingma2014adam} with learning rate $\eta = 10^{-3}$
 \item Epochs: 20
 \item Loss function: Mean squared error (MSE)
 \item Single forward pass per training batch
@@ -133,14 +133,14 @@ where $\theta_m$ represents the parameters of the $m$-th ensemble member. The en
 
 \subsection{Evidential Deep Learning}
 
-We implement six variants of evidential deep learning with different regularization schemes, all based on the Normal-Inverse-Gamma (NIG) parameterization. The FNO predicts four parameters $(\gamma, \nu, \alpha, \beta)$ for each spatial location, which define a NIG distribution over the Gaussian likelihood parameters:
+We implement six variants of evidential deep learning with different regularization schemes, all based on the Normal-Inverse-Gamma (NIG) parameterization \cite{murphy2012machine}. The FNO predicts four parameters $(\gamma, \nu, \alpha, \beta)$ for each spatial location, which define a NIG distribution over the Gaussian likelihood parameters:
 
 \begin{align}
 \mu &\sim \mathcal{N}(\gamma, \sigma^2/\nu) \\
 \sigma^2 &\sim \text{InvGamma}(\alpha, \beta)
 \end{align}
 
-The predictive distribution is a Student's t-distribution with:
+The predictive distribution is a Student's t-distribution \cite{murphy2012machine} with:
 \begin{itemize}
 \item Mean: $\hat{y} = \gamma$
 \item Total variance: $\hat{\sigma}^2 = \frac{\beta}{\alpha - 1}$
@@ -177,7 +177,7 @@ All evidential variants use identical FNO backbone architecture with an expanded
 \subsection{Navier-Stokes 2D}
 
 \begin{itemize}
-\item \textbf{Physical system}: 2D incompressible viscous flow
+\item \textbf{Physical system}: 2D incompressible viscous flow \cite{anderson1995computational}
 \item \textbf{Governing equation}: $\frac{\partial \omega}{\partial t} + u \cdot \nabla \omega = \nu \nabla^2 \omega$
 \item \textbf{Parameters}: Reynolds numbers Re $\in$ \{1000, 2000, 3000, 5000\}
 \item \textbf{Spatial resolution}: $64 \times 64$ grid
@@ -189,7 +189,7 @@ All evidential variants use identical FNO backbone architecture with an expanded
 \subsection{Darcy Flow 2D}
 
 \begin{itemize}
-\item \textbf{Physical system}: Steady-state flow through porous media
+\item \textbf{Physical system}: Steady-state flow through porous media \cite{darcy1856}
 \item \textbf{Governing equation}: $-\nabla \cdot (k(x) \nabla u) = f$
 \item \textbf{Spatial resolution}: $64 \times 64$ grid
 \item \textbf{Training data}: 5000 samples with varying permeability fields
@@ -238,7 +238,7 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{AUROC}: Area under ROC curve for classifying ID vs OOD samples based on uncertainty (1.0 = perfect, 0.5 = random)
 \end{enumerate}
 
-\section{Experimental Protocol}
+\section{Experimental Protocol} %mybe change to experiment design
 
 \subsection{Experiment 1: Baseline Comparison}
 
@@ -249,7 +249,16 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Compare accuracy, calibration, and computational efficiency
 \end{itemize}
 
-\subsection{Experiment 2: Epistemic-Aleatoric Decomposition}
+\subsection{Experiment 2: Generalization to Darcy Flow}
+
+\begin{itemize}
+\item \textbf{Methods}: 6 evidential variants + Ensemble + MC Dropout (8 total)
+\item \textbf{Data}: Darcy Flow (5000 train, 1000 test)
+\item \textbf{Metrics}: All 8 metrics (MSE, MAE, rel\_l2, ECE, Coverage, Interval Width, Correlation, NLL)
+\item \textbf{Goal}: Evaluate whether performance rankings from Navier-Stokes generalize to different physics (linear, steady-state flow through porous media)
+\end{itemize}
+
+\subsection{Experiment 3: Epistemic-Aleatoric Decomposition}
 
 \begin{itemize}
 \item \textbf{Methods}: 6 evidential variants
@@ -259,7 +268,7 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Test whether evidential methods properly decompose uncertainty sources
 \end{itemize}
 
-\subsection{Experiment 3: Parameter Extrapolation OOD}
+\subsection{Experiment 4: Parameter Extrapolation OOD}
 
 \begin{itemize}
 \item \textbf{Method}: Evidential (Improved regularization)
@@ -270,7 +279,7 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Test OOD detection for parameter extrapolation
 \end{itemize}
 
-\subsection{Experiment 4: Cross-PDE OOD}
+\subsection{Experiment 5: Cross-PDE OOD}
 
 \begin{itemize}
 \item \textbf{Method}: Evidential (Improved regularization)
@@ -283,8 +292,16 @@ We evaluate uncertainty quantification methods using eight metrics:
 \item \textbf{Goal}: Test OOD detection for operator-level distributional shift
 \end{itemize}
 
-\section{Implementation Details} %need to change pytorch version, nvidia device, 
+\subsection{Experiment 6: Architectural Ablation Study}
 
-All experiments were implemented in PyTorch 2.0. Training was performed on NVIDIA A100 GPUs with mixed 
-precision (FP16). Batch size was set to 16 for all methods. No data augmentation was used. All models were 
-trained for 20 epochs with early stopping based on validation loss (patience = 5 epochs).
+\begin{itemize}
+\item \textbf{Methods}: Baseline FNO + 7 ablation variants
+\item \textbf{Data}: Navier-Stokes 2D (7000 train, 1500 val, 1500 test)
+\item \textbf{Ablations}: Remove skip connections, remove activations, shallow heads, linear heads, add batch norm, Fourier-only, add residual connection
+\item \textbf{Metrics}: MSE, MAE, rel\_l2, calibration error, uncertainty-error correlation
+\item \textbf{Goal}: Identify critical architectural components for evidential FNO performance
+\end{itemize}
+
+% \section{Implementation Details}
+
+% All experiments were implemented in PyTorch 2.0 \cite{paszke2019pytorch}. Training was performed on NVIDIA A100 GPUs with mixed precision (FP16) \cite{micikevicius2017mixed}. Batch size was set to 16 for all methods. No data augmentation was used. All models were trained for 20 epochs with early stopping based on validation loss (patience = 5 epochs).

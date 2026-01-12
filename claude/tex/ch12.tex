@@ -26,7 +26,7 @@ This thesis investigates the following research questions:
 
     \item \textbf{RQ2 (Efficiency):} What are the computational trade-offs (training time, inference time, memory requirements) between these three approaches for neural operator uncertainty quantification?
 
-    \item \textbf{RQ3 (Regularization):} For evidential methods, how do different regularization schemes (standard, improved, uncertainty-aware, Adaptive, $L^2$ evidence, KL-divergence) affect calibration and uncertainty quality?
+    \item \textbf{RQ3 (Regularization):} For evidential methods, how do different regularization schemes (standard \cite{amini2020deep}, improved \cite{oh2022improving}, uncertainty-aware \cite{ye2024uncertainty}, Adaptive, $L^2$ evidence, KL-divergence) affect calibration and uncertainty quality?
 
     \item \textbf{RQ4 (Uncertainty Decomposition):} Do evidential methods properly separate epistemic and aleatoric uncertainty for neural operators, or do they exhibit the decomposition failures recently documented in classification and regression tasks? We investigate whether the continuous nature of PDE solving mitigates known issues where both uncertainty types decrease with training data.
 
@@ -112,7 +112,7 @@ The remainder of this thesis is organized as follows:
 
 \subsection{Neural Operators}
 
-Neural operators extend traditional neural networks from learning mappings between finite-dimensional vectors to learning mappings between infinite-dimensional function spaces. Given an input function $a(x)$ and output function $u(x)$ related by a PDE operator $\mathcal{L}$, a neural operator $\mathcal{G}_\theta$ learns to approximate the solution operator:
+Neural operators extend traditional neural networks from learning mappings between finite-dimensional vectors to learning mappings between infinite-dimensional function spaces \cite{lu2021deeponet,chen1995universal}. Given an input function $a(x)$ and output function $u(x)$ related by a PDE operator $\mathcal{L}$, a neural operator $\mathcal{G}_\theta$ learns to approximate the solution operator:
 \begin{equation}
     \mathcal{G}_\theta: a \mapsto u \quad \text{such that} \quad \mathcal{L}(u; a) = 0
 \end{equation}
@@ -151,7 +151,7 @@ However, \emph{none of these works address uncertainty quantification}, focusing
 
 \subsection{Uncertainty Quantification in Deep Learning}
 
-Uncertainty quantification aims to not only predict outputs but also quantify the confidence in those predictions. In the Bayesian framework, we seek the posterior predictive distribution:
+Uncertainty quantification aims to not only predict outputs but also quantify the confidence in those predictions. In the Bayesian framework \cite{bishop2006pattern,murphy2012machine}, we seek the posterior predictive distribution:
 \begin{equation}
     p(y | x, \mathcal{D}) = \int p(y | x, \theta) p(\theta | \mathcal{D}) d\theta
 \end{equation}
@@ -159,7 +159,7 @@ where $\mathcal{D}$ is the training data and $\theta$ are model parameters.
 
 \subsubsection{Epistemic vs. Aleatoric Uncertainty}
 
-Uncertainty is commonly decomposed into two types:
+Uncertainty is commonly decomposed into two types \cite{kendall2017uncertainties,der2009aleatory}:
 \begin{itemize}
     \item \textbf{Epistemic (model) uncertainty:} Uncertainty due to limited training data or model capacity, which can be reduced by collecting more data or using larger models
     \item \textbf{Aleatoric (data) uncertainty:} Inherent uncertainty in the data or measurement noise, which cannot be reduced regardless of model or data
@@ -227,9 +227,9 @@ The model is trained using the negative log-likelihood plus a regularization ter
 
 Recent work has identified fundamental limitations of evidential methods that persist despite various proposed fixes:
 
-\textbf{Epistemic-Aleatoric Decomposition Failure:} Multiple studies \cite{arxiv2402.09056,aaai2023evidential} have shown that the theoretical decomposition of total uncertainty into epistemic and aleatoric components does not work correctly in practice. Specifically, both uncertainty types decrease with increasing training data, violating the fundamental assumption that aleatoric uncertainty represents irreducible noise and should remain constant. This suggests the NIG parameterization conflates these two uncertainty sources rather than properly separating them.
+\textbf{Epistemic-Aleatoric Decomposition Failure:} Multiple studies \cite{jurgens2024epistemic,ulmer2024prior,bickford2024rethinking} have shown that the theoretical decomposition of total uncertainty into epistemic and aleatoric components does not work correctly in practice. Specifically, both uncertainty types decrease with increasing training data, violating the fundamental assumption that aleatoric uncertainty represents irreducible noise and should remain constant. This suggests the NIG parameterization conflates these two uncertainty sources rather than properly separating them.
 
-\textbf{Out-of-Distribution Detection Failure:} Despite theoretical claims that epistemic uncertainty should increase on out-of-distribution (OOD) samples, empirical studies \cite{neurips2024ood,arxiv2402.06160,arxiv2501.15908} consistently find that evidential methods achieve near-random performance (AUROC $\sim$ 0.5-0.6) on OOD detection tasks. This indicates that the learned uncertainty estimates do not reliably distinguish in-distribution from out-of-distribution samples, limiting their utility for safe deployment and active learning.
+\textbf{Out-of-Distribution Detection Failure:} Despite theoretical claims that epistemic uncertainty should increase on out-of-distribution (OOD) samples, empirical studies \cite{meinke2024uncertaintyquantification,hullermeier2021aleatoric,piao2025evidential} consistently find that evidential methods achieve near-random performance (AUROC $\sim$ 0.5-0.6) on OOD detection tasks. This indicates that the learned uncertainty estimates do not reliably distinguish in-distribution from out-of-distribution samples, limiting their utility for safe deployment and active learning.
 
 \textbf{Sensitivity to Regularization:} The quality of evidential uncertainty estimates is highly sensitive to the choice and tuning of regularization schemes. Different regularization approaches (standard, improved, KL-divergence, etc.) can yield dramatically different uncertainty behaviors, and optimal hyperparameters are problem-dependent with no principled selection criteria.
 

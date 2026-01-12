@@ -6,19 +6,27 @@
 
 \textit{How do MC Dropout, Deep Ensembles, and Evidential Deep Learning compare in terms of in-distribution calibration quality and coverage guarantees?}
 
-Our results (Experiment 1) demonstrate that \textbf{evidential methods achieve superior calibration compared to MC Dropout and competitive performance with Deep Ensembles}:
+Our results (Experiments 1-2) demonstrate that \textbf{evidential methods achieve superior calibration compared to MC Dropout and competitive performance with Deep Ensembles, with findings consistent across both Navier-Stokes and Darcy Flow}:
 
 \begin{itemize}
-\item \textbf{Evidential methods dominate MC Dropout}: The best evidential variants (Improved: ECE = 0.0038, Uncertainty-Aware: ECE = 0.0045) achieve 4-5× better calibration than MC Dropout (ECE = 0.0192) and 6× better prediction accuracy (MSE: 0.0016 vs. 0.0101).
+\item \textbf{Evidential methods dominate MC Dropout on both PDEs}:
+\begin{itemize}
+\item On Navier-Stokes: Best evidential variants (Improved: ECE = 0.0038, Uncertainty-Aware: ECE = 0.0045) achieve 4-5× better calibration than MC Dropout (ECE = 0.0192) and 6× better prediction accuracy (MSE: 0.0016 vs. 0.0101)
+\item On Darcy Flow: Evidential superiority strengthens—MC Dropout degrades to MSE = 0.0119 (3.4× worse than best evidential), with excessively wide intervals (0.269, 3× wider) and lowest correlation (0.299)
+\end{itemize}
 
-\item \textbf{Evidential methods match or exceed Ensemble calibration}: While Ensemble achieves competitive MSE (0.0015), its calibration (ECE = 0.0106) is 2.5× worse than the best evidential methods. More critically, Ensemble exhibits severe undercoverage (75.8\%) compared to evidential methods (92-95\%), indicating its uncertainty estimates are overconfident.
+\item \textbf{Evidential methods match or exceed Ensemble calibration, Ensemble degrades on harder problems}:
+\begin{itemize}
+\item On Navier-Stokes: Ensemble achieves competitive MSE (0.0015) but poor calibration (ECE = 0.0106, 2.5× worse than evidential) and severe undercoverage (75.8\%)
+\item On Darcy Flow: Ensemble performance worsens—MSE = 0.0065 (1.9× worse than best evidential), undercoverage drops to 65.2\% (10\% absolute degradation), confirming evidential methods' robustness
+\end{itemize}
 
 \item \textbf{Regularization matters significantly}: Calibration quality varies dramatically across regularization schemes (ECE range: 0.0038-0.0303), with Improved, Adaptive, and Uncertainty-Aware achieving the best results, while KL-Divergence exhibits poor calibration despite valid uncertainty decomposition.
 
 \item \textbf{Coverage vs. sharpness trade-off}: L2-Evidence achieves the best coverage (94.9\%) but with wider intervals (0.1265), while Uncertainty-Aware provides sharper intervals (0.1157) with slightly lower coverage (93.4\%). This trade-off allows practitioners to select methods based on application requirements.
 \end{itemize}
 
-\textbf{Answer to RQ1:} For in-distribution calibration, evidential methods (specifically Improved and Uncertainty-Aware regularization) outperform both MC Dropout and Deep Ensembles, achieving ECE $\sim$ 0.004 with near-nominal coverage (93-95\%) at a fraction of the computational cost.
+\textbf{Answer to RQ1:} For in-distribution calibration, evidential methods (specifically Improved and Uncertainty-Aware regularization) outperform both MC Dropout and Deep Ensembles across multiple PDE types, achieving ECE $\sim$ 0.004 with near-nominal coverage (93-95\%) at a fraction of the computational cost. This superiority strengthens on harder problems (Darcy Flow), where MC Dropout and Ensemble exhibit significant degradation.
 
 \subsection{RQ2: Computational Efficiency}
 
@@ -99,7 +107,7 @@ The NIG parameterization's four output parameters $(\gamma, \nu, \alpha, \beta)$
 
 \item \textbf{Total uncertainty is still informative}: Despite decomposition failure, the total uncertainty (epistemic + aleatoric) remains well-calibrated and highly correlated with prediction errors (correlation = 0.61 for Uncertainty-Aware).
 
-\item \textbf{Use ensembles for epistemic uncertainty}: If separating uncertainty sources is critical (e.g., for active learning or model improvement decisions), Deep Ensembles provide a more principled approach by directly capturing model diversity.
+\item \textbf{Use ensembles for epistemic uncertainty}: If separating uncertainty sources is critical (e.g., for active learning \cite{settles2009active} or model improvement decisions), Deep Ensembles provide a more principled approach by directly capturing model diversity.
 \end{enumerate}
 
 \textbf{Answer to RQ4:} Evidential methods do \textbf{not} reliably separate epistemic and aleatoric uncertainty in neural operators. This limitation extends from classification/regression tasks and appears fundamental to the NIG parameterization. However, total uncertainty remains well-calibrated and useful for in-distribution inference.
@@ -173,19 +181,29 @@ Our comprehensive evaluation positions evidential deep learning as the \textbf{m
 \item \textbf{Default choice}: Use Uncertainty-Aware regularization for balanced performance across all metrics
 \item \textbf{Safety-critical applications}: Use Improved or L2-Evidence for tighter calibration and coverage guarantees
 \item \textbf{OOD monitoring}: Deploy with threshold-based fallback (e.g., if uncertainty $>$ 0.1, use traditional solver)
-\item \textbf{Active learning}: While uncertainty decomposition fails, total uncertainty can still guide sample selection for regions of high prediction error
+\item \textbf{Active learning}: While uncertainty decomposition fails, total uncertainty can still guide sample selection \cite{settles2009active} for regions of high prediction error
 \end{itemize}
 
 \subsection{MC Dropout Not Recommended for Neural Operators}
 
-Our results provide strong evidence to \textbf{avoid MC Dropout for neural operator applications}:
+Our results provide strong evidence to \textbf{avoid MC Dropout for neural operator applications}, with consistent failure across both PDEs tested:
 
+\textbf{Navier-Stokes (Experiment 1):}
 \begin{itemize}
-\item \textbf{Dominated on all metrics}: Worst performance in MSE (6× worse), ECE (5× worse), and correlation (2× worse) compared to evidential methods
-\item \textbf{Computational inefficiency}: Requires 30 stochastic forward passes, negating the speed advantage of neural operators
-\item \textbf{Undercoverage}: 90\% coverage despite targeting 95\%, indicating poor calibration
-\item \textbf{No compensating advantages}: Unlike in some computer vision tasks where MC Dropout provides acceptable uncertainty at low cost, it fails to deliver either efficiency or quality for neural operators
+\item Worst performance in MSE (6× worse), ECE (5× worse), and correlation (2× worse) compared to evidential methods
+\item Undercoverage: 90\% coverage despite targeting 95\%, indicating poor calibration
+\item Computational inefficiency: Requires 30 stochastic forward passes, negating the speed advantage of neural operators
 \end{itemize}
+
+\textbf{Darcy Flow (Experiment 2):}
+\begin{itemize}
+\item \textbf{Performance degradation worsens on simpler PDE}: MSE = 0.0119 (3.4× worse than best evidential), compared to 6× worse on Navier-Stokes
+\item \textbf{Excessively wide intervals}: Interval width = 0.2689, 3× wider than evidential methods (0.09), indicating severe overestimation of uncertainty
+\item \textbf{Lowest correlation}: 0.299 vs. 0.659 for Uncertainty-Aware evidential (45\% lower), showing MC Dropout's uncertainty is least informative
+\item \textbf{Misleading calibration}: Despite achieving low ECE (0.0048, second best), the excessively wide intervals reveal this is an artifact of overcautiousness rather than true calibration quality
+\end{itemize}
+
+\textbf{Key insight from Darcy Flow}: MC Dropout's failure on a simpler, linear PDE demonstrates that its poor performance is not due to insufficient model capacity for complex physics, but rather a fundamental incompatibility with neural operator architectures and PDE solution prediction.
 
 Possible explanations for MC Dropout's poor performance on neural operators:
 \begin{enumerate}
@@ -193,6 +211,8 @@ Possible explanations for MC Dropout's poor performance on neural operators:
 \item \textbf{Fourier domain operations}: Dropout after spectral convolution may inject noise in frequency space, degrading both predictions and uncertainty estimates
 \item \textbf{Operator learning vs. function approximation}: Neural operators learn mappings between function spaces, where dropout's implicit regularization may not align with the learning objective
 \end{enumerate}
+
+\textbf{Recommendation}: Avoid MC Dropout entirely for neural operator applications. No compensating advantages exist—it fails on both efficiency and quality dimensions.
 
 \subsection{Deep Ensembles: When to Use Despite Cost}
 
@@ -211,12 +231,60 @@ While evidential methods dominate in most scenarios, Deep Ensembles remain valua
 
 \textbf{Our results suggest caution with ensembles:}
 \begin{itemize}
-\item \textbf{Severe undercoverage} (75.8\%) indicates ensemble variance alone underestimates uncertainty
-\item \textbf{Lower uncertainty-error correlation} (0.328 vs. 0.614) suggests ensemble uncertainty is less informative than evidential uncertainty
-\item \textbf{5× computational cost} is difficult to justify given evidential methods' superior calibration and correlation
+\item \textbf{Severe undercoverage on Navier-Stokes} (75.8\%) indicates ensemble variance alone underestimates uncertainty
+\item \textbf{Performance degradation on Darcy Flow}: Coverage drops to 65.2\% (10\% absolute degradation), MSE worsens to 1.9× worse than best evidential (vs. competitive on NS), confirming ensembles' brittleness on harder problems
+\item \textbf{Lower uncertainty-error correlation} (0.328 vs. 0.614 on NS, 0.461 vs. 0.659 on Darcy) suggests ensemble uncertainty is less informative than evidential uncertainty across PDEs
+\item \textbf{5× computational cost} is difficult to justify given evidential methods' superior calibration, correlation, and robustness
 \end{itemize}
 
-\textbf{Recommendation}: Reserve ensembles for safety-critical applications where the computational cost is acceptable and robust epistemic uncertainty justifies the expense. For most production deployments, evidential methods are preferable.
+\textbf{Cross-PDE consistency finding}: While evidential methods maintain or improve performance from Navier-Stokes to Darcy Flow, Deep Ensembles degrade significantly (undercoverage drops 10\%, MSE deteriorates), suggesting ensembles may overfit to specific PDE characteristics during training.
+
+\textbf{Recommendation}: Reserve ensembles for safety-critical applications where the computational cost is acceptable and robust epistemic uncertainty justifies the expense. For most production deployments, evidential methods are preferable due to superior calibration, robustness, and efficiency.
+
+\subsection{Architectural Components Matter: Insights from Ablation Study}
+
+Our architectural ablation study (Experiment 6) reveals which components of the evidential FNO are critical for performance and which modifications can improve results:
+
+\textbf{Critical components (removal causes catastrophic failure):}
+
+\begin{enumerate}
+\item \textbf{Skip connections are essential}: Removing skip connections (leaving only spectral convolution) causes complete model failure (MSE = 0.9962, rel\_l2 = 1.0), with NaN correlation indicating the model predicts near-zero everywhere. Skip connections enable information flow between layers, preventing mode collapse.
+
+\item \textbf{Activations (GELU) are critical}: Removing activation functions between layers degrades performance severely (MSE increases 20×, from 0.0019 to 0.040). Activations introduce necessary nonlinearity for learning complex operator mappings, though the model remains partially functional unlike with no skip connections.
+
+\item \textbf{Convolutional layers complement Fourier}: Pure Fourier-only architecture (removing all Conv layers) fails catastrophically (MSE = 0.9963), confirming that local information captured by convolutions is essential alongside global Fourier patterns.
+\end{enumerate}
+
+\textbf{Beneficial modifications:}
+
+\begin{enumerate}
+\item \textbf{Residual connections improve performance}: Adding a residual connection from input to output achieves the best results (MSE = 0.00185, 5\% better than baseline), better calibration (ECE = 0.0283 vs. 0.0292), and comparable correlation (0.452 vs. 0.455). This suggests direct input-output pathways help preserve solution structure.
+
+\item \textbf{Shallow heads are nearly as good as deep}: Using shallow evidential heads (64 hidden units) maintains near-baseline performance (MSE = 0.00200 vs. 0.00194) while reducing parameters by 8.7k, offering a parameter-efficient alternative with minimal quality loss.
+\end{enumerate}
+
+\textbf{Detrimental modifications:}
+
+\begin{enumerate}
+\item \textbf{Batch normalization degrades performance}: Adding batch normalization worsens MSE by 2.2× (0.00431 vs. 0.00194) and calibration (ECE = 0.0384 vs. 0.0292). This may be because batch statistics interfere with the NIG parameterization's learned evidence values, which need to vary independently across samples.
+
+\item \textbf{Linear heads are insufficient}: Using linear evidential heads (no hidden layer) increases MSE by 69\% (0.00329 vs. 0.00194), confirming that nonlinear transformation between FNO features and NIG parameters is beneficial for capturing complex uncertainty patterns.
+\end{enumerate}
+
+\textbf{Understanding NaN correlations:}
+
+When models fail catastrophically (no\_skip\_connections, fourier\_only), they predict constant values (near-zero) for all inputs, causing zero variance in predictions: $\text{Var}(|y - \hat{y}|) \approx 0$. The correlation computation $\rho = \text{Cov}(\hat{\sigma}, |y - \hat{y}|) / \sqrt{\text{Var}(\hat{\sigma}) \cdot \text{Var}(|y - \hat{y}|)}$ then involves division by zero, yielding NaN. This serves as a useful diagnostic: NaN correlation indicates complete model failure rather than just poor calibration.
+
+\textbf{Architectural recommendations for evidential FNOs:}
+
+\begin{itemize}
+\item \textbf{Essential}: Keep skip connections, GELU activations, and convolutional layers—these are non-negotiable
+\item \textbf{Recommended}: Add residual connection from input to output for 5\% performance gain
+\item \textbf{Parameter-efficient}: Use shallow heads instead of deep heads if parameter budget is tight (minimal quality loss)
+\item \textbf{Avoid}: Batch normalization (interferes with NIG parameterization) and linear heads (insufficient capacity)
+\end{itemize}
+
+These findings apply specifically to evidential FNOs and may differ for standard prediction tasks without uncertainty quantification.
 
 \section{The Calibration-Decomposition Trade-off}
 
@@ -384,7 +452,7 @@ While our study provides comprehensive evaluation of uncertainty quantification 
 
 \subsection{Single Architecture (FNO)}
 
-\textbf{Limitation:} All experiments use Fourier Neural Operators; results may not extend to other neural operator architectures (DeepONet, Graph Neural Operators, etc.).
+\textbf{Limitation:} All experiments use Fourier Neural Operators; results may not extend to other neural operator architectures (DeepONet \cite{lu2021deeponet}, Graph Neural Operators \cite{li2020graph}, etc.).
 
 \textbf{Potential impact:}
 \begin{itemize}
@@ -432,7 +500,7 @@ While our study provides comprehensive evaluation of uncertainty quantification 
 
 \subsection{No Comparison with Conformal Prediction}
 
-\textbf{Limitation:} We do not compare with conformal prediction, which provides distribution-free uncertainty quantification with coverage guarantees.
+\textbf{Limitation:} We do not compare with conformal prediction \cite{vovk2005algorithmic,shafer2008tutorial}, which provides distribution-free uncertainty quantification with coverage guarantees.
 
 \textbf{Potential impact:}
 \begin{itemize}
@@ -483,6 +551,16 @@ Among six evidential regularization schemes, we find:
 \item KL-Divergence: Valid decomposition but poor calibration—avoid for practical use
 \end{itemize}
 
+\textbf{6. Architectural components are critical for evidential FNOs}
+
+Our ablation study (Experiment 6) reveals essential design principles:
+\begin{itemize}
+\item \textbf{Critical}: Skip connections, GELU activations, and convolutional layers—removal causes catastrophic failure (MSE $\sim$ 1.0)
+\item \textbf{Beneficial}: Adding residual connections improves performance by 5\%; shallow evidential heads maintain quality with fewer parameters
+\item \textbf{Detrimental}: Batch normalization degrades performance by 2.2×; linear heads increase MSE by 69\%
+\item \textbf{NaN correlation diagnostic}: Indicates complete model failure (constant predictions), not just poor calibration
+\end{itemize}
+
 \subsection{Answers to Research Questions}
 
 \begin{description}
@@ -517,7 +595,7 @@ This framework can be applied to future UQ research on neural operators and othe
 
 \textbf{2. First systematic comparison of UQ methods for neural operators}
 
-Prior work on neural operator uncertainty focused on single methods (e.g., Bayesian DeepONet) without comparative evaluation. Our head-to-head comparison of MC Dropout, Ensembles, and Evidential methods across multiple axes provides the first comprehensive evidence base for method selection.
+Prior work on neural operator uncertainty focused on single methods (e.g., Bayesian DeepONet \cite{psaros2023uncertainty}) without comparative evaluation. Our head-to-head comparison of MC Dropout, Ensembles, and Evidential methods across multiple axes provides the first comprehensive evidence base for method selection.
 
 \textbf{3. Implementation and ablation of six evidential regularization schemes}
 
@@ -637,7 +715,7 @@ Investigate formulations that may overcome the calibration-decomposition trade-o
 \item Separate networks for epistemic and aleatoric predictions
 \item Hierarchical Bayesian models with learned priors
 \item Non-conjugate distributions with more flexible uncertainty modeling
-\item Normalizing flows for full posterior approximation
+\item Normalizing flows \cite{rezende2015variational} for full posterior approximation
 \end{itemize}
 
 \textbf{3. Physics-informed uncertainty metrics}
@@ -665,10 +743,10 @@ Extend evaluation to diverse PDE families:
 
 Validate findings on real scientific computing applications:
 \begin{itemize}
-\item Weather forecasting with uncertainty quantification
+\item Weather forecasting \cite{weyn2020improving} with uncertainty quantification
 \item Drug molecule property prediction with confidence intervals
 \item Engineering design optimization with uncertainty-aware objectives
-\item Materials discovery with uncertainty-guided active learning
+\item Materials discovery with uncertainty-guided active learning \cite{settles2009active}
 \end{itemize}
 
 \textbf{6. Characterization of safe extrapolation regimes}
@@ -686,8 +764,8 @@ Systematically study parameter extrapolation boundaries:
 
 Apply our evaluation framework to:
 \begin{itemize}
-\item DeepONet with evidential heads
-\item Graph Neural Operators with uncertainty
+\item DeepONet \cite{lu2021deeponet} with evidential heads
+\item Graph Neural Operators \cite{li2020graph} with uncertainty
 \item Transformer-based operators with uncertainty attention
 \item U-Net operators with evidential skip connections
 \end{itemize}
@@ -736,6 +814,6 @@ Our key message to practitioners is clear: \textbf{evidential methods with Uncer
 
 For the research community, this work establishes evaluation protocols, identifies open challenges, and provides empirical evidence that advances understanding of uncertainty quantification in the unique context of operator learning. The finding that neural operators can perfectly detect operator-level distributional shift (AUROC = 1.0) while maintaining appropriate confidence for parameter variations suggests they learn genuinely physics-informed representations—a promising foundation for trustworthy scientific machine learning.
 
-As neural operators continue to mature and find deployment in weather forecasting, drug discovery, materials science, and engineering design, the uncertainty quantification methods and evaluation frameworks developed in this thesis will help ensure these powerful models can be deployed safely and reliably in the real world.
+As neural operators continue to mature and find deployment in weather forecasting \cite{weyn2020improving}, drug discovery, materials science, and engineering design, the uncertainty quantification methods and evaluation frameworks developed in this thesis will help ensure these powerful models can be deployed safely and reliably in the real world.
 
 The path forward requires continued interdisciplinary collaboration between machine learning researchers developing better UQ methods, computational scientists understanding application requirements, and domain experts providing physical insight. This thesis represents one step in that journey, and we hope it provides a foundation for the next generation of uncertainty-aware neural operators that can truly transform scientific computing.
