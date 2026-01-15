@@ -1,0 +1,264 @@
+\chapter{Methodology}
+
+This chapter presents the proposed Evidential Fourier Neural Operator (Evidential-FNO), a novel approach that integrates Evidential Deep Learning with Fourier Neural Operators for uncertainty-aware PDE solution prediction. We first establish the theoretical connection between FNO outputs and regression problems, then describe the architectural modifications required to enable evidential learning.
+
+\section{Evidential Fourier Neural Operator}
+
+\subsection{FNO Output as Spatially-Extended Regression}
+
+The key insight enabling the integration of Evidential Deep Learning with Fourier Neural Operators lies in recognizing the nature of FNO's output. Consider the standard FNO that learns a solution operator $\mathcal{G}_\theta: \mathcal{A} \rightarrow \mathcal{U}$ mapping input functions to solution functions. For a discretized input $a \in \mathbb{R}^{H \times W \times d_{in}}$ on a spatial grid, the vanilla FNO produces:
+\begin{equation}
+    u = \mathcal{G}_\theta(a) \in \mathbb{R}^{H \times W \times 1}
+\end{equation}
+where each spatial location $(i, j)$ yields a continuous scalar prediction $u_{i,j} \in \mathbb{R}$.
+
+This output structure is fundamentally equivalent to performing regression at each spatial location simultaneously. At any grid point $(i, j)$, the FNO effectively solves a regression problem:
+\begin{equation}
+    u_{i,j} = f_\theta(a, i, j) + \epsilon_{i,j}, \quad \epsilon_{i,j} \sim \mathcal{N}(0, \sigma^2_{i,j})
+\end{equation}
+where $f_\theta$ represents the learned mapping and $\epsilon_{i,j}$ captures prediction noise that may vary spatially.
+
+The crucial observation is that while the FNO operates on 2D spatial grids, each output value remains a continuous scalar---precisely the setting where Evidential Deep Learning excels. Standard regression neural networks predict point estimates; Evidential Deep Learning extends this by predicting distributions over possible outputs. This same extension applies naturally to the spatially-extended regression performed by FNOs.
+
+\subsection{From Point Estimates to Evidential Outputs}
+
+In standard regression, a neural network predicts a single value $\hat{y}$ for each input. Evidential regression instead predicts parameters of a higher-order distribution---specifically, a Normal-Inverse-Gamma (NIG) distribution that represents uncertainty over both the prediction mean and variance.
+
+For the FNO setting, we extend this from scalar regression to spatially-extended regression. Rather than predicting a single channel output $u \in \mathbb{R}^{H \times W \times 1}$, the Evidential-FNO predicts four channels representing the NIG parameters at each spatial location:
+\begin{equation}
+    \mathcal{G}^{\text{evid}}_\theta(a) = \begin{pmatrix} \gamma \\ \nu \\ \alpha \\ \beta \end{pmatrix} \in \mathbb{R}^{H \times W \times 4}
+\end{equation}
+
+At each spatial location $(i,j)$, the four parameters define a NIG distribution:
+\begin{equation}
+    (\mu_{i,j}, \sigma^2_{i,j}) \sim \text{NIG}(\gamma_{i,j}, \nu_{i,j}, \alpha_{i,j}, \beta_{i,j})
+\end{equation}
+which serves as a prior over the Gaussian likelihood parameters $(\mu, \sigma^2)$ for that location's prediction.
+
+The NIG distribution factorizes as:
+\begin{align}
+    \sigma^2_{i,j} &\sim \text{Inv-Gamma}(\alpha_{i,j}, \beta_{i,j}) \\
+    \mu_{i,j} | \sigma^2_{i,j} &\sim \mathcal{N}\left(\gamma_{i,j}, \frac{\sigma^2_{i,j}}{\nu_{i,j}}\right)
+\end{align}
+
+This formulation provides closed-form expressions for predictive statistics at each grid point:
+\begin{align}
+    \mathbb{E}[u_{i,j}] &= \gamma_{i,j} \label{eq:pred_mean} \\
+    \text{Var}[u_{i,j}] &= \frac{\beta_{i,j}}{\alpha_{i,j} - 1} \cdot \frac{\nu_{i,j} + 1}{\nu_{i,j}} \label{eq:pred_var}
+\end{align}
+
+\subsection{Uncertainty Decomposition}
+
+A key advantage of the evidential formulation is the natural decomposition of predictive uncertainty into epistemic and aleatoric components. For each spatial location $(i,j)$:
+
+\textbf{Aleatoric uncertainty} (irreducible data noise):
+\begin{equation}
+    \sigma^2_{\text{ale}, i,j} = \mathbb{E}[\sigma^2_{i,j}] = \frac{\beta_{i,j}}{\alpha_{i,j} - 1}
+\end{equation}
+
+\textbf{Epistemic uncertainty} (model uncertainty):
+\begin{equation}
+    \sigma^2_{\text{epi}, i,j} = \text{Var}[\mu_{i,j}] = \frac{\beta_{i,j}}{\nu_{i,j}(\alpha_{i,j} - 1)}
+\end{equation}
+
+The epistemic uncertainty is inversely proportional to $\nu$, which represents the ``evidence'' or effective number of virtual observations supporting the prediction. Regions where the model has seen similar training data will have higher $\nu$ and thus lower epistemic uncertainty.
+
+\subsection{Architectural Modification}
+
+The architectural change from vanilla FNO to Evidential-FNO is minimal, affecting only the final projection layer. The complete architecture is:
+
+\textbf{Vanilla FNO:}
+\begin{equation}
+    a \xrightarrow{P} v_0 \xrightarrow{\mathcal{F}_1} v_1 \xrightarrow{\mathcal{F}_2} v_2 \xrightarrow{\mathcal{F}_3} v_3 \xrightarrow{\mathcal{F}_4} v_4 \xrightarrow{Q} u \in \mathbb{R}^{H \times W \times 1}
+\end{equation}
+
+\textbf{Evidential-FNO:}
+\begin{equation}
+    a \xrightarrow{P} v_0 \xrightarrow{\mathcal{F}_1} v_1 \xrightarrow{\mathcal{F}_2} v_2 \xrightarrow{\mathcal{F}_3} v_3 \xrightarrow{\mathcal{F}_4} v_4 \xrightarrow{Q^{\text{evid}}} (\gamma, \nu, \alpha, \beta) \in \mathbb{R}^{H \times W \times 4}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $P: \mathbb{R}^{d_{in}} \rightarrow \mathbb{R}^{w}$ is the lifting layer (unchanged)
+    \item $\mathcal{F}_l$ are spectral convolution layers (unchanged)
+    \item $Q: \mathbb{R}^{w} \rightarrow \mathbb{R}^{1}$ is the vanilla projection
+    \item $Q^{\text{evid}}: \mathbb{R}^{w} \rightarrow \mathbb{R}^{4}$ is the evidential projection
+\end{itemize}
+
+The evidential projection layer applies appropriate activation functions to ensure valid NIG parameters:
+\begin{align}
+    \gamma &= \text{linear}(v_4) && \text{(unbounded, prediction mean)} \\
+    \nu &= \text{softplus}(v_4) + \epsilon && \text{(positive, evidence)} \\
+    \alpha &= \text{softplus}(v_4) + 1 + \epsilon && \text{(> 1, shape parameter)} \\
+    \beta &= \text{softplus}(v_4) + \epsilon && \text{(positive, scale parameter)}
+\end{align}
+where $\epsilon = 10^{-6}$ ensures numerical stability.
+
+\subsection{Training Objective}
+
+The Evidential-FNO is trained by minimizing the negative log-likelihood of the NIG distribution. For a training pair $(a, u^*)$ where $u^* \in \mathbb{R}^{H \times W}$ is the ground truth solution:
+\begin{equation}
+    \mathcal{L}_{\text{NIG}} = \frac{1}{HW} \sum_{i,j} \mathcal{L}^{(i,j)}_{\text{NIG}}
+\end{equation}
+where the per-location loss is:
+\begin{equation}
+    \mathcal{L}^{(i,j)}_{\text{NIG}} = \frac{1}{2}\log\left(\frac{\pi}{\nu_{i,j}}\right) - \alpha_{i,j}\log(\Omega_{i,j}) + \left(\alpha_{i,j} + \frac{1}{2}\right)\log\left((u^*_{i,j} - \gamma_{i,j})^2 \nu_{i,j} + \Omega_{i,j}\right) + \log\frac{\Gamma(\alpha_{i,j})}{\Gamma(\alpha_{i,j} + \frac{1}{2})}
+\end{equation}
+with $\Omega_{i,j} = 2\beta_{i,j}(1 + \nu_{i,j})$.
+
+\subsection{Regularization Schemes}
+
+A known challenge in evidential deep learning is preventing the model from ``explaining away'' prediction errors by inflating uncertainty estimates rather than improving predictions. This occurs when the model increases $\beta$ (aleatoric uncertainty) to reduce the NIG loss without actually learning better predictions. Regularization is essential to encourage meaningful uncertainty estimates.
+
+We investigate six regularization schemes, each with different inductive biases for controlling the evidence parameters:
+
+\subsubsection{Standard Regularization}
+
+The original evidential regularization from \cite{amini2020deep} penalizes evidence on incorrect predictions:
+\begin{equation}
+    \mathcal{L}_{\text{standard}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha)
+\end{equation}
+
+\textbf{Intuition}: When prediction error $|u^* - \gamma|$ is high, the model is penalized for having high evidence ($\nu$) and concentration ($\alpha$). This encourages the model to express high confidence only when predictions are accurate.
+
+\subsubsection{Improved Regularization}
+
+We propose an improved scheme that directly regularizes the evidence parameter toward a baseline value:
+\begin{equation}
+    \mathcal{L}_{\text{improved}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha) + \lambda_{\nu} \cdot |\nu - 1|
+\end{equation}
+
+\textbf{Intuition}: The additional term $|\nu - 1|$ prevents $\nu$ from growing unboundedly large or collapsing to near-zero. By anchoring $\nu$ toward 1, we maintain a balance between over-confident and under-confident predictions. The evidence can still deviate from 1 when the data supports it, but extreme values are discouraged.
+
+\subsubsection{Uncertainty-Aware Regularization}
+
+This scheme adaptively scales regularization based on prediction error magnitude:
+\begin{equation}
+    \mathcal{L}_{\text{UA}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot (u^* - \gamma)^2 \cdot \nu
+\end{equation}
+
+\textbf{Intuition}: The quadratic error term $(u^* - \gamma)^2$ creates stronger penalties for large errors. Multiplying by $\nu$ means that high-evidence predictions are especially penalized when wrong. This creates a self-correcting mechanism: the model learns to reduce evidence in regions where it makes large errors.
+
+\subsubsection{Adaptive Regularization}
+
+We introduce epoch-dependent regularization strength that evolves during training:
+\begin{equation}
+    \mathcal{L}_{\text{adaptive}} = \mathcal{L}_{\text{NIG}} + \lambda(t) \cdot |u^* - \gamma| \cdot \phi(\nu, \alpha)
+\end{equation}
+where:
+\begin{equation}
+    \lambda(t) = \lambda_0 \cdot \min\left(1, \frac{t}{t_{\text{warmup}}}\right)
+\end{equation}
+and $\phi(\nu, \alpha) = 2\nu + \alpha$ is the evidence function.
+
+\textbf{Intuition}: Early in training, predictions are poor, so heavy regularization would prevent the model from learning. The warmup schedule starts with weak regularization ($\lambda \approx 0$), allowing the model to first learn accurate predictions. As training progresses, regularization strengthens to refine uncertainty estimates. This two-phase approach separates ``learning to predict'' from ``learning to quantify uncertainty.''
+
+\subsubsection{L2-Evidence Regularization}
+
+This scheme applies L2 (squared) penalty directly on the evidence parameter:
+\begin{equation}
+    \mathcal{L}_{\text{L2}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha) + \lambda_{\nu} \cdot \nu^2
+\end{equation}
+
+\textbf{Intuition}: Unlike L1 regularization which encourages sparsity, L2 regularization on $\nu^2$ creates smooth, distributed evidence values. Large $\nu$ values are penalized quadratically, strongly discouraging overconfident predictions. This is analogous to weight decay in standard neural network training---it prevents any single prediction from having disproportionately high evidence.
+
+\subsubsection{KL-Divergence Regularization}
+
+This scheme penalizes deviation from a prior NIG distribution:
+\begin{equation}
+    \mathcal{L}_{\text{KL}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha) + \lambda_{\text{KL}} \cdot D_{\text{KL}}\left(\text{NIG}(\gamma, \nu, \alpha, \beta) \| \text{NIG}(\gamma_0, \nu_0, \alpha_0, \beta_0)\right)
+\end{equation}
+
+The KL divergence between NIG distributions has closed form:
+\begin{equation}
+    D_{\text{KL}} = \frac{1}{2}\left[\frac{\nu_0}{\nu} - \log\frac{\nu_0}{\nu} - 1\right] + \alpha_0\log\frac{\beta}{\beta_0} - \log\frac{\Gamma(\alpha)}{\Gamma(\alpha_0)} + (\alpha - \alpha_0)\psi(\alpha) + \frac{\beta_0 - \beta}{\beta}\alpha
+\end{equation}
+where $\psi(\cdot)$ is the digamma function and $(\gamma_0, \nu_0, \alpha_0, \beta_0)$ are prior hyperparameters.
+
+\textbf{Intuition}: This is the most principled Bayesian approach. The KL term acts as a prior, pulling the predicted distribution toward a ``default'' uncertainty level. Predictions can deviate from the prior when evidence supports it, but the model must ``pay'' an information-theoretic cost. This naturally implements Occam's razor for uncertainty estimation.
+
+\subsubsection{Summary of Regularization Schemes}
+
+Table~\ref{tab:reg_summary} summarizes the key characteristics of each regularization scheme:
+
+\begin{table}[h]
+\centering
+\caption{Comparison of regularization schemes for Evidential-FNO.}
+\label{tab:reg_summary}
+\begin{tabular}{lll}
+\toprule
+\textbf{Scheme} & \textbf{Key Mechanism} & \textbf{Target Behavior} \\
+\midrule
+Standard & Error-weighted evidence penalty & Reduce confidence on errors \\
+Improved & Evidence anchoring to baseline & Prevent extreme $\nu$ values \\
+Uncertainty-Aware & Quadratic error scaling & Strong penalty for large errors \\
+Adaptive & Epoch-dependent strength & Learn predictions before uncertainty \\
+L2-Evidence & Squared evidence penalty & Smooth, distributed confidence \\
+KL-Divergence & Prior distribution matching & Bayesian uncertainty regularization \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The total loss for all schemes follows the general form:
+\begin{equation}
+    \mathcal{L} = \mathcal{L}_{\text{NIG}} + \mathcal{L}_{\text{reg}}
+\end{equation}
+where $\mathcal{L}_{\text{reg}}$ varies according to the chosen scheme. All schemes share the same network architecture; only the training objective differs.
+
+\subsection{Computational Efficiency}
+
+A significant advantage of Evidential-FNO over ensemble methods is computational efficiency. Table~\ref{tab:computational} summarizes the comparison:
+
+\begin{table}[h]
+\centering
+\caption{Computational comparison of uncertainty quantification methods for FNO.}
+\label{tab:computational}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Training Cost} & \textbf{Inference Cost} & \textbf{Parameters} \\
+\midrule
+Vanilla FNO & $1\times$ & $1\times$ & $1\times$ \\
+MC Dropout & $1\times$ & $T\times$ & $1\times$ \\
+Deep Ensemble ($M$ models) & $M\times$ & $M\times$ & $M\times$ \\
+Evidential-FNO & $1\times$ & $1\times$ & $\approx 1\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Evidential-FNO requires only a single forward pass during both training and inference, with negligible parameter overhead (only the final projection layer is modified). This makes it particularly attractive for real-time applications where computational budget is limited.
+
+\section{Baseline Methods}
+
+For comprehensive evaluation, we compare Evidential-FNO against established uncertainty quantification methods adapted for neural operators.
+
+\subsection{MC Dropout}
+
+Monte Carlo Dropout approximates Bayesian inference by using dropout at test time. We apply Dropout2d (spatial dropout) after each Fourier layer with dropout rate $p$. At inference, $T$ stochastic forward passes yield:
+\begin{align}
+    \hat{u}_{i,j} &= \frac{1}{T}\sum_{t=1}^{T} u^{(t)}_{i,j} \\
+    \hat{\sigma}^2_{i,j} &= \frac{1}{T}\sum_{t=1}^{T} (u^{(t)}_{i,j} - \hat{u}_{i,j})^2
+\end{align}
+
+\subsection{Deep Ensemble}
+
+Deep Ensemble trains $M$ independent FNO models with different random initializations. Predictions are aggregated as:
+\begin{align}
+    \hat{u}_{i,j} &= \frac{1}{M}\sum_{m=1}^{M} u^{(m)}_{i,j} \\
+    \hat{\sigma}^2_{i,j} &= \frac{1}{M}\sum_{m=1}^{M} (u^{(m)}_{i,j} - \hat{u}_{i,j})^2
+\end{align}
+
+\section{Summary}
+
+This chapter presented Evidential-FNO, which extends Fourier Neural Operators with uncertainty quantification through Evidential Deep Learning. The key contributions are:
+
+\begin{enumerate}
+    \item \textbf{Theoretical connection}: We established that FNO's continuous 2D output is equivalent to spatially-extended regression, enabling direct application of evidential learning.
+
+    \item \textbf{Architectural modification}: The modification is minimal---only the output projection changes from 1 to 4 channels, with appropriate activation functions ensuring valid NIG parameters.
+
+    \item \textbf{Uncertainty decomposition}: The evidential formulation provides principled decomposition into epistemic and aleatoric uncertainty at each spatial location.
+
+    \item \textbf{Regularization schemes}: We investigate six regularization strategies---Standard, Improved, Uncertainty-Aware, Adaptive, L2-Evidence, and KL-Divergence---each with different inductive biases for controlling evidence estimation.
+
+    \item \textbf{Computational efficiency}: Unlike ensemble or dropout methods, Evidential-FNO requires only a single forward pass for uncertainty estimation.
+\end{enumerate}
