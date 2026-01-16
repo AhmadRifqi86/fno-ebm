@@ -1,0 +1,50 @@
+\section{Introduction}
+
+Neural operators have emerged as a transformative paradigm for learning solution operators of partial differential 
+equations (PDEs), offering orders of magnitude speedup compared to traditional numerical solvers while maintaining 
+competitive accuracy \cite{li2020fourier,lu2021deeponet}. Among neural operator architectures, Fourier Neural 
+Operators (FNOs) have demonstrated remarkable success across diverse applications including fluid dynamics, 
+climate modeling, and materials science. However, the deterministic nature of standard FNOs presents a critical 
+limitation: they provide point predictions without quantifying prediction uncertainty. This deficiency makes 
+them unsuitable for safety-critical applications such as weather forecasting, drug discovery, and engineering 
+design, where reliable uncertainty estimates are essential for decision-making under uncertainty.
+
+Uncertainty quantification (UQ) for neural networks has been extensively studied, with several prominent 
+approaches emerging: Monte Carlo Dropout \cite{gal2016dropout}, Deep Ensembles \cite{lakshminarayanan2017simple}, 
+and Evidential Deep Learning \cite{sensoy2018evidential,amini2020deep}. MC Dropout provides uncertainty through 
+stochastic forward passes but suffers from poor calibration \cite{ovadia2019can}. Deep Ensembles offer robust 
+uncertainty by aggregating independently trained models, yet incur $N$-fold computational overhead. Evidential 
+methods parameterize higher-order distributions in a single forward pass, promising efficiency with explicit 
+epistemic-aleatoric decomposition. However, recent studies have revealed fundamental limitations: the theoretical 
+uncertainty decomposition fails in practice \cite{jurgens2024epistemic,ulmer2024prior}, and 
+out-of-distribution (OOD) detection achieves near-random performance \cite{meinke2024uncertaintyquantification}. 
+Despite extensive work on UQ for standard neural networks, its application to neural operators remains understudied, 
+and it is unclear whether these known limitations extend to the unique context of PDE solving—characterized by 
+continuous function approximation, physics-informed structure, and availability of unlimited synthetic training data.
+
+This work presents a comprehensive empirical comparison of UQ methods for Fourier Neural Operators, 
+systematically evaluating MC Dropout, Deep Ensembles, and Evidential Deep Learning across multiple dimensions: 
+calibration quality, computational efficiency, uncertainty decomposition validity, and OOD detection capability. 
+We implement six evidential regularization schemes and evaluate all methods on two benchmark PDEs 
+(Navier-Stokes and Darcy Flow), providing the first systematic evidence base for UQ method selection in 
+neural operators. The contributions of this study are summarized as follows:
+
+\begin{enumerate}
+    \item We establish a comprehensive evaluation framework for comparing UQ methods on neural operators, 
+    encompassing eight metrics across calibration (ECE, coverage, interval width), accuracy (MSE, MAE, relative $L^2$), and 
+    uncertainty quality (correlation, NLL, AUROC). Our experiments demonstrate that evidential methods achieve 
+    state-of-the-art calibration (ECE $\sim$ 0.004) with single-pass inference, outperforming both MC 
+    Dropout (ECE = 0.019) and Deep Ensembles (ECE = 0.011) while being 5-30$\times$ faster.
+
+    \item We confirm that evidential uncertainty decomposition fails for neural operators—both epistemic and 
+    aleatoric uncertainties decrease with training data, violating theoretical expectations. However, we discover 
+    that the spatially correlated uncertainty estimates correspond to regions where FNO's spectral truncation 
+    discards high-frequency modes, providing physically interpretable uncertainty that flags architectural 
+    limitations.
+
+    \item We reveal a critical distinction in OOD detection: evidential methods achieve near-random 
+    performance (AUROC $\sim$ 0.55) for parameter-level extrapolation (Reynolds number) but perfect 
+    detection (AUROC = 1.0) for operator-level shift (cross-PDE transfer). This suggests neural operators 
+    learn physics-informed representations that respond appropriately only to true distributional shifts at 
+    the operator level.
+\end{enumerate}

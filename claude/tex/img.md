@@ -594,7 +594,7 @@ This document contains scripts to generate all figures for the thesis.
 \node[circle, draw, fill=white, minimum size=0.6cm, font=\bfseries] (plus) at (7.8, 2.5) {$+$};
 
 % Layer indicator
-\node[font=\tiny, text=gray] at (4.8, 1.2) {$\times 4$ Fourier Layers};
+\node[font=\tiny, text=black] at (4.8, 1.2) {$\times 4$ Fourier Layers};
 
 % Arrow from input to lift
 \draw[arrow, line width=1.5pt] (input.east) -- (lift.west);
@@ -654,33 +654,100 @@ This document contains scripts to generate all figures for the thesis.
     $\sigma^2_{\text{epi}} = \frac{\beta}{\nu(\alpha - 1)}$
 };
 
-% ==================== Student-t Predictive (Compact) ====================
-\node[font=\small\bfseries] at (10, -0.2) {Student-t Predictive};
+% ==================== Student-t Parameter Effects (4 panels) ====================
+\node[font=\small\bfseries] at (6, -0.3) {Effect of NIG Parameters on Predictive Distribution};
 
-\begin{scope}[shift={(7.5,-1.8)}]
-    % Axes
-    \draw[->] (0,0) -- (4.5,0) node[right, font=\footnotesize] {$y$};
-    \draw[->] (0,0) -- (0,2) node[above, font=\footnotesize] {$p(y)$};
+% Panel (a): Effect of γ (location shift)
+\begin{scope}[shift={(0,-2.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(a) Effect of $\gamma$ (location)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
 
-    % Bell curve (Student-t approximation)
-    \draw[blue!70, line width=1.5pt, smooth] plot coordinates {
-        (0.2,0.03) (0.6,0.1) (1.1,0.35) (1.6,0.8) (2,1.4) (2.25,1.7)
-        (2.5,1.4) (2.9,0.8) (3.4,0.35) (3.9,0.1) (4.3,0.03)
+    % Three curves at different locations
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.2,0.05) (0.5,0.3) (0.8,0.9) (1,1.4) (1.2,0.9) (1.5,0.3) (1.8,0.05)
+    };
+    \draw[blue!70, line width=1pt, smooth] plot coordinates {
+        (1.2,0.05) (1.5,0.3) (1.8,0.9) (2,1.4) (2.2,0.9) (2.5,0.3) (2.8,0.05)
+    };
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (2.2,0.05) (2.5,0.3) (2.8,0.9) (3,1.4) (3.2,0.9) (3.5,0.3) (3.8,0.05)
     };
 
-    % Fill under curve
-    \fill[blue!15, smooth] plot coordinates {
-        (0.2,0) (0.2,0.03) (0.6,0.1) (1.1,0.35) (1.6,0.8) (2,1.4) (2.25,1.7)
-        (2.5,1.4) (2.9,0.8) (3.4,0.35) (3.9,0.1) (4.3,0.03) (4.3,0)
-    } -- cycle;
+    % Labels
+    \node[font=\tiny, red!70] at (1,1.6) {$\gamma_1$};
+    \node[font=\tiny, blue!70] at (2,1.6) {$\gamma_2$};
+    \node[font=\tiny, green!60!black] at (3,1.6) {$\gamma_3$};
+    \draw[->, thick, gray] (1.3,1.7) -- (2.7,1.7);
+    \node[font=\tiny, gray] at (2,1.9) {shifts mean};
+\end{scope}
 
-    % Mean line
-    \draw[red, dashed, thick] (2.25,0) -- (2.25,1.85);
-    \node[font=\footnotesize, red] at (2.25,1.95) {$\gamma$};
+% Panel (b): Effect of ν (evidence/epistemic)
+\begin{scope}[shift={(5,-2.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(b) Effect of $\nu$ (evidence)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
 
-    % Uncertainty width
-    \draw[<->, green!60!black, thick] (1.3,1) -- (3.2,1);
-    \node[font=\tiny, green!60!black, above] at (2.25,1) {$\sigma^2$};
+    % Low ν: wide (high epistemic uncertainty)
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.3,0.03) (0.8,0.15) (1.2,0.4) (1.6,0.7) (2,0.9) (2.4,0.7) (2.8,0.4) (3.2,0.15) (3.7,0.03)
+    };
+    % Medium ν
+    \draw[blue!70, line width=1pt, smooth] plot coordinates {
+        (0.8,0.02) (1.2,0.15) (1.5,0.5) (1.8,1) (2,1.3) (2.2,1) (2.5,0.5) (2.8,0.15) (3.2,0.02)
+    };
+    % High ν: narrow (low epistemic uncertainty)
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (1.2,0.02) (1.5,0.2) (1.7,0.7) (1.9,1.5) (2,1.8) (2.1,1.5) (2.3,0.7) (2.5,0.2) (2.8,0.02)
+    };
+
+    % Labels
+    \node[font=\tiny, red!70] at (0.6,0.6) {$\nu$ low};
+    \node[font=\tiny, green!60!black] at (3.2,0.8) {$\nu$ high};
+    \node[font=\tiny, gray] at (2,-0.3) {$\uparrow\nu \Rightarrow \downarrow\sigma^2_{\text{epi}}$};
+\end{scope}
+
+% Panel (c): Effect of α (shape/degrees of freedom)
+\begin{scope}[shift={(10,-2.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(c) Effect of $\alpha$ (shape)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
+
+    % Low α: heavy tails (Student-t like)
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.1,0.12) (0.5,0.18) (1,0.35) (1.5,0.7) (2,1.1) (2.5,0.7) (3,0.35) (3.5,0.18) (3.9,0.12)
+    };
+    % High α: light tails (Gaussian-like)
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (0.5,0.01) (1,0.08) (1.4,0.4) (1.7,1) (2,1.6) (2.3,1) (2.6,0.4) (3,0.08) (3.5,0.01)
+    };
+
+    % Labels with tail annotation
+    \node[font=\tiny, red!70] at (3.5,0.4) {$\alpha$ low};
+    \node[font=\tiny, red!70] at (3.5,0.25) {(heavy tails)};
+    \node[font=\tiny, green!60!black] at (2.8,1.3) {$\alpha$ high};
+    \node[font=\tiny, green!60!black] at (2.8,1.1) {(Gaussian)};
+\end{scope}
+
+% Panel (d): Effect of β (scale)
+\begin{scope}[shift={(5,-5.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(d) Effect of $\beta$ (scale)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
+
+    % Low β: narrow (low aleatoric)
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (1.2,0.02) (1.5,0.2) (1.7,0.7) (1.9,1.5) (2,1.8) (2.1,1.5) (2.3,0.7) (2.5,0.2) (2.8,0.02)
+    };
+    % High β: wide (high aleatoric)
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.3,0.03) (0.8,0.15) (1.2,0.4) (1.6,0.7) (2,0.9) (2.4,0.7) (2.8,0.4) (3.2,0.15) (3.7,0.03)
+    };
+
+    % Labels
+    \node[font=\tiny, green!60!black] at (2.6,1.4) {$\beta$ low};
+    \node[font=\tiny, red!70] at (3.4,0.6) {$\beta$ high};
+    \node[font=\tiny, gray] at (2,-0.3) {$\uparrow\beta \Rightarrow \uparrow\sigma^2_{\text{ale}}$};
 \end{scope}
 
 \end{tikzpicture}
@@ -1259,4 +1326,9 @@ python generate_fig_3_3.py
 \caption{Comparison of three uncertainty quantification architectures...}
 \label{fig:uq_comparison}
 \end{figure}
+```
+
+# Publication plan
+```
+Starts with submitting in TNNLS (IEEE) if rejected, moves to JMLR
 ```

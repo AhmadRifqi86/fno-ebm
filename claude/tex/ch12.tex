@@ -1,8 +1,21 @@
 \section{Introduction}
 
-Neural operators have emerged as a powerful paradigm for learning solution operators of partial differential equations (PDEs), offering orders of magnitude speedup compared to traditional numerical solvers while maintaining competitive accuracy. Among neural operator architectures, Fourier Neural Operators (FNOs) \cite{li2020fourier} have demonstrated remarkable success across diverse applications including fluid dynamics, climate modeling, and materials science. However, the deterministic nature of standard FNOs presents a critical limitation: they provide point predictions without quantifying prediction uncertainty, making them unsuitable for safety-critical applications or decision-making under uncertainty.
+Neural operators have emerged as a powerful paradigm for learning solution operators of partial differential 
+equations (PDEs), offering orders of magnitude speedup compared to traditional numerical solvers while maintaining 
+competitive accuracy. Among neural operator architectures, Fourier Neural Operators (FNOs) \cite{li2020fourier} 
+have demonstrated remarkable success across diverse applications including fluid dynamics, climate modeling, and 
+materials science. However, the deterministic nature of standard FNOs presents a critical limitation: they 
+provide point predictions without quantifying prediction uncertainty, making them unsuitable for safety-critical 
+applications or decision-making under uncertainty.
 
-Uncertainty quantification (UQ) for neural networks has been extensively studied in the computer vision and natural language processing communities, with several prominent approaches emerging: Monte Carlo Dropout \cite{gal2016dropout}, Deep Ensembles \cite{lakshminarayanan2017simple}, Bayesian Neural Networks \cite{blundell2015weight}, and more recently, Evidential Deep Learning \cite{sensoy2018evidential,amini2020deep}. However, the application of these methods to neural operators remains understudied, with most existing work focusing on point prediction accuracy rather than uncertainty quantification. This gap is particularly concerning given that many PDE-solving applications—such as weather forecasting, drug discovery, and engineering design—critically require reliable uncertainty estimates.
+Uncertainty quantification (UQ) for neural networks has been extensively studied in the computer vision and natural 
+language processing communities, with several prominent approaches emerging: Monte Carlo 
+Dropout \cite{gal2016dropout}, Deep Ensembles \cite{lakshminarayanan2017simple}, Bayesian Neural Networks 
+\cite{blundell2015weight}, and more recently, Evidential Deep Learning \cite{sensoy2018evidential,amini2020deep}. 
+However, the application of these methods to neural operators remains understudied, with most existing work 
+focusing on point prediction accuracy rather than uncertainty quantification. This gap is particularly concerning 
+given that many PDE-solving applications—such as weather forecasting, drug discovery, and engineering 
+design—critically require reliable uncertainty estimates.
 
 \subsection{Motivation and Problem Statement}
 

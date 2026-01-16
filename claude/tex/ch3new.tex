@@ -22,46 +22,20 @@ The crucial observation is that while the FNO operates on 2D spatial grids, each
 
 \subsection{From Point Estimates to Evidential Outputs}
 
-In standard regression, a neural network predicts a single value $\hat{y}$ for each input. Evidential regression instead predicts parameters of a higher-order distribution---specifically, a Normal-Inverse-Gamma (NIG) distribution that represents uncertainty over both the prediction mean and variance.
+In standard regression, a neural network predicts a single value $\hat{y}$ for each input. Evidential regression instead predicts parameters of the Normal-Inverse-Gamma (NIG) distribution (defined in Section~\ref{sec:preliminaries}) that represents uncertainty over both the prediction mean and variance.
 
 For the FNO setting, we extend this from scalar regression to spatially-extended regression. Rather than predicting a single channel output $u \in \mathbb{R}^{H \times W \times 1}$, the Evidential-FNO predicts four channels representing the NIG parameters at each spatial location:
 \begin{equation}
     \mathcal{G}^{\text{evid}}_\theta(a) = \begin{pmatrix} \gamma \\ \nu \\ \alpha \\ \beta \end{pmatrix} \in \mathbb{R}^{H \times W \times 4}
 \end{equation}
 
-At each spatial location $(i,j)$, the four parameters define a NIG distribution:
-\begin{equation}
-    (\mu_{i,j}, \sigma^2_{i,j}) \sim \text{NIG}(\gamma_{i,j}, \nu_{i,j}, \alpha_{i,j}, \beta_{i,j})
-\end{equation}
-which serves as a prior over the Gaussian likelihood parameters $(\mu, \sigma^2)$ for that location's prediction.
-
-The NIG distribution factorizes as:
-\begin{align}
-    \sigma^2_{i,j} &\sim \text{Inv-Gamma}(\alpha_{i,j}, \beta_{i,j}) \\
-    \mu_{i,j} | \sigma^2_{i,j} &\sim \mathcal{N}\left(\gamma_{i,j}, \frac{\sigma^2_{i,j}}{\nu_{i,j}}\right)
-\end{align}
-
-This formulation provides closed-form expressions for predictive statistics at each grid point:
+At each spatial location $(i,j)$, the four NIG parameters $(\gamma_{i,j}, \nu_{i,j}, \alpha_{i,j}, \beta_{i,j})$ define a distribution over Gaussian likelihood parameters, providing closed-form expressions for predictive statistics:
 \begin{align}
     \mathbb{E}[u_{i,j}] &= \gamma_{i,j} \label{eq:pred_mean} \\
     \text{Var}[u_{i,j}] &= \frac{\beta_{i,j}}{\alpha_{i,j} - 1} \cdot \frac{\nu_{i,j} + 1}{\nu_{i,j}} \label{eq:pred_var}
 \end{align}
 
-\subsection{Uncertainty Decomposition}
-
-A key advantage of the evidential formulation is the natural decomposition of predictive uncertainty into epistemic and aleatoric components. For each spatial location $(i,j)$:
-
-\textbf{Aleatoric uncertainty} (irreducible data noise):
-\begin{equation}
-    \sigma^2_{\text{ale}, i,j} = \mathbb{E}[\sigma^2_{i,j}] = \frac{\beta_{i,j}}{\alpha_{i,j} - 1}
-\end{equation}
-
-\textbf{Epistemic uncertainty} (model uncertainty):
-\begin{equation}
-    \sigma^2_{\text{epi}, i,j} = \text{Var}[\mu_{i,j}] = \frac{\beta_{i,j}}{\nu_{i,j}(\alpha_{i,j} - 1)}
-\end{equation}
-
-The epistemic uncertainty is inversely proportional to $\nu$, which represents the ``evidence'' or effective number of virtual observations supporting the prediction. Regions where the model has seen similar training data will have higher $\nu$ and thus lower epistemic uncertainty.
+The epistemic and aleatoric uncertainty decomposition follows directly from the NIG parameterization (Section~\ref{sec:preliminaries}). The epistemic uncertainty is inversely proportional to $\nu$, representing the ``evidence'' or effective number of virtual observations. Regions where the model has seen similar training data will have higher $\nu$ and thus lower epistemic uncertainty.
 
 \subsection{Architectural Modification}
 

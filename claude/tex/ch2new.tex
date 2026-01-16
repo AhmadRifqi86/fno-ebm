@@ -1,0 +1,120 @@
+\section{Background}
+
+\subsection{Neural Operators}
+
+Neural operators extend traditional neural networks from learning mappings between finite-dimensional vectors to learning mappings between infinite-dimensional function spaces \cite{lu2021deeponet,chen1995universal}. Unlike standard neural networks that approximate functions $f: \mathbb{R}^n \rightarrow \mathbb{R}^m$, neural operators learn solution operators $\mathcal{G}: \mathcal{A} \rightarrow \mathcal{U}$ that map input functions to output functions, enabling mesh-independent PDE solving with discretization-invariant generalization.
+
+Fourier Neural Operators (FNOs) \cite{li2020fourier} have emerged as the most successful neural operator architecture, leveraging spectral convolutions in Fourier space to efficiently capture global dependencies. FNOs have demonstrated state-of-the-art performance across diverse PDEs including Navier-Stokes equations, Darcy flow, and Burgers equation, achieving up to 1000$\times$ speedup compared to traditional numerical solvers. Since the original FNO, numerous extensions have been proposed: Factorized FNO \cite{tran2021factorized} for high-dimensional efficiency, U-shaped FNO \cite{wen2022u} for multi-scale features, and Geo-FNO \cite{li2022fourier} for arbitrary geometries. However, none of these works address uncertainty quantification, focusing instead on improving point prediction accuracy.
+
+\subsection{Uncertainty Quantification in Deep Learning}
+
+Uncertainty quantification aims to not only predict outputs but also quantify prediction confidence. In the Bayesian framework \cite{bishop2006pattern}, we seek the posterior predictive distribution by marginalizing over model parameters. However, exact Bayesian inference is intractable for neural networks, leading to various approximation methods.
+
+\textbf{Monte Carlo Dropout} \cite{gal2016dropout} interprets dropout training as approximate variational inference, using stochastic forward passes at test time to sample from an approximate posterior. While easy to implement, MC Dropout generally yields poorly calibrated uncertainties \cite{ovadia2019can} and requires multiple forward passes, negating computational advantages of neural operators.
+
+\textbf{Deep Ensembles} \cite{lakshminarayanan2017simple} train multiple networks with different initializations and aggregate predictions. Ensembles provide well-calibrated uncertainties and naturally capture epistemic uncertainty through model disagreement, but incur $M$-fold computational overhead for $M$ ensemble members.
+
+\textbf{Evidential Deep Learning} \cite{sensoy2018evidential,amini2020deep} parameterizes higher-order distributions (Dirichlet for classification, Normal-Inverse-Gamma for regression) in a single forward pass. This approach promises computational efficiency with explicit epistemic-aleatoric decomposition. However, recent studies have identified fundamental limitations that persist despite various proposed fixes.
+
+\subsection{Known Limitations of Evidential Methods}
+
+Multiple studies \cite{jurgens2024epistemic,ulmer2024prior,bickford2024rethinking} have shown that the theoretical decomposition of uncertainty into epistemic and aleatoric components does not work correctly in practice---both uncertainty types decrease with training data, violating the assumption that aleatoric uncertainty represents irreducible noise. Furthermore, empirical studies \cite{meinke2024uncertaintyquantification,hullermeier2021aleatoric} consistently find that evidential methods achieve near-random performance (AUROC $\sim$ 0.5-0.6) on out-of-distribution detection, limiting their utility for safe deployment.
+
+\subsection{Gap in Literature}
+
+Despite extensive work on UQ for standard neural networks, only a few papers address UQ for neural operators. Geneva and Zabaras \cite{geneva2022modeling} propose variational inference for FNOs requiring expensive MCMC sampling. Psaros et al. \cite{psaros2023uncertainty} develop Bayesian DeepONet using Hamiltonian Monte Carlo at prohibitive computational cost. No prior work systematically compares MC Dropout, Deep Ensembles, and Evidential Deep Learning for neural operators, nor investigates whether known evidential limitations extend to PDE solving---characterized by continuous function approximation, physics-informed structure, and unlimited synthetic training data.
+
+
+\section{Preliminaries}
+\label{sec:preliminaries}
+
+\subsection{Fourier Neural Operator}
+
+Given an input function $a(x)$ and output function $u(x)$ related by a PDE operator $\mathcal{L}$, a neural operator $\mathcal{G}_\theta$ learns to approximate the solution operator:
+\begin{equation}
+    \mathcal{G}_\theta: a \mapsto u \quad \text{such that} \quad \mathcal{L}(u; a) = 0
+\end{equation}
+
+The FNO parameterizes this mapping using spectral convolutions. The key component is the spectral convolution layer:
+\begin{equation}
+    (\mathcal{K}(\mathbf{w}) \cdot v)(x) = \mathcal{F}^{-1}\left( \mathbf{w} \cdot \mathcal{F}(v) \right)(x)
+\end{equation}
+where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the inverse transform, and $\mathbf{w}$ are learnable weights truncated to low Fourier modes.
+
+The FNO architecture consists of three stages:
+\begin{enumerate}
+    \item \textbf{Lifting}: Project input to latent space via $v_0(x) = P(a(x))$
+    \item \textbf{Fourier Layers}: Apply $L$ spectral convolution layers with skip connections:
+    \begin{equation}
+        v_{l+1}(x) = \sigma\left( \mathcal{K}(\mathbf{w}_l) \cdot v_l(x) + W_l v_l(x) \right)
+    \end{equation}
+    \item \textbf{Projection}: Map to output space: $u(x) = Q(v_L(x))$
+\end{enumerate}
+
+\subsection{Normal-Inverse-Gamma Distribution}
+
+Evidential regression uses the Normal-Inverse-Gamma (NIG) distribution as a conjugate prior over Gaussian likelihood parameters $(\mu, \sigma^2)$:
+\begin{equation}
+    p(\mu, \sigma^2 | \gamma, \nu, \alpha, \beta) = \mathcal{N}\left(\mu; \gamma, \frac{\sigma^2}{\nu}\right) \cdot \text{Inv-Gamma}(\sigma^2; \alpha, \beta)
+\end{equation}
+where $\gamma \in \mathbb{R}$ is the predicted mean, $\nu > 0$ is the evidence (precision of mean estimate), $\alpha > 1$ is the shape parameter, and $\beta > 0$ is the scale parameter.
+
+The predictive distribution is Student-$t$:
+\begin{equation}
+    p(y | \gamma, \nu, \alpha, \beta) = \text{Student-}t\left(y; \gamma, \frac{\beta(1+\nu)}{\nu \alpha}, 2\alpha\right)
+\end{equation}
+
+\subsection{Epistemic and Aleatoric Uncertainty}
+
+Uncertainty decomposes into two types \cite{kendall2017uncertainties,der2009aleatory}:
+\begin{itemize}
+    \item \textbf{Epistemic uncertainty}: Model uncertainty due to limited data, reducible with more training data
+    \item \textbf{Aleatoric uncertainty}: Inherent data noise, irreducible regardless of model or data
+\end{itemize}
+
+For the NIG parameterization, these are computed as:
+\begin{align}
+    \text{Aleatoric:} \quad \sigma^2_{\text{ale}} &= \frac{\beta}{\alpha - 1} \\
+    \text{Epistemic:} \quad \sigma^2_{\text{epi}} &= \frac{\beta}{\nu(\alpha - 1)}
+\end{align}
+
+\subsection{Evaluation Metrics}
+
+\subsubsection{Predictive Accuracy}
+
+\textbf{Mean Squared Error (MSE)}:
+\begin{equation}
+    \text{MSE} = \frac{1}{N}\sum_{i=1}^{N} \|y_i - \hat{y}_i\|^2
+\end{equation}
+
+\textbf{Relative $L^2$ Error}:
+\begin{equation}
+    \text{rel\_l2} = \frac{\|y - \hat{y}\|_2}{\|y\|_2}
+\end{equation}
+
+\subsubsection{Calibration Quality}
+
+\textbf{Expected Calibration Error (ECE)}: Measures alignment between predicted confidence and actual accuracy by binning predictions and computing the weighted average gap. Lower is better (perfect calibration: ECE = 0).
+
+\textbf{Coverage}: Fraction of true values within predicted confidence intervals:
+\begin{equation}
+    \text{Coverage} = \frac{1}{N}\sum_{i=1}^{N} \mathbb{1}\left[y_i \in [\hat{y}_i - z_\alpha\hat{\sigma}_i, \hat{y}_i + z_\alpha\hat{\sigma}_i]\right]
+\end{equation}
+Target: 0.95 for 95\% confidence intervals.
+
+\textbf{Interval Width}: Average width of prediction intervals (lower is better, but coverage must be maintained).
+
+\subsubsection{Uncertainty Quality}
+
+\textbf{Uncertainty-Error Correlation}: Pearson correlation between predicted uncertainty and actual error:
+\begin{equation}
+    \rho = \text{corr}(\hat{\sigma}, |y - \hat{y}|)
+\end{equation}
+Higher indicates more informative uncertainty.
+
+\textbf{Negative Log-Likelihood (NLL)}:
+\begin{equation}
+    \text{NLL} = \frac{1}{2N}\sum_{i=1}^{N} \left[\log(2\pi\hat{\sigma}_i^2) + \frac{(y_i - \hat{y}_i)^2}{\hat{\sigma}_i^2}\right]
+\end{equation}
+
+\textbf{AUROC for OOD Detection}: Area under ROC curve using uncertainty as decision score. 0.5 = random, 1.0 = perfect detection.

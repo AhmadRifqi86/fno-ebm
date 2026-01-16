@@ -99,7 +99,15 @@ Our results (Experiment 3) provide clear evidence that \textbf{evidential method
 \end{itemize}
 
 \textbf{Interpretation:}
-The NIG parameterization's four output parameters $(\gamma, \nu, \alpha, \beta)$ are learned jointly to minimize prediction error. During training, the network learns to increase evidence ($\nu$ and $\alpha$) for all correct predictions, which simultaneously reduces both epistemic and aleatoric uncertainty estimates. This coupling violates the theoretical assumption that aleatoric uncertainty represents irreducible noise independent of model confidence.
+The NIG parameterization's four output parameters $(\gamma, \nu, \alpha, \beta)$ are learned jointly to minimize prediction error. In this parameterization:
+\begin{itemize}
+\item Epistemic uncertainty $\propto 1/\nu$ (inverse of evidence for mean)
+\item Aleatoric uncertainty $= \beta/(\alpha - 1)$ (expected variance from inverse-gamma)
+\end{itemize}
+
+During training, the network learns to increase evidence ($\nu$ and $\alpha$) for correct predictions, which directly reduces epistemic uncertainty. However, \textbf{aleatoric also decreases} because the loss function optimizes $\beta$ to match the observed prediction variance. As the model improves with more training data, prediction errors decrease, so the optimal $\beta$ also decreases. Since $\alpha$ increases (more evidence) while $\beta$ decreases (lower observed variance), the ratio $\beta/(\alpha-1)$ decreases substantially—even though theoretically it should remain constant as it represents irreducible data noise.
+
+This coupling arises because the NIG parameterization does not separately constrain aleatoric uncertainty to reflect only data-inherent noise. Instead, both uncertainty components are jointly optimized to maximize likelihood, causing them to scale together with model performance rather than independently.
 
 \textbf{Practical implications:}
 \begin{enumerate}
@@ -174,6 +182,8 @@ Our comprehensive evaluation positions evidential deep learning as the \textbf{m
 \item \textbf{Operator-level OOD monitoring}: Perfect detection of cross-PDE transfer enables safe deployment with automatic fallback mechanisms
 
 \item \textbf{Ease of implementation}: Requires only changing output layer dimension from 1 to 4 and modifying loss function—no architectural changes to base FNO
+
+\item \textbf{Physically interpretable uncertainty}: The spatially correlated uncertainty estimates correspond to regions with fine-scale features (sharp gradients, small vortices, boundary layers) where the FNO's spectral truncation discards high-frequency modes. This suggests the evidential head learns to recognize architectural limitations—regions where mode truncation causes information loss consistently exhibit higher prediction error, and the network learns to flag these regions with elevated uncertainty. Unlike black-box uncertainty estimates, this provides practitioners with physically meaningful interpretation: high uncertainty indicates "the spectral representation is insufficient here."
 \end{enumerate}
 
 \textbf{Deployment recommendations:}
