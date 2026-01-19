@@ -1,0 +1,97 @@
+\section{Discussion}
+
+\subsection{Evidential Methods for Neural Operators}
+
+Our experiments establish evidential deep learning as the preferred approach for uncertainty quantification in 
+neural operators. Key advantages include:
+
+\textbf{Superior calibration}: Evidential methods (ECE $\sim$ 0.004) outperform MC Dropout (0.019) and Deep 
+Ensembles (0.011) while maintaining 93--95\% coverage. This superiority holds across both Navier-Stokes and 
+Darcy Flow, with the performance gap widening on harder problems.
+
+\textbf{Computational efficiency}: Single-pass inference provides 5--30$\times$ speedup over alternatives, 
+critical for real-time applications and high-throughput scientific computing workflows.
+
+\textbf{Informative uncertainty}: Uncertainty-error correlation of 0.61 (vs. 0.31--0.33 for baselines) indicates 
+evidential uncertainty better reflects prediction quality.
+
+\textbf{MC Dropout unsuitable}: Across all metrics, MC Dropout exhibits inferior performance 
+(6$\times$ worse MSE, lowest correlation), confirming it should be avoided for neural operators. 
+The spatial coherence of PDE solutions may be incompatible with dropout's stochastic regularization.
+
+\subsection{The Calibration-Decomposition Trade-off}
+
+A fundamental limitation emerges from our decomposition analysis: methods achieving tight calibration 
+(ECE $\sim$ 0.004) exhibit invalid decomposition (aleatoric variation $>$ 89\%), while valid decomposition 
+(KL-Divergence) yields poor calibration (ECE = 0.030).
+
+This trade-off appears intrinsic to the NIG parameterization. During training, the network increases evidence ($\nu, \alpha$) for correct predictions, directly reducing epistemic uncertainty ($\propto 1/\nu$). However, aleatoric uncertainty ($= \beta/(\alpha-1)$) also decreases because the loss function optimizes $\beta$ to match observed prediction variance. As the model improves with more data, prediction errors decrease, so the optimal $\beta$ decreases. Since $\alpha$ increases while $\beta$ decreases, the ratio $\beta/(\alpha-1)$ drops substantially---even though it theoretically should remain constant as irreducible data noise. The NIG parameterization lacks separate constraints to preserve aleatoric stability.
+
+\textbf{Practical implication}: Practitioners should treat evidential outputs as \emph{total uncertainty} 
+rather than interpreting the decomposition. For applications requiring true epistemic-aleatoric separation, 
+Deep Ensembles remain preferable despite computational cost.
+
+\subsection{Reinterpreting OOD Detection}
+
+The stark contrast between parameter-level OOD (AUROC = 0.55) and operator-level OOD (AUROC = 1.0) suggests a 
+domain-specific interpretation: parameter extrapolation within the same PDE family may not constitute true 
+distributional shift from the operator learning perspective.
+
+The FNO learns the Navier-Stokes operator in Fourier space, which generalizes across Reynolds numbers despite 
+different flow characteristics. This explains maintained confidence at Re = 5000. Conversely, cross-PDE transfer 
+represents genuine operator-level shift where the governing equations differ fundamentally, yielding appropriate 
+massive uncertainty increases (36--378$\times$).
+
+This finding has deployment implications: evidential uncertainty reliably monitors operator-level distributional 
+shift but should not be solely relied upon for parameter extrapolation validation.
+
+\subsection{Architectural Insights}
+
+Our ablation study identifies critical components for evidential FNOs:
+\begin{itemize}
+    \item \textbf{Essential}: Skip connections and GELU activations---removal causes catastrophic failure
+    \item \textbf{Beneficial}: Global residual connections (+5\% improvement)
+    \item \textbf{Detrimental}: Batch normalization (2.2$\times$ worse), likely interfering with NIG parameter 
+    learning
+    \item \textbf{Flexible}: Evidential head complexity matters little---shallow heads maintain quality with fewer 
+    parameters
+\end{itemize}
+
+\subsection{Limitations}
+
+This study has several limitations: (1) evaluation on two PDEs (Navier-Stokes, Darcy Flow) may not generalize to 
+other PDE families; (2) single architecture (FNO) tested---other operators may behave differently; (3) 
+synthetic training data may not capture real-world measurement noise; (4) limited OOD scenarios tested. 
+Future work should validate findings across broader PDE classes, architectures, and real-world applications.
+
+\section{Conclusion}
+
+This paper presents comprehensive comparison of uncertainty quantification methods for Fourier Neural Operators,
+ evaluating MC Dropout, Deep Ensembles, and Evidential Deep Learning across calibration, efficiency, 
+ decomposition validity, and OOD detection.
+
+\textbf{Key findings}:
+\begin{enumerate}
+    \item Evidential methods achieve state-of-the-art calibration (ECE = 0.004) with single-pass inference, 
+    outperforming MC Dropout (5$\times$ better ECE) and Deep Ensembles (3$\times$ better ECE) while being 
+    5--30$\times$ faster.
+
+    \item Uncertainty decomposition fails for well-calibrated evidential methods---both epistemic and aleatoric 
+    uncertainties decrease with training data, revealing a fundamental calibration-decomposition trade-off in 
+    the NIG parameterization.
+
+    \item OOD detection capability depends critically on shift type: near-random for parameter extrapolation 
+    (AUROC = 0.55) but perfect for operator-level shift (AUROC = 1.0), suggesting neural operators learn 
+    physics-informed representations.
+
+    \item MC Dropout should be avoided for neural operators due to consistently poor performance across all metrics.
+\end{enumerate}
+
+\textbf{Recommendations}: For production deployment, use evidential FNO with Uncertainty-Aware or Improved 
+regularization. Report total uncertainty only (ignore decomposition). Implement threshold-based fallback for 
+operator-level OOD detection. Reserve Deep Ensembles for applications requiring robust epistemic uncertainty despite 
+computational cost.
+
+Future work should investigate alternative parameterizations overcoming the calibration-decomposition trade-off, 
+extend evaluation to broader PDE families and architectures, and develop physics-informed OOD metrics for parameter 
+extrapolation scenarios.
