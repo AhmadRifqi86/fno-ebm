@@ -62,6 +62,21 @@ MC Dropout & 0.01005 & -- & -- & 0.0192 & 0.900 & 0.306 & -0.946 \\
 
 \textbf{Key findings}: (1) Evidential methods achieve 6$\times$ better MSE than MC Dropout and 2$\times$ better ECE. (2) Uncertainty-Aware achieves best overall (MSE, correlation, NLL). (3) Improved/Adaptive achieve best calibration (ECE = 0.0038). (4) Ensemble shows competitive MSE but severe undercoverage (75.8\%). (5) KL-Divergence produces overwide intervals (0.223) with poor ECE.
 
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp1_ns_uncertainty_aware_sample1.png}
+        \caption{Uncertainty-Aware (best overall: MSE=0.00161, Corr=0.614)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp1_ns_improved_sample1.png}
+        \caption{Improved (best calibration: ECE=0.0038)}
+    \end{subfigure}
+    \caption{Navier-Stokes predictions comparing top-performing evidential methods. Left: Uncertainty-Aware achieves best accuracy and uncertainty correlation. Right: Improved achieves best calibration with tight confidence intervals.}
+    \label{fig:exp1_ns_comparison}
+\end{figure}
+
 \subsection{Experiment 2: Generalization to Darcy Flow}
 
 Table~\ref{tab:darcy_results} evaluates cross-PDE generalization.
@@ -91,6 +106,21 @@ MC Dropout & 0.01195 & 0.0774 & 0.1107 & 0.0048 & 0.828 & 0.299 & -0.803 \\
 
 \textbf{Key findings}: (1) Performance rankings transfer across PDEs: Uncertainty-Aware $\approx$ Improved $>$ others. (2) Evidential methods dominate---all top-5 MSE are evidential. (3) MC Dropout worst (3.4$\times$ worse MSE, lowest correlation 0.299). (4) Ensemble degrades more severely on Darcy (undercoverage drops to 65.2\%). (5) Coverage systematically lower on Darcy (79--85\%) than Navier-Stokes (92--93\%), indicating PDE-specific calibration may be needed.
 
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp2_darcy_improved_sample1.png}
+        \caption{Improved (best accuracy: MSE=0.00346, rel$L^2$=0.0597)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp2_darcy_uncertainty_aware_sample1.png}
+        \caption{Uncertainty-Aware (best UQ: ECE=0.0042, Corr=0.659)}
+    \end{subfigure}
+    \caption{Darcy Flow predictions demonstrating cross-PDE generalization. Performance rankings from Navier-Stokes transfer: Improved achieves best prediction accuracy while Uncertainty-Aware maintains superior uncertainty quantification.}
+    \label{fig:exp2_darcy_comparison}
+\end{figure}
+
 \subsection{Experiment 3: Uncertainty Decomposition}
 
 We train models with varying data sizes (N $\in \{100, 200, 500, 1000, 2000, 5000\}$) to test whether epistemic uncertainty decreases and aleatoric uncertainty remains constant. Table~\ref{tab:decomposition} shows results.
@@ -115,6 +145,21 @@ KL-Divergence & 0.0505/0.1156 & 0.0257/0.0828 & 49.1 & \textbf{13.5} & $\checkma
 
 \textbf{Key findings}: (1) Only KL-Divergence passes validation (aleatoric variation 13.5\%), but it has poor calibration (ECE = 0.030). (2) Well-calibrated methods (Improved, Uncertainty-Aware) show both uncertainties decreasing with data (aleatoric variation $>$ 89\%). (3) This reveals a calibration-decomposition trade-off: tight intervals couple epistemic and aleatoric components. (4) For practical use, rely on total uncertainty from well-calibrated methods rather than the decomposition.
 
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp3_decomposition_kl_divergence.png}
+        \caption{KL-Divergence (valid: aleatoric var.=13.5\%)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp3_decomposition_uncertainty_aware.png}
+        \caption{Uncertainty-Aware (invalid: aleatoric var.=112.4\%)}
+    \end{subfigure}
+    \caption{Uncertainty decomposition as training data increases. Left: KL-Divergence maintains stable aleatoric uncertainty while epistemic decreases---the only method passing validation criteria. Right: Uncertainty-Aware shows both components decreasing, revealing calibration-decomposition trade-off.}
+    \label{fig:exp3_decomposition}
+\end{figure}
+
 \subsection{Experiments 4 \& 5: Out-of-Distribution Detection}
 
 We distinguish two OOD types: parameter-level (Reynolds number extrapolation) and operator-level (cross-PDE transfer).
@@ -136,6 +181,41 @@ Darcy Flow & Navier-Stokes & Operator & 1.000 & 36$\times$ \\
 \end{table}
 
 \textbf{Key findings}: (1) Parameter extrapolation shows near-random AUROC (0.547)---the model maintains confidence for Re=5000 despite being outside training range. (2) Cross-PDE transfer achieves perfect AUROC (1.000) in both directions. (3) This suggests parameter extrapolation is \emph{not truly OOD} from an operator perspective---the FNO has learned the underlying physics which applies across Reynolds numbers. (4) Cross-PDE represents genuine operator-level OOD where the governing equations differ fundamentally.
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{img/exp4_reynolds_ood_roc.png}
+        \caption{Parameter OOD (AUROC=0.547)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{img/exp5_cross_pde_ns_to_darcy_roc.png}
+        \caption{NS$\rightarrow$Darcy (AUROC=1.000)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.32\textwidth}
+        \includegraphics[width=\textwidth]{img/exp5_cross_pde_darcy_to_ns_roc.png}
+        \caption{Darcy$\rightarrow$NS (AUROC=1.000)}
+    \end{subfigure}
+    \caption{OOD detection ROC curves. (a) Parameter-level shift (Reynolds extrapolation) yields near-random detection, suggesting learned physics generalizes across parameter ranges. (b,c) Operator-level shift (cross-PDE) achieves perfect separation with 36--378$\times$ uncertainty amplification.}
+    \label{fig:exp4_5_ood_roc}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp4_reynolds_ood_uncertainty_dist.png}
+        \caption{Reynolds extrapolation: overlapping distributions}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp5_cross_pde_ns_to_darcy_uncertainty_dist.png}
+        \caption{Cross-PDE: complete separation}
+    \end{subfigure}
+    \caption{Uncertainty distributions for in-distribution vs OOD samples. Parameter-level OOD shows substantial overlap explaining poor AUROC, while operator-level OOD shows dramatic separation enabling perfect detection.}
+    \label{fig:exp4_5_ood_dist}
+\end{figure}
 
 \subsection{Experiment 6: Architectural Ablation}
 
@@ -166,3 +246,18 @@ with\_residual & \textbf{0.002} & \textbf{0.043} & \textbf{0.028} & 0.452 \\
 \textbf{Key findings}: (1) Skip connections are critical---removing causes catastrophic failure (MSE $\approx$ 1.0). (2) Pure Fourier convolution without local components also fails completely. (3) Activations are necessary---removal causes 20$\times$ MSE degradation. (4) Batch normalization harms performance (2.2$\times$ worse). (5) Evidential head complexity matters little---shallow or linear heads maintain similar performance with fewer parameters. (6) Global residual connections provide modest improvement ($\sim$5\%).
 
 \textbf{Design recommendations}: Required---skip connections, GELU activations. Recommended---global residuals. Optional---shallow evidential heads. Avoid---batch normalization.
+
+\begin{figure}[htbp]
+    \centering
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp6_ablation_performance.png}
+        \caption{Prediction accuracy (MSE, rel$L^2$)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.48\textwidth}
+        \includegraphics[width=\textwidth]{img/exp6_ablation_calibration.png}
+        \caption{Calibration metrics}
+    \end{subfigure}
+    \caption{Architectural ablation results. Removing skip connections or using pure Fourier convolution causes catastrophic failure (MSE$\approx$1.0). Batch normalization degrades performance 2.2$\times$. Evidential head complexity (shallow vs. linear) has minimal impact on final performance.}
+    \label{fig:exp6_ablation}
+\end{figure}
