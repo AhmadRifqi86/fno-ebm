@@ -89,6 +89,229 @@ The evidential projection layer applies appropriate activation functions to ensu
 \end{align}
 where $\epsilon = 10^{-6}$ ensures numerical stability.
 
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm and 1cm,
+    box/.style={rectangle, draw, minimum width=1.8cm, minimum height=1.2cm, align=center, rounded corners=3pt},
+    smallbox/.style={rectangle, draw, minimum width=2.2cm, minimum height=0.9cm, align=center, rounded corners=2pt},
+    fnobox/.style={rectangle, draw, minimum width=1.4cm, minimum height=1cm, align=center, rounded corners=2pt},
+    arrow/.style={->, >=stealth, thick},
+    label/.style={font=\footnotesize, align=center}
+]
+
+% ==================== PART 1: Network Architecture ====================
+\node[font=\bfseries] at (7, 5.5) {Evidential FNO Architecture};
+
+% Input
+\node[box, fill=blue!20] (input) at (0, 3) {
+    \textbf{Input}\\
+    $u(x)$\\
+    \footnotesize$(H \times W)$
+};
+
+% ==================== Detailed FNO Backbone ====================
+% Outer box for FNO
+\node[draw, fill=blue!5, minimum width=7cm, minimum height=4cm, rounded corners=5pt] (fno_outer) at (4.8, 3) {};
+\node[font=\small\bfseries, anchor=north] at (4.8, 5.1) {FNO Backbone};
+
+% Lifting layer
+\node[fnobox, fill=green!25] (lift) at (2, 3) {
+    \textbf{Lift}\\
+    \footnotesize$P$
+};
+
+% Branch point after lifting
+\coordinate (branch) at (3, 3);
+
+% FFT (upper spectral path)
+\node[fnobox, fill=blue!30] (fft) at (4, 4) {
+    \textbf{FFT}\\
+    \footnotesize$\mathcal{F}$
+};
+
+% Fourier weights (spectral conv)
+\node[fnobox, fill=orange!40] (weights) at (5.5, 4) {
+    \textbf{$R \odot$}\\
+    \footnotesize modes
+};
+
+% IFFT
+\node[fnobox, fill=purple!30] (ifft) at (7, 4) {
+    \textbf{IFFT}\\
+    \footnotesize$\mathcal{F}^{-1}$
+};
+
+% Local path (W) - lower spatial path
+\node[fnobox, fill=yellow!30, minimum width=2.5cm] (local) at (5.5, 2) {
+    \textbf{$W$} \footnotesize(spatial conv)
+};
+
+% Plus node for combining paths
+\node[circle, draw, fill=white, minimum size=0.6cm, font=\bfseries] (plus) at (7.8, 2.5) {$+$};
+
+% Layer indicator
+\node[font=\tiny, text=black] at (4.8, 1.2) {$\times 4$ Fourier Layers};
+
+% Arrow from input to lift
+\draw[arrow, line width=1.5pt] (input.east) -- (lift.west);
+
+% Arrow from lift to branch point
+\draw[line width=1.5pt] (lift.east) -- (branch);
+
+% Branching arrows - BOTH paths start from same branch point
+\draw[arrow, line width=1pt, rounded corners=3pt] (branch) |- (fft.west);
+\draw[arrow, line width=1pt, rounded corners=3pt] (branch) |- (local.west);
+
+% Spectral path arrows
+\draw[arrow, line width=1pt] (fft) -- (weights);
+\draw[arrow, line width=1pt] (weights) -- (ifft);
+
+% Arrows to plus node
+\draw[arrow, line width=1pt, rounded corners=3pt] (ifft.south) -- ++(0,-0.5) -| (plus.north);
+\draw[arrow, line width=1pt, rounded corners=3pt] (local.east) -| (plus.south);
+
+% ==================== Four Output Heads (Equal Size) ====================
+\node[smallbox, fill=cyan!35] (gamma) at (10.5, 4.5) {$\gamma$ \footnotesize(mean)};
+\node[smallbox, fill=lime!35] (nu) at (10.5, 3.5) {$\nu$ \footnotesize(evidence)};
+\node[smallbox, fill=yellow!45] (alpha) at (10.5, 2.5) {$\alpha$ \footnotesize(shape)};
+\node[smallbox, fill=pink!45] (beta) at (10.5, 1.5) {$\beta$ \footnotesize(scale)};
+
+% Smooth curved arrows from plus node to heads
+\draw[arrow, line width=1.2pt, rounded corners=8pt] (plus.east) -- (8.8, 2.5) -- (8.8, 4.5) -- (gamma.west);
+\draw[arrow, line width=1.2pt, rounded corners=8pt] (plus.east) -- (8.8, 2.5) -- (8.8, 3.5) -- (nu.west);
+\draw[arrow, line width=1.2pt, rounded corners=8pt] (plus.east) -- (8.8, 2.5) -- (alpha.west);
+\draw[arrow, line width=1.2pt, rounded corners=8pt] (plus.east) -- (8.8, 2.5) -- (8.8, 1.5) -- (beta.west);
+
+% ==================== NIG Distribution with Loss ====================
+\node[box, fill=purple!25, minimum height=3.2cm, minimum width=3cm] (nig) at (14, 3) {
+    \textbf{NIG Distribution}\\[3pt]
+    $p(\mu, \sigma^2 | \boldsymbol{\theta})$\\[6pt]
+    \footnotesize\textbf{Loss:}\\[2pt]
+    \tiny$\mathcal{L} = \frac{1}{2}\log\frac{\pi}{\nu} - \alpha\log\Omega$\\[1pt]
+    \tiny$+ (\alpha+\frac{1}{2})\log\big((y-\gamma)^2\nu + \Omega\big)$\\[1pt]
+    \tiny$+ \log\frac{\Gamma(\alpha)}{\Gamma(\alpha+\frac{1}{2})}$
+};
+
+% Smooth arrows from heads to NIG
+\draw[arrow, rounded corners=5pt] (gamma.east) -- ++(0.5,0) |- ($(nig.west)+(0,0.8)$);
+\draw[arrow, rounded corners=5pt] (nu.east) -- ++(0.3,0) |- ($(nig.west)+(0,0.3)$);
+\draw[arrow, rounded corners=5pt] (alpha.east) -- ++(0.3,0) |- ($(nig.west)+(0,-0.3)$);
+\draw[arrow, rounded corners=5pt] (beta.east) -- ++(0.5,0) |- ($(nig.west)+(0,-0.8)$);
+
+% Activation annotations
+\node[font=\tiny, text=gray, align=center] at (10.5, 5.1) {linear};
+\node[font=\tiny, text=gray, align=center] at (10.5, 0.9) {softplus};
+
+% ==================== Key Equations Box (Compact) ====================
+\node[draw, fill=yellow!10, rounded corners, text width=4.2cm, align=left, font=\footnotesize] at (3, -0.8) {
+    \textbf{Key Equations:}\\[2pt]
+    $\hat{y} = \gamma$\\
+    $\sigma^2_{\text{ale}} = \frac{\beta}{\alpha - 1}$\\
+    $\sigma^2_{\text{epi}} = \frac{\beta}{\nu(\alpha - 1)}$
+};
+
+% ==================== Student-t Parameter Effects (4 panels) ====================
+\node[font=\small\bfseries] at (6, -0.3) {Effect of NIG Parameters on Predictive Distribution};
+
+% Panel (a): Effect of γ (location shift)
+\begin{scope}[shift={(0,-2.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(a) Effect of $\gamma$ (location)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
+
+    % Three curves at different locations
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.2,0.05) (0.5,0.3) (0.8,0.9) (1,1.4) (1.2,0.9) (1.5,0.3) (1.8,0.05)
+    };
+    \draw[blue!70, line width=1pt, smooth] plot coordinates {
+        (1.2,0.05) (1.5,0.3) (1.8,0.9) (2,1.4) (2.2,0.9) (2.5,0.3) (2.8,0.05)
+    };
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (2.2,0.05) (2.5,0.3) (2.8,0.9) (3,1.4) (3.2,0.9) (3.5,0.3) (3.8,0.05)
+    };
+
+    % Labels
+    \node[font=\tiny, red!70] at (1,1.6) {$\gamma_1$};
+    \node[font=\tiny, blue!70] at (2,1.6) {$\gamma_2$};
+    \node[font=\tiny, green!60!black] at (3,1.6) {$\gamma_3$};
+    \draw[->, thick, gray] (1.3,1.7) -- (2.7,1.7);
+    \node[font=\tiny, gray] at (2,1.9) {shifts mean};
+\end{scope}
+
+% Panel (b): Effect of ν (evidence/epistemic)
+\begin{scope}[shift={(5,-2.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(b) Effect of $\nu$ (evidence)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
+
+    % Low ν: wide (high epistemic uncertainty)
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.3,0.03) (0.8,0.15) (1.2,0.4) (1.6,0.7) (2,0.9) (2.4,0.7) (2.8,0.4) (3.2,0.15) (3.7,0.03)
+    };
+    % Medium ν
+    \draw[blue!70, line width=1pt, smooth] plot coordinates {
+        (0.8,0.02) (1.2,0.15) (1.5,0.5) (1.8,1) (2,1.3) (2.2,1) (2.5,0.5) (2.8,0.15) (3.2,0.02)
+    };
+    % High ν: narrow (low epistemic uncertainty)
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (1.2,0.02) (1.5,0.2) (1.7,0.7) (1.9,1.5) (2,1.8) (2.1,1.5) (2.3,0.7) (2.5,0.2) (2.8,0.02)
+    };
+
+    % Labels
+    \node[font=\tiny, red!70] at (0.6,0.6) {$\nu$ low};
+    \node[font=\tiny, green!60!black] at (3.2,0.8) {$\nu$ high};
+    \node[font=\tiny, gray] at (2,-0.3) {$\uparrow\nu \Rightarrow \downarrow\sigma^2_{\text{epi}}$};
+\end{scope}
+
+% Panel (c): Effect of α (shape/degrees of freedom)
+\begin{scope}[shift={(10,-2.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(c) Effect of $\alpha$ (shape)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
+
+    % Low α: heavy tails (Student-t like)
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.1,0.12) (0.5,0.18) (1,0.35) (1.5,0.7) (2,1.1) (2.5,0.7) (3,0.35) (3.5,0.18) (3.9,0.12)
+    };
+    % High α: light tails (Gaussian-like)
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (0.5,0.01) (1,0.08) (1.4,0.4) (1.7,1) (2,1.6) (2.3,1) (2.6,0.4) (3,0.08) (3.5,0.01)
+    };
+
+    % Labels with tail annotation
+    \node[font=\tiny, red!70] at (3.5,0.4) {$\alpha$ low};
+    \node[font=\tiny, red!70] at (3.5,0.25) {(heavy tails)};
+    \node[font=\tiny, green!60!black] at (2.8,1.3) {$\alpha$ high};
+    \node[font=\tiny, green!60!black] at (2.8,1.1) {(Gaussian)};
+\end{scope}
+
+% Panel (d): Effect of β (scale)
+\begin{scope}[shift={(5,-5.5)}]
+    \node[font=\footnotesize\bfseries] at (2, 2.3) {(d) Effect of $\beta$ (scale)};
+    \draw[->] (0,0) -- (4,0) node[right, font=\tiny] {$y$};
+    \draw[->] (0,0) -- (0,2) node[above, font=\tiny] {$p(y)$};
+
+    % Low β: narrow (low aleatoric)
+    \draw[green!60!black, line width=1pt, smooth] plot coordinates {
+        (1.2,0.02) (1.5,0.2) (1.7,0.7) (1.9,1.5) (2,1.8) (2.1,1.5) (2.3,0.7) (2.5,0.2) (2.8,0.02)
+    };
+    % High β: wide (high aleatoric)
+    \draw[red!70, line width=1pt, smooth] plot coordinates {
+        (0.3,0.03) (0.8,0.15) (1.2,0.4) (1.6,0.7) (2,0.9) (2.4,0.7) (2.8,0.4) (3.2,0.15) (3.7,0.03)
+    };
+
+    % Labels
+    \node[font=\tiny, green!60!black] at (2.6,1.4) {$\beta$ low};
+    \node[font=\tiny, red!70] at (3.4,0.6) {$\beta$ high};
+    \node[font=\tiny, gray] at (2,-0.3) {$\uparrow\beta \Rightarrow \uparrow\sigma^2_{\text{ale}}$};
+\end{scope}
+
+\end{tikzpicture}
+\caption{Evidential FNO framework. The FNO backbone processes input through a lifting layer, then branches into parallel paths: a spectral path (FFT $\rightarrow$ learnable weights $R$ $\rightarrow$ IFFT) and a spatial convolution path ($W$). Outputs combine at the $+$ node and feed into four projection heads producing NIG parameters $(\gamma, \nu, \alpha, \beta)$. The NIG loss enables single-pass uncertainty estimation with decomposition into aleatoric ($\sigma^2_{\text{ale}}$) and epistemic ($\sigma^2_{\text{epi}}$) components.}
+\label{fig:evidential_framework}
+\end{figure}
+
 \subsection{Training Objective}
 
 The Evidential-FNO is trained by minimizing the negative log-likelihood of the NIG distribution. For a 
