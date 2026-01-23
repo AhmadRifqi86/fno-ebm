@@ -1,13 +1,13 @@
-\chapter{Methodology}
+\section{Methodology}
 
-This chapter presents the proposed Evidential Fourier Neural Operator (Evidential-FNO), a novel approach that 
-integrates Evidential Deep Learning with Fourier Neural Operators for uncertainty-aware PDE solution prediction. 
-We first establish the theoretical connection between FNO outputs and regression problems, then describe the 
+This section presents the proposed Evidential Fourier Neural Operator (Evidential-FNO), a novel approach that
+integrates Evidential Deep Learning with Fourier Neural Operators for uncertainty-aware PDE solution prediction.
+We first establish the theoretical connection between FNO outputs and regression problems, then describe the
 architectural modifications required to enable evidential learning.
 
-\section{Evidential Fourier Neural Operator}
+\subsection{Evidential Fourier Neural Operator}
 
-\subsection{FNO Output as Spatially-Extended Regression}
+\subsubsection{FNO Output as Spatially-Extended Regression}
 
 The key insight enabling the integration of Evidential Deep Learning with Fourier Neural Operators lies in 
 recognizing the nature of FNO's output. Consider the standard FNO that learns a solution operator 
@@ -467,12 +467,12 @@ The Evidential-FNO requires only a single forward pass during both training and 
 parameter overhead (only the final projection layer is modified). This makes it particularly attractive for 
 real-time applications where computational budget is limited.
 
-\section{Baseline Methods}
+\subsection{Baseline Methods}
 
 For comprehensive evaluation, we compare Evidential-FNO against established uncertainty quantification 
 methods adapted for neural operators.
 
-\subsection{MC Dropout}
+\subsubsection{MC Dropout}
 
 Monte Carlo Dropout approximates Bayesian inference by using dropout at test time. We apply Dropout2d 
 (spatial dropout) after each Fourier layer with dropout rate $p$. At inference, $T$ stochastic forward passes yield:
@@ -481,7 +481,7 @@ Monte Carlo Dropout approximates Bayesian inference by using dropout at test tim
     \hat{\sigma}^2_{i,j} &= \frac{1}{T}\sum_{t=1}^{T} (u^{(t)}_{i,j} - \hat{u}_{i,j})^2
 \end{align}
 
-\subsection{Deep Ensemble}
+\subsubsection{Deep Ensemble}
 
 Deep Ensemble trains $M$ independent FNO models with different random initializations. Predictions are 
 aggregated as:
@@ -490,7 +490,7 @@ aggregated as:
     \hat{\sigma}^2_{i,j} &= \frac{1}{M}\sum_{m=1}^{M} (u^{(m)}_{i,j} - \hat{u}_{i,j})^2
 \end{align}
 
-\section{Summary}
+\subsection{Summary}
 
 This chapter presented Evidential-FNO, which extends Fourier Neural Operators with uncertainty 
 quantification through Evidential Deep Learning. The key contributions are:

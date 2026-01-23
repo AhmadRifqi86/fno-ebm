@@ -1,3 +1,13 @@
+
+# Compile Instruction
+```
+pdflatex -shell-escape templ.tex
+bibtex templ
+pdflatex -shell-escape templ.tex
+pdflatex -shell-escape templ.tex
+```
+
+
 # Programmatic Figure Generation Guide
 
 This document contains scripts to generate all figures for the thesis.
