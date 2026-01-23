@@ -31,63 +31,39 @@ passes, negating computational advantages of neural operators.
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=1cm and 1.5cm,
-    model/.style={rectangle, draw, minimum width=2cm, minimum height=1.5cm, align=center, fill=blue!20},
-    pass/.style={rectangle, draw, minimum width=1.5cm, minimum height=1cm, align=center, fill=orange!20},
-    result/.style={rectangle, draw, minimum width=2cm, minimum height=1cm, align=center, fill=green!20}
+    node distance=0.8cm and 1cm,
+    model/.style={rectangle, draw, minimum width=1.5cm, minimum height=1.2cm, align=center, fill=blue!20, font=\scriptsize},
+    pass/.style={rectangle, draw, minimum width=1cm, minimum height=0.8cm, align=center, fill=orange!20, font=\scriptsize},
+    result/.style={rectangle, draw, minimum width=1.8cm, minimum height=0.8cm, align=center, fill=green!20, font=\scriptsize}
 ]
-
-% Trained model
 \node[model] (model) {Trained\\FNO Model\\(with Dropout)};
-
-% Input
-\node[above=0.5cm of model] (input) {$u(x)$};
+\node[above=0.4cm of model, font=\scriptsize] (input) {$u(x)$};
 \draw[->, thick] (input) -- (model);
-
-% Multiple forward passes
-\node[pass, below right=0.5cm and 0.5cm of model] (p1) {Pass 1\\$p=0.1$};
-\node[pass, right=0.3cm of p1] (p2) {Pass 2\\$p=0.1$};
-\node[pass, right=0.3cm of p2] (p3) {...};
-\node[pass, right=0.3cm of p3] (p30) {Pass 30\\$p=0.1$};
-
-% Arrows from model to passes
+\node[pass, below right=0.4cm and 0.3cm of model] (p1) {Pass 1};
+\node[pass, right=0.2cm of p1] (p2) {Pass 2};
+\node[pass, right=0.2cm of p2] (p3) {...};
+\node[pass, right=0.2cm of p3] (p30) {Pass 30};
 \draw[->, thick] (model.east) -| (p1.north);
 \draw[->, thick] (model.east) -| (p2.north);
 \draw[->, thick] (model.east) -| (p3.north);
 \draw[->, thick] (model.east) -| (p30.north);
-
-% Outputs
-\node[below=0.5cm of p1, font=\small] (o1) {$\hat{y}_1$};
-\node[below=0.5cm of p2, font=\small] (o2) {$\hat{y}_2$};
-\node[below=0.5cm of p3, font=\small] (o3) {...};
-\node[below=0.5cm of p30, font=\small] (o30) {$\hat{y}_{30}$};
-
+\node[below=0.3cm of p1, font=\scriptsize] (o1) {$\hat{y}_1$};
+\node[below=0.3cm of p2, font=\scriptsize] (o2) {$\hat{y}_2$};
+\node[below=0.3cm of p3, font=\scriptsize] (o3) {...};
+\node[below=0.3cm of p30, font=\scriptsize] (o30) {$\hat{y}_{30}$};
 \draw[->, thick] (p1) -- (o1);
 \draw[->, thick] (p2) -- (o2);
 \draw[->, thick] (p30) -- (o30);
-
-% Aggregation
-\node[result, below=1cm of p2] (mean) {Mean:\\$\mu = \frac{1}{T}\sum_{t=1}^{T} \hat{y}_t$};
-\node[result, below=0.3cm of mean] (var) {Variance:\\$\sigma^2 = \frac{1}{T}\sum_{t=1}^{T} (\hat{y}_t - \mu)^2$};
-
-\draw[->, thick, dashed] (o1.south) -- ++(0,-0.3) -| (mean.north);
-\draw[->, thick, dashed] (o2.south) -- ++(0,-0.3) -| (mean.north);
-\draw[->, thick, dashed] (o30.south) -- ++(0,-0.3) -| (mean.north);
-
-% Dropout mask visualization
-\node[below=0.1cm of p1, font=\tiny, text=red] {mask $m_1$};
-\node[below=0.1cm of p2, font=\tiny, text=red] {mask $m_2$};
-\node[below=0.1cm of p30, font=\tiny, text=red] {mask $m_{30}$};
-
-% Annotation
-\node[right=0.5cm of var, text width=3cm, font=\small, align=left] {
-    \textbf{Epistemic} uncertainty\\
-    (model uncertainty)
-};
-
-\end{tikzpicture}
-\caption{Monte Carlo Dropout inference with T=30 stochastic forward passes. Different dropout masks lead to diverse predictions, quantifying epistemic uncertainty.}
+\node[result, below=0.8cm of p2] (mean) {Mean: $\mu = \frac{1}{T}\sum \hat{y}_t$};
+\node[result, below=0.2cm of mean] (var) {Var: $\sigma^2 = \frac{1}{T}\sum (\hat{y}_t - \mu)^2$};
+\draw[->, thick, dashed] (o1.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (o2.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (o30.south) -- ++(0,-0.2) -| (mean.north);
+\end{tikzpicture}%
+}
+\caption{Monte Carlo Dropout inference with T=30 stochastic forward passes.}
 \label{fig:mc_dropout}
 \end{figure}
 
@@ -97,93 +73,33 @@ uncertainty through model disagreement, but incur $M$-fold computational overhea
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=1.5cm and 1cm,
-    model/.style={rectangle, draw, minimum width=2cm, minimum height=2.5cm, align=center, rounded corners},
-    result/.style={rectangle, draw, minimum width=2.5cm, minimum height=1cm, align=center, fill=green!20}
+    node distance=1cm and 0.3cm,
+    model/.style={rectangle, draw, minimum width=1.2cm, minimum height=1.5cm, align=center, rounded corners, font=\scriptsize},
+    result/.style={rectangle, draw, minimum width=2cm, minimum height=0.6cm, align=center, fill=green!20, font=\scriptsize}
 ]
-
-% Input (shared)
-\node (input) {$u(x)$};
-
-% Five models with different colors
-\node[model, fill=blue!20, below right=0.5cm and -1cm of input] (m1) {
-    \textbf{Model 1}\\
-    Init: $\theta_1^{(0)}$\\
-    Data: $\mathcal{D}_1$\\
-    $\downarrow$\\
-    $\hat{y}_1$
-};
-
-\node[model, fill=red!20, right=0.5cm of m1] (m2) {
-    \textbf{Model 2}\\
-    Init: $\theta_2^{(0)}$\\
-    Data: $\mathcal{D}_2$\\
-    $\downarrow$\\
-    $\hat{y}_2$
-};
-
-\node[model, fill=yellow!20, right=0.5cm of m2] (m3) {
-    \textbf{Model 3}\\
-    Init: $\theta_3^{(0)}$\\
-    Data: $\mathcal{D}_3$\\
-    $\downarrow$\\
-    $\hat{y}_3$
-};
-
-\node[model, fill=purple!20, right=0.5cm of m3] (m4) {
-    \textbf{Model 4}\\
-    Init: $\theta_4^{(0)}$\\
-    Data: $\mathcal{D}_4$\\
-    $\downarrow$\\
-    $\hat{y}_4$
-};
-
-\node[model, fill=cyan!20, right=0.5cm of m4] (m5) {
-    \textbf{Model 5}\\
-    Init: $\theta_5^{(0)}$\\
-    Data: $\mathcal{D}_5$\\
-    $\downarrow$\\
-    $\hat{y}_5$
-};
-
-% Input arrows
+\node[font=\scriptsize] (input) {$u(x)$};
+\node[model, fill=blue!20, below right=0.3cm and -0.5cm of input] (m1) {\textbf{M1}\\$\hat{y}_1$};
+\node[model, fill=red!20, right=0.2cm of m1] (m2) {\textbf{M2}\\$\hat{y}_2$};
+\node[model, fill=yellow!20, right=0.2cm of m2] (m3) {\textbf{M3}\\$\hat{y}_3$};
+\node[model, fill=purple!20, right=0.2cm of m3] (m4) {\textbf{M4}\\$\hat{y}_4$};
+\node[model, fill=cyan!20, right=0.2cm of m4] (m5) {\textbf{M5}\\$\hat{y}_5$};
 \draw[->, thick] (input) -| (m1.north);
 \draw[->, thick] (input) -| (m2.north);
 \draw[->, thick] (input) -| (m3.north);
 \draw[->, thick] (input) -| (m4.north);
 \draw[->, thick] (input) -| (m5.north);
-
-% Aggregation
-\node[result, below=1.5cm of m3] (mean) {
-    Mean: $\mu = \frac{1}{M}\sum_{m=1}^{M} \hat{y}_m$
-};
-
-\node[result, below=0.3cm of mean] (var) {
-    Variance: $\sigma^2 = \frac{1}{M}\sum_{m=1}^{M} (\hat{y}_m - \mu)^2$
-};
-
-% Aggregation arrows
-\draw[->, thick, dashed] (m1.south) -- ++(0,-0.3) -| (mean.north);
-\draw[->, thick, dashed] (m2.south) -- ++(0,-0.3) -| (mean.north);
-\draw[->, thick, dashed] (m3.south) -- ++(0,-0.3) -| (mean.north);
-\draw[->, thick, dashed] (m4.south) -- ++(0,-0.3) -| (mean.north);
-\draw[->, thick, dashed] (m5.south) -- ++(0,-0.3) -| (mean.north);
-
-% Annotation
-\node[above=0.2cm of m3, text width=4cm, font=\small, align=center] {
-    \textbf{Independent Training}\\
-    Different initializations \& data splits
-};
-
-\node[right=0.5cm of var, text width=3cm, font=\small, align=left] {
-    \textbf{Diversity} $\rightarrow$\\
-    Better uncertainty\\
-    quantification
-};
-
-\end{tikzpicture}
-\caption{Deep Ensemble with M=5 independently trained models. Different random initializations and data splits lead to diverse predictions that capture epistemic uncertainty.}
+\node[result, below=1cm of m3] (mean) {Mean: $\mu = \frac{1}{M}\sum \hat{y}_m$};
+\node[result, below=0.2cm of mean] (var) {Var: $\sigma^2 = \frac{1}{M}\sum (\hat{y}_m - \mu)^2$};
+\draw[->, thick, dashed] (m1.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (m2.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (m3.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (m4.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (m5.south) -- ++(0,-0.2) -| (mean.north);
+\end{tikzpicture}%
+}
+\caption{Deep Ensemble with M=5 independently trained models.}
 \label{fig:deep_ensemble}
 \end{figure}
 
@@ -192,8 +108,9 @@ distributions (Dirichlet for classification, Normal-Inverse-Gamma for regression
 This approach promises computational efficiency with explicit epistemic-aleatoric decomposition. However, recent
 studies have identified fundamental limitations that persist despite various proposed fixes.
 
-\begin{figure}[htbp]
+\begin{figure*}[htbp]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
     node distance=0.8cm and 1.2cm,
     box/.style={rectangle, draw, minimum width=2cm, minimum height=1.2cm, align=center, rounded corners=3pt},
@@ -251,13 +168,13 @@ studies have identified fundamental limitations that persist despite various pro
 \end{scope}
 
 % Characteristics box
-\node[draw, fill=gray!10, rounded corners, text width=4.5cm, align=left, font=\footnotesize] at (2.5, -3) {
-    \textbf{Characteristics:}\\
-    $\bullet$ Single point prediction\\
-    $\bullet$ No uncertainty estimate\\
-    $\bullet$ Assumes homoscedastic noise\\
-    $\bullet$ Cannot detect OOD data
-};
+% \node[draw, fill=gray!10, rounded corners, text width=4.5cm, align=left, font=\footnotesize] at (2.5, -3) {
+%     \textbf{Characteristics:}\\
+%     $\bullet$ Single point prediction\\
+%     $\bullet$ No uncertainty estimate\\
+%     $\bullet$ Assumes homoscedastic noise\\
+%     $\bullet$ Cannot detect OOD data
+% };
 
 % ==================== RIGHT SIDE: Evidential Regression ====================
 \node[title] at (10.5, 5) {(b) Evidential Regression};
@@ -335,28 +252,29 @@ studies have identified fundamental limitations that persist despite various pro
 \end{scope}
 
 % Characteristics box
-\node[draw, fill=gray!10, rounded corners, text width=5cm, align=left, font=\footnotesize] at (10.5, -3) {
-    \textbf{Characteristics:}\\
-    $\bullet$ Distribution over predictions\\
-    $\bullet$ Aleatoric: $\sigma^2_{\text{ale}} = \frac{\beta}{\alpha-1}$\\
-    $\bullet$ Epistemic: $\sigma^2_{\text{epi}} = \frac{\beta}{\nu(\alpha-1)}$\\
-    $\bullet$ Single forward pass\\
-    $\bullet$ OOD detection capability
-};
+% \node[draw, fill=gray!10, rounded corners, text width=5cm, align=left, font=\footnotesize] at (10.5, -3) {
+%     \textbf{Characteristics:}\\
+%     $\bullet$ Distribution over predictions\\
+%     $\bullet$ Aleatoric: $\sigma^2_{\text{ale}} = \frac{\beta}{\alpha-1}$\\
+%     $\bullet$ Epistemic: $\sigma^2_{\text{epi}} = \frac{\beta}{\nu(\alpha-1)}$\\
+%     $\bullet$ Single forward pass\\
+%     $\bullet$ OOD detection capability
+% };
 
 % ==================== Comparison Arrow ====================
 \draw[<->, line width=2pt, red!60] (5.8, 3.5) -- (7.2, 3.5);
 \node[font=\small, text=red!60, above] at (6.5, 3.7) {vs};
 
 % ==================== Bottom Summary ====================
-\node[draw, fill=yellow!10, rounded corners, text width=14cm, align=center] at (8, -5) {
-    \textbf{Key Difference:} Standard regression outputs a single value $\hat{y}$, while evidential regression outputs distribution parameters $(\gamma, \nu, \alpha, \beta)$ that encode both the prediction and its uncertainty in a single forward pass.
-};
+% \node[draw, fill=yellow!10, rounded corners, text width=14cm, align=center] at (8, -5) {
+%     \textbf{Key Difference:} Standard regression outputs a single value $\hat{y}$, while evidential regression outputs distribution parameters $(\gamma, \nu, \alpha, \beta)$ that encode both the prediction and its uncertainty in a single forward pass.
+% };
 
-\end{tikzpicture}
+\end{tikzpicture}%
+}
 \caption{Comparison of standard regression and evidential regression. (a) Standard regression outputs a single point estimate with MSE loss, providing no uncertainty information. (b) Evidential regression outputs four parameters of the Normal-Inverse-Gamma distribution, enabling decomposition of uncertainty into aleatoric (data noise) and epistemic (model uncertainty) components from a single forward pass.}
 \label{fig:standard_vs_evidential}
-\end{figure}
+\end{figure*}
 
 \subsection{Known Limitations of Evidential Methods}
 
@@ -395,8 +313,9 @@ The FNO parameterizes this mapping using spectral convolutions. The key componen
 \end{equation}
 where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the inverse transform, and $\mathbf{w}$ are learnable weights truncated to low Fourier modes.
 
-\begin{figure}[htbp]
+\begin{figure*}[htbp]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
     node distance=0.8cm,
     box/.style={rectangle, draw, minimum width=2.2cm, minimum height=2.2cm, align=center, font=\small},
@@ -485,10 +404,11 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
     \textcolor{gray!50}{\rule{0.3cm}{0.3cm}} Truncated
 };
 
-\end{tikzpicture}
+\end{tikzpicture}%
+}
 \caption{Spectral convolution in the Fourier Neural Operator. The input function $u(x)$ is transformed to Fourier space via FFT, where only $k_{\max} \times k_{\max}$ low-frequency modes are retained. These modes are multiplied element-wise with learnable complex weights $R$, then transformed back to spatial domain via IFFT.}
 \label{fig:spectral_convolution}
-\end{figure}
+\end{figure*}
 
 The FNO architecture consists of three stages:
 \begin{enumerate}
