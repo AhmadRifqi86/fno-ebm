@@ -56,11 +56,11 @@ passes, negating computational advantages of neural operators.
 \draw[->, thick] (p1) -- (o1);
 \draw[->, thick] (p2) -- (o2);
 \draw[->, thick] (p30) -- (o30);
-\node[result, below=0.8cm of p2] (mean) {Mean: $\mu = \frac{1}{T}\sum \hat{y}_t$};
+\node[result, below=1.35cm of p2] (mean) {Mean: $\mu = \frac{1}{T}\sum \hat{y}_t$};
 \node[result, below=0.2cm of mean] (var) {Var: $\sigma^2 = \frac{1}{T}\sum (\hat{y}_t - \mu)^2$};
-\draw[->, thick, dashed] (o1.south) -- ++(0,-0.2) -| (mean.north);
-\draw[->, thick, dashed] (o2.south) -- ++(0,-0.2) -| (mean.north);
-\draw[->, thick, dashed] (o30.south) -- ++(0,-0.2) -| (mean.north);
+\draw[->, thick, dashed] (o1.south) -- ++(0,-0.4) -| (mean.north);
+\draw[->, thick, dashed] (o2.south) -- ++(0,-0.4) -| (mean.north);
+\draw[->, thick, dashed] (o30.south) -- ++(0,-0.4) -| (mean.north);
 \end{tikzpicture}%
 }
 \caption{Monte Carlo Dropout inference with T=30 stochastic forward passes.}
@@ -146,15 +146,15 @@ studies have identified fundamental limitations that persist despite various pro
 \draw[arrow, line width=1.5pt] (std_net) -- (std_output);
 
 % Loss function box
-\node[draw, fill=red!15, rounded corners, text width=4cm, align=center] (std_loss) at (2.5, 1.5) {
+\node[draw, fill=red!15, rounded corners, text width=4cm, align=center] (std_loss) at (2.5, 0.8) {
     \textbf{MSE Loss}\\[3pt]
     $\mathcal{L} = (y - \hat{y})^2$
 };
 
-\draw[arrow, dashed, gray] (std_output.south) -- ++(0,-0.5) -| (std_loss.north);
+\draw[arrow, dashed, gray] (std_output.south) -- ++(0,-1.0) -| (std_loss.north);
 
 % Output visualization - point estimate
-\begin{scope}[shift={(0, -1)}]
+\begin{scope}[shift={(0, -2)}]
     \draw[->] (0,0) -- (5,0) node[right, font=\small] {$y$};
     \draw[->] (0,0) -- (0,1.5) node[above, font=\small] {$p(y)$};
 
@@ -217,15 +217,15 @@ studies have identified fundamental limitations that persist despite various pro
 \draw[arrow] (beta.east) -- ++(0.2,0) |- (nig_out.west);
 
 % Loss function box
-\node[draw, fill=red!15, rounded corners, text width=5cm, align=center] (evd_loss) at (10.5, 1.5) {
+\node[draw, fill=red!15, rounded corners, text width=5cm, align=center] (evd_loss) at (10.5, 0.8) {
     \textbf{Evidential Loss}\\[3pt]
     $\mathcal{L} = \mathcal{L}_{\text{NLL}} + \lambda \cdot \mathcal{L}_{\text{reg}}$
 };
 
-\draw[arrow, dashed, gray] (nig_out.south) -- ++(0,-0.5) -| (evd_loss.north);
+\draw[arrow, dashed, gray] (nig_out.south) -- ++(0,-1.0) -| (evd_loss.north);
 
 % Output visualization - distribution
-\begin{scope}[shift={(8, -1)}]
+\begin{scope}[shift={(8, -2)}]
     \draw[->] (0,0) -- (5,0) node[right, font=\small] {$y$};
     \draw[->] (0,0) -- (0,1.5) node[above, font=\small] {$p(y)$};
 

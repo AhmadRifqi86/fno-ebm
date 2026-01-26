@@ -82,10 +82,10 @@ where:
 
 The evidential projection layer applies appropriate activation functions to ensure valid NIG parameters:
 \begin{align}
-    \gamma &= \text{linear}(v_4) && \text{(unbounded, prediction mean)} \\
-    \nu &= \text{softplus}(v_4) + \epsilon && \text{(positive, evidence)} \\
-    \alpha &= \text{softplus}(v_4) + 1 + \epsilon && \text{(> 1, shape parameter)} \\
-    \beta &= \text{softplus}(v_4) + \epsilon && \text{(positive, scale parameter)}
+    \gamma &= \text{linear}(v_4) \quad \text{(unbounded, prediction mean)} \\
+    \nu &= \text{softplus}(v_4) + \epsilon \quad \text{(positive, evidence)} \\
+    \alpha &= \text{softplus}(v_4) + 1 + \epsilon \quad \text{($>$ 1, shape parameter)} \\
+    \beta &= \text{softplus}(v_4) + \epsilon \quad \text{(positive, scale parameter)}
 \end{align}
 where $\epsilon = 10^{-6}$ ensures numerical stability.
 
@@ -372,20 +372,15 @@ self-correcting mechanism: the model learns to reduce evidence in regions where 
 
 \subsubsection{Adaptive Regularization}
 
-We introduce epoch-dependent regularization strength that evolves during training:
+This scheme uses error-magnitude-dependent weighting that automatically scales regularization:
 \begin{equation}
-    \mathcal{L}_{\text{adaptive}} = \mathcal{L}_{\text{NIG}} + \lambda(t) \cdot |u^* - \gamma| \cdot \phi(\nu, \alpha)
+    \mathcal{L}_{\text{adaptive}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot \left(e^{|u^* - \gamma|} - 1\right) \cdot (2\nu + \alpha)
 \end{equation}
-where:
-\begin{equation}
-    \lambda(t) = \lambda_0 \cdot \min\left(1, \frac{t}{t_{\text{warmup}}}\right)
-\end{equation}
-and $\phi(\nu, \alpha) = 2\nu + \alpha$ is the evidence function.
 
-\textbf{Explanation}: Early in training, predictions are poor, so heavy regularization would prevent the model from 
-learning. The warmup schedule starts with weak regularization ($\lambda \approx 0$), allowing the model to first 
-learn accurate predictions. As training progresses, regularization strengthens to refine uncertainty estimates. 
-This two-phase approach separates ``learning to predict'' from ``learning to quantify uncertainty.''
+\textbf{Explanation}: The exponential term $(e^{|u^* - \gamma|} - 1)$ creates an adaptive weight that grows
+exponentially with prediction error. For small errors, $e^{\epsilon} - 1 \approx \epsilon$, providing gentle
+regularization. For large errors, the exponential amplifies the penalty, strongly discouraging high evidence
+on incorrect predictions. This creates automatic error-dependent scaling without requiring manual tuning.
 
 \subsubsection{L2-Evidence Regularization}
 
