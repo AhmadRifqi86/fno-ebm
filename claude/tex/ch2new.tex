@@ -147,9 +147,9 @@ The FNO parameterizes this mapping using spectral convolutions. The key componen
 \end{equation}
 where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the inverse transform, and $\mathbf{w}$ are learnable weights truncated to low Fourier modes.
 
-\begin{figure*}[htbp]
+\begin{figure}[htbp]
 \centering
-\resizebox{\textwidth}{!}{%
+\resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
     node distance=0.8cm,
     box/.style={rectangle, draw, minimum width=2.2cm, minimum height=2.2cm, align=center, font=\small},
@@ -172,42 +172,36 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
         \draw[black] (0,0) rectangle (1.8,1.8);
     \end{tikzpicture}
 };
-\node[label, below=0.1cm of input] {Spatial Domain\\$s \times s$};
+\node[label, below=0.1cm of input] {Spatial\\$s \times s$};
 
 % ===== Fourier Space (full) =====
-\node[box, fill=purple!15, right=2.5cm of input] (fourier) {
+\node[box, fill=purple!15, right=1.5cm of input] (fourier) {
     \textbf{Fourier}\\[2pt]
     $\hat{u}(k)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
-        % Full Fourier space (darker outside)
         \fill[purple!40] (0,0) rectangle (1.8,1.8);
-        % Kept modes in center (brighter)
         \fill[yellow!60] (0.5,0.5) rectangle (1.3,1.3);
         \draw[green!70!black, line width=1pt] (0.5,0.5) rectangle (1.3,1.3);
         \draw[black] (0,0) rectangle (1.8,1.8);
     \end{tikzpicture}
 };
-\node[label, below=0.1cm of fourier] {Spectral Domain\\$k_{\max} \times k_{\max}$ modes};
-
-% ===== Mode Truncation annotation =====
-\node[above=0.3cm of fourier, font=\scriptsize, text=green!50!black] {Keep $12 \times 12$ modes};
+\node[label, below=0.1cm of fourier] {Spectral\\$k_{\max}$ modes};
 
 % ===== Learnable Weights R =====
-\node[box, fill=orange!20, right=2.5cm of fourier] (weights) {
+\node[box, fill=orange!20, right=1.5cm of fourier] (weights) {
     \textbf{Filtered}\\[2pt]
-    $R \odot \hat{u}(k)$\\[4pt]
+    $R \odot \hat{u}$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
-        % Only kept modes shown
         \fill[gray!20] (0,0) rectangle (1.8,1.8);
         \fill[orange!50] (0.5,0.5) rectangle (1.3,1.3);
         \draw[red!70!black, line width=1pt] (0.5,0.5) rectangle (1.3,1.3);
         \draw[black] (0,0) rectangle (1.8,1.8);
     \end{tikzpicture}
 };
-\node[label, below=0.1cm of weights] {Learnable $R$\\(complex weights)};
+\node[label, below=0.1cm of weights] {Learnable\\$R$};
 
 % ===== Output v(x) =====
-\node[box, fill=green!15, right=2.5cm of weights] (output) {
+\node[box, fill=green!15, right=1.5cm of weights] (output) {
     \textbf{Output}\\[2pt]
     $v(x)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
@@ -220,29 +214,23 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
         \draw[black] (0,0) rectangle (1.8,1.8);
     \end{tikzpicture}
 };
-\node[label, below=0.1cm of output] {Spatial Domain\\$s \times s$};
+\node[label, below=0.1cm of output] {Spatial\\$s \times s$};
 
 % ===== Arrows connecting boxes =====
-\draw[arrow, line width=1.5pt, blue!70] (input.east) -- node[above, font=\small\bfseries] {FFT} node[below, font=\footnotesize] {$\mathcal{F}$} (fourier.west);
-\draw[arrow, line width=1.5pt, purple!70] (fourier.east) -- node[above, font=\small\bfseries] {$\odot$} node[below, font=\footnotesize] {Multiply} (weights.west);
-\draw[arrow, line width=1.5pt, green!60!black] (weights.east) -- node[above, font=\small\bfseries] {IFFT} node[below, font=\footnotesize] {$\mathcal{F}^{-1}$} (output.west);
+\draw[arrow, line width=1.5pt, blue!70] (input.east) -- node[above, font=\scriptsize\bfseries] {FFT} (fourier.west);
+\draw[arrow, line width=1.5pt, purple!70] (fourier.east) -- node[above, font=\scriptsize\bfseries] {$\odot$} (weights.west);
+\draw[arrow, line width=1.5pt, green!60!black] (weights.east) -- node[above, font=\scriptsize\bfseries] {IFFT} (output.west);
 
 % ===== Bottom equation =====
-\node[below=1.5cm of weights, font=\normalsize] {
-    $\mathcal{K}(u)(x) = \mathcal{F}^{-1}\Big( R \cdot \mathcal{F}(u) \Big)(x)$
-};
-
-% ===== Legend for mode truncation =====
-\node[right=0.3cm of output, text width=2.5cm, font=\scriptsize, align=left] {
-    \textcolor{green!50!black}{\rule{0.3cm}{0.3cm}} Kept modes\\[2pt]
-    \textcolor{gray!50}{\rule{0.3cm}{0.3cm}} Truncated
+\node[below=0.8cm of fourier, font=\small, xshift=1cm] {
+    $\mathcal{K}(u)(x) = \mathcal{F}^{-1}\big( R \cdot \mathcal{F}(u) \big)(x)$
 };
 
 \end{tikzpicture}%
 }
-\caption{Spectral convolution in the Fourier Neural Operator. The input function $u(x)$ is transformed to Fourier space via FFT, where only $k_{\max} \times k_{\max}$ low-frequency modes are retained. These modes are multiplied element-wise with learnable complex weights $R$, then transformed back to spatial domain via IFFT.}
+\caption{Spectral convolution in FNO. Input $u(x)$ is transformed via FFT, low-frequency modes are filtered by learnable weights $R$, then IFFT returns to spatial domain.}
 \label{fig:spectral_convolution}
-\end{figure*}
+\end{figure}
 
 The FNO architecture consists of three stages:
 \begin{enumerate}
@@ -256,31 +244,32 @@ The FNO architecture consists of three stages:
 
 \begin{figure}[htbp]
 \centering
+\resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=1.5cm,
-    layer/.style={rectangle, draw, minimum width=3cm, minimum height=1cm, align=center},
+    node distance=0.6cm and 0.8cm,
+    layer/.style={rectangle, draw, minimum width=1cm, minimum height=1.2cm, align=center, font=\scriptsize, rounded corners=2pt},
     arrow/.style={->, >=stealth, thick}
 ]
 
 % Input
-\node[layer, fill=blue!20] (input) {Input\\$u(x)$\\dim: $s \times s$};
+\node[layer, fill=blue!20] (input) {\textbf{Input}\\$a(x)$};
 
 % Lifting layer
-\node[layer, fill=green!20, below of=input] (lift) {Lifting Layer (P)\\$v_0 = Pu$\\dim: $s \times s \times d$};
+\node[layer, fill=green!20, right=0.6cm of input] (lift) {\textbf{P}\\Lift};
 
 % Fourier layers
-\node[layer, fill=orange!20, below of=lift] (f1) {Fourier Layer 1\\Spectral Conv + Act};
-\node[layer, fill=orange!20, below of=f1] (f2) {Fourier Layer 2\\Spectral Conv + Act};
-\node[layer, fill=orange!20, below of=f2] (f3) {Fourier Layer 3\\Spectral Conv + Act};
-\node[layer, fill=orange!20, below of=f3] (f4) {Fourier Layer 4\\Spectral Conv + Act};
+\node[layer, fill=orange!20, right=0.5cm of lift] (f1) {\textbf{F1}};
+\node[layer, fill=orange!20, right=0.4cm of f1] (f2) {\textbf{F2}};
+\node[layer, fill=orange!20, right=0.4cm of f2] (f3) {\textbf{F3}};
+\node[layer, fill=orange!20, right=0.4cm of f3] (f4) {\textbf{F4}};
 
 % Projection layer
-\node[layer, fill=green!20, below of=f4] (proj) {Projection Layer (Q)\\$y = Qv_4$\\dim: $s \times s \times 1$};
+\node[layer, fill=green!20, right=0.5cm of f4] (proj) {\textbf{Q}\\Proj};
 
 % Output
-\node[layer, fill=blue!20, below of=proj] (output) {Output\\$\hat{u}(x)$\\dim: $s \times s$};
+\node[layer, fill=blue!20, right=0.6cm of proj] (output) {\textbf{Output}\\$u(x)$};
 
-% Arrows
+% Main arrows
 \draw[arrow] (input) -- (lift);
 \draw[arrow] (lift) -- (f1);
 \draw[arrow] (f1) -- (f2);
@@ -289,13 +278,17 @@ The FNO architecture consists of three stages:
 \draw[arrow] (f4) -- (proj);
 \draw[arrow] (proj) -- (output);
 
-% Skip connections
-\draw[arrow, dashed, red] (f1.east) to[out=0, in=0] node[right, xshift=0.2cm] {skip} (f2.east);
-\draw[arrow, dashed, red] (f2.east) to[out=0, in=0] (f3.east);
-\draw[arrow, dashed, red] (f3.east) to[out=0, in=0] (f4.east);
+% Skip connections (W) - curved arrows above
+\draw[arrow, dashed, red!70] (f1.north) to[out=60, in=120] node[above, font=\tiny] {$W$} (f2.north);
+\draw[arrow, dashed, red!70] (f2.north) to[out=60, in=120] (f3.north);
+\draw[arrow, dashed, red!70] (f3.north) to[out=60, in=120] (f4.north);
 
-\end{tikzpicture}
-\caption{Fourier Neural Operator architecture with lifting layer (P), four Fourier layers with spectral convolution and skip connections, and projection layer (Q).}
+% Equation below
+\node[below=0.4cm of f2, font=\scriptsize, text width=4cm, align=center] {$v_{l+1} = \sigma(\mathcal{K}v_l + Wv_l)$};
+
+\end{tikzpicture}%
+}
+\caption{FNO architecture: lifting (P), four Fourier layers with skip connections (W), and projection (Q).}
 \label{fig:fno_architecture}
 \end{figure}
 
