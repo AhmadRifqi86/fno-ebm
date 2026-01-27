@@ -53,9 +53,11 @@ Our ablation study identifies critical components for evidential FNOs:
     \item \textbf{Beneficial}: Global residual connections (+5\% improvement)
     \item \textbf{Detrimental}: Batch normalization (2.2$\times$ worse), likely interfering with NIG parameter 
     learning
-    \item \textbf{Flexible}: Evidential head complexity matters little---shallow heads maintain quality with fewer 
+    \item \textbf{Flexible}: Evidential head complexity matters little---shallow heads maintain quality with fewer
     parameters
 \end{itemize}
+
+While the Fourier layers provide the global receptive field necessary for operator learning, the ablation results in Table VII demonstrate that they are architecturally dependent on spatial skip connections for numerical stability. The collapse of the fourier\_only variant does not imply a lack of contribution from the spectral branch; rather, it underscores that the spectral-spatial duality is essential for the stable parameterization of the Normal-Inverse-Gamma distribution in evidential frameworks.
 
 \subsection{Limitations}
 
@@ -66,32 +68,22 @@ Future work should validate findings across broader PDE classes, architectures, 
 
 \section{Conclusion}
 
-This paper presents comprehensive comparison of uncertainty quantification methods for Fourier Neural Operators,
- evaluating MC Dropout, Deep Ensembles, and Evidential Deep Learning across calibration, efficiency, 
- decomposition validity, and OOD detection.
+This paper presents a comprehensive comparison of uncertainty quantification methods for Fourier Neural Operators, 
+evaluating Monte Carlo Dropout, Deep Ensembles, and Evidential Deep Learning across calibration quality, 
+computational efficiency, decomposition validity, and out-of-distribution detection. Our experiments demonstrate 
+that evidential methods achieve state-of-the-art calibration with Expected Calibration Error around 0.004 using 
+single-pass inference, outperforming both Monte Carlo Dropout and Deep Ensembles by significant margins while 
+providing 5--30 times faster inference. However, our analysis reveals fundamental limitations: the theoretical 
+decomposition of uncertainty into epistemic and aleatoric components fails for well-calibrated methods, 
+with both components decreasing as training data increases, exposing a calibration-decomposition trade-off inherent 
+to the Normal-Inverse-Gamma parameterization. Furthermore, out-of-distribution detection capability depends 
+critically on the type of distributional shift---parameter extrapolation yields near-random detection while 
+operator-level shifts achieve perfect separation, suggesting that neural operators learn physics-informed 
+representations that generalize within equation families.
 
-\textbf{Key findings}:
-\begin{enumerate}
-    \item Evidential methods achieve state-of-the-art calibration (ECE = 0.004) with single-pass inference, 
-    outperforming MC Dropout (5$\times$ better ECE) and Deep Ensembles (3$\times$ better ECE) while being 
-    5--30$\times$ faster.
-
-    \item Uncertainty decomposition fails for well-calibrated evidential methods---both epistemic and aleatoric 
-    uncertainties decrease with training data, revealing a fundamental calibration-decomposition trade-off in 
-    the NIG parameterization.
-
-    \item OOD detection capability depends critically on shift type: near-random for parameter extrapolation 
-    (AUROC = 0.55) but perfect for operator-level shift (AUROC = 1.0), suggesting neural operators learn 
-    physics-informed representations.
-
-    \item MC Dropout should be avoided for neural operators due to consistently poor performance across all metrics.
-\end{enumerate}
-
-\textbf{Recommendations}: For production deployment, use evidential FNO with Uncertainty-Aware or Improved 
-regularization. Report total uncertainty only (ignore decomposition). Implement threshold-based fallback for 
-operator-level OOD detection. Reserve Deep Ensembles for applications requiring robust epistemic uncertainty despite 
-computational cost.
-
-Future work should investigate alternative parameterizations overcoming the calibration-decomposition trade-off, 
-extend evaluation to broader PDE families and architectures, and develop physics-informed OOD metrics for parameter 
-extrapolation scenarios.
+Based on these findings, we recommend using evidential FNO with Uncertainty-Aware or Improved regularization for 
+production deployment, reporting total uncertainty rather than relying on the decomposition, and reserving 
+Deep Ensembles for applications requiring robust epistemic uncertainty quantification. Monte Carlo Dropout 
+should be avoided for neural operators due to consistently poor performance. Future work should investigate 
+alternative parameterizations that overcome the calibration-decomposition trade-off and extend evaluation to 
+broader partial differential equation families and neural operator architectures.
