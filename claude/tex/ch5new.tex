@@ -47,17 +47,20 @@ shift but should not be solely relied upon for parameter extrapolation validatio
 
 \subsection{Architectural Insights}
 
-Our ablation study identifies critical components for evidential FNOs:
-\begin{itemize}
-    \item \textbf{Essential}: Skip connections and GELU activations---removal causes catastrophic failure
-    \item \textbf{Beneficial}: Global residual connections (+5\% improvement)
-    \item \textbf{Detrimental}: Batch normalization (2.2$\times$ worse), likely interfering with NIG parameter 
-    learning
-    \item \textbf{Flexible}: Evidential head complexity matters little---shallow heads maintain quality with fewer
-    parameters
-\end{itemize}
+Our ablation study identifies critical components for evidential FNOs. Skip connections and GELU activations prove 
+essential---their removal causes catastrophic failure with MSE approaching 1.0 and undefined correlation metrics. 
+Global residual connections provide moderate benefits with approximately 5\% improvement in calibration quality. 
+Conversely, batch normalization proves detrimental, yielding 2.2$\times$ worse performance, likely due to 
+interference with the NIG parameter learning dynamics where the normalization disrupts the delicate balance 
+between $\alpha$, $\beta$, and $\nu$ outputs. Notably, evidential head complexity matters little; shallow heads 
+maintain prediction quality with fewer parameters, suggesting the uncertainty estimation burden falls primarily on 
+the FNO backbone rather than the output projection.
 
-While the Fourier layers provide the global receptive field necessary for operator learning, the ablation results in Table VII demonstrate that they are architecturally dependent on spatial skip connections for numerical stability. The collapse of the fourier\_only variant does not imply a lack of contribution from the spectral branch; rather, it underscores that the spectral-spatial duality is essential for the stable parameterization of the Normal-Inverse-Gamma distribution in evidential frameworks.
+While the Fourier layers provide the global receptive field necessary for operator learning, the ablation results 
+in Table VII demonstrate that they are architecturally dependent on spatial skip connections for numerical 
+stability. The collapse of the fourier\_only variant does not imply a lack of contribution from the 
+spectral branch; rather, it underscores that the spectral-spatial duality is essential for the stable 
+parameterization of the Normal-Inverse-Gamma distribution in evidential frameworks.
 
 \subsection{Limitations}
 
