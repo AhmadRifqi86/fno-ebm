@@ -5,7 +5,7 @@
 
 \subsubsection{Datasets}
 
-We evaluate on two benchmark PDEs with distinct characteristics:
+We evaluate on two benchmark PDEs from PDEBench \cite{takamoto2022pdebench} with distinct characteristics:
 
 \textbf{Navier-Stokes equations} describe incompressible fluid dynamics:
 \begin{equation}
@@ -53,8 +53,8 @@ Adaptive & 0.00170 & 0.0261 & 0.0412 & 0.0038 & 0.922 & 0.521 & -2.141 \\
 L2-Evidence & 0.00163 & 0.0256 & 0.0402 & 0.0066 & \textbf{0.949} & 0.467 & -2.148 \\
 KL-Divergence & 0.00149 & 0.0265 & 0.0385 & 0.0303 & 0.993 & 0.437 & -1.787 \\
 \midrule
-Ensemble & 0.00147 & -- & -- & 0.0106 & 0.758 & 0.328 & -1.784 \\
-MC Dropout & 0.01005 & -- & -- & 0.0192 & 0.900 & 0.306 & -0.946 \\
+Ensemble \cite{lakshminarayanan2017simple} & 0.00147 & -- & -- & 0.0106 & 0.758 & 0.328 & -1.784 \\
+MC Dropout \cite{gal2016dropout} & 0.01005 & -- & -- & 0.0192 & 0.900 & 0.306 & -0.946 \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -95,8 +95,8 @@ Adaptive & 0.00389 & 0.0312 & 0.0633 & 0.0069 & 0.813 & 0.544 & -1.652 \\
 L2-Evidence & 0.00383 & 0.0316 & 0.0628 & 0.0062 & 0.838 & 0.309 & -1.513 \\
 KL-Divergence & 0.00403 & 0.0342 & 0.0644 & 0.0194 & \textbf{0.954} & 0.469 & -1.553 \\
 \midrule
-Ensemble & 0.00652 & 0.0426 & 0.0817 & 0.0061 & 0.652 & 0.461 & -0.827 \\
-MC Dropout & 0.01195 & 0.0774 & 0.1107 & 0.0048 & 0.828 & 0.299 & -0.803 \\
+Ensemble \cite{lakshminarayanan2017simple} & 0.00652 & 0.0426 & 0.0817 & 0.0061 & 0.652 & 0.461 & -0.827 \\
+MC Dropout \cite{gal2016dropout} & 0.01195 & 0.0774 & 0.1107 & 0.0048 & 0.828 & 0.299 & -0.803 \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -220,7 +220,7 @@ Darcy Flow & Navier-Stokes & Operator & 1.000 & 36$\times$ \\
 
 \subsection{Experiment 6: Architectural Ablation}
 
-We ablate key components from the Improved evidential FNO.
+We ablate key components from the Improved evidential FNO using 3500 sample as train set and 1500 sample for test set. The Baseline row refers to the full Improved model with all default components intact, serving as the reference for comparison.
 
 \begin{table}[htbp]
 \centering
@@ -231,7 +231,7 @@ We ablate key components from the Improved evidential FNO.
 \toprule
 \textbf{Variant} & \textbf{MSE} $\downarrow$ & \textbf{rel\_l2} $\downarrow$ & \textbf{Calib.} $\downarrow$ & \textbf{Corr.} $\uparrow$ \\
 \midrule
-Baseline & 0.00194 & 0.0442 & 0.029 & 0.455 \\
+Baseline & \textbf{0.00194} & 0.0442 & 0.029 & 0.455 \\
 \midrule
 no\_skip\_connections & 0.996 & 1.000 & 0.339 & NaN \\
 fourier\_only & 0.996 & 1.000 & 0.374 & NaN \\
@@ -240,7 +240,7 @@ with\_batch\_norm & 0.004 & 0.066 & 0.038 & 0.420 \\
 \midrule
 shallow\_heads & 0.002 & 0.045 & 0.029 & 0.447 \\
 linear\_heads & 0.003 & 0.057 & 0.037 & 0.457 \\
-with\_residual & \textbf{0.002} & \textbf{0.043} & \textbf{0.028} & 0.452 \\
+with\_residual & 0.002 & \textbf{0.043} & \textbf{0.028} & 0.452 \\
 \bottomrule
 \end{tabular}%
 }

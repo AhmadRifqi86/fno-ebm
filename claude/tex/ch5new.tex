@@ -10,7 +10,8 @@ Ensembles (0.011) while maintaining 93--95\% coverage. This superiority holds ac
 Darcy Flow, with the performance gap widening on harder problems.
 
 \textbf{Computational efficiency}: Single-pass inference provides 5--30$\times$ speedup over alternatives, 
-critical for real-time applications and high-throughput scientific computing workflows.
+critical for real-time applications and high-throughput scientific computing workflows
+\cite{karniadakis2021physics,raissi2019physics}.
 
 \textbf{Informative uncertainty}: Uncertainty-error correlation of 0.61 (vs. 0.31--0.33 for baselines) indicates 
 evidential uncertainty better reflects prediction quality.
@@ -25,7 +26,7 @@ A fundamental limitation emerges from our decomposition analysis: methods achiev
 (ECE $\sim$ 0.004) exhibit invalid decomposition (aleatoric variation $>$ 89\%), while valid decomposition 
 (KL-Divergence) yields poor calibration (ECE = 0.030).
 
-This trade-off appears intrinsic to the NIG parameterization. During training, the network increases evidence ($\nu, \alpha$) for correct predictions, directly reducing epistemic uncertainty ($\propto 1/\nu$). However, aleatoric uncertainty ($= \beta/(\alpha-1)$) also decreases because the loss function optimizes $\beta$ to match observed prediction variance. As the model improves with more data, prediction errors decrease, so the optimal $\beta$ decreases. Since $\alpha$ increases while $\beta$ decreases, the ratio $\beta/(\alpha-1)$ drops substantially---even though it theoretically should remain constant as irreducible data noise. The NIG parameterization lacks separate constraints to preserve aleatoric stability.
+This trade-off appears intrinsic to the NIG parameterization \cite{amini2020deep}. During training, the network increases evidence ($\nu, \alpha$) for correct predictions, directly reducing epistemic uncertainty ($\propto 1/\nu$). However, aleatoric uncertainty ($= \beta/(\alpha-1)$) also decreases because the loss function optimizes $\beta$ to match observed prediction variance. As the model improves with more data, prediction errors decrease, so the optimal $\beta$ decreases. Since $\alpha$ increases while $\beta$ decreases, the ratio $\beta/(\alpha-1)$ drops substantially---even though it theoretically should remain constant as irreducible data noise. The NIG parameterization lacks separate constraints to preserve aleatoric stability.
 
 \textbf{Practical implication}: Practitioners should treat evidential outputs as \emph{total uncertainty} 
 rather than interpreting the decomposition. For applications requiring true epistemic-aleatoric separation, 
@@ -37,8 +38,8 @@ The stark contrast between parameter-level OOD (AUROC = 0.55) and operator-level
 domain-specific interpretation: parameter extrapolation within the same PDE family may not constitute true 
 distributional shift from the operator learning perspective.
 
-The FNO learns the Navier-Stokes operator in Fourier space, which generalizes across Reynolds numbers despite 
-different flow characteristics. This explains maintained confidence at Re = 5000. Conversely, cross-PDE transfer 
+The FNO learns the Navier-Stokes operator in Fourier space \cite{li2020fourier,kovachki2023neural}, which
+generalizes across Reynolds numbers despite different flow characteristics. This explains maintained confidence at Re = 5000. Conversely, cross-PDE transfer 
 represents genuine operator-level shift where the governing equations differ fundamentally, yielding appropriate 
 massive uncertainty increases (36--378$\times$).
 
@@ -47,11 +48,12 @@ shift but should not be solely relied upon for parameter extrapolation validatio
 
 \subsection{Architectural Insights}
 
-Our ablation study identifies critical components for evidential FNOs. Skip connections and GELU activations prove 
-essential---their removal causes catastrophic failure with MSE approaching 1.0 and undefined correlation metrics. 
+Our ablation study identifies critical components for evidential FNOs. Skip connections
+\cite{he2016deep} and GELU activations \cite{hendrycks2016gaussian} prove essential---their removal causes
+catastrophic failure with MSE approaching 1.0 and undefined correlation metrics. 
 Global residual connections provide moderate benefits with approximately 5\% improvement in calibration quality. 
-Conversely, batch normalization proves detrimental, yielding 2.2$\times$ worse performance, likely due to 
-interference with the NIG parameter learning dynamics where the normalization disrupts the delicate balance 
+Conversely, batch normalization \cite{ioffe2015batch} proves detrimental, yielding 2.2$\times$ worse performance,
+likely due to interference with the NIG parameter learning dynamics where the normalization disrupts the delicate balance 
 between $\alpha$, $\beta$, and $\nu$ outputs. Notably, evidential head complexity matters little; shallow heads 
 maintain prediction quality with fewer parameters, suggesting the uncertainty estimation burden falls primarily on 
 the FNO backbone rather than the output projection.

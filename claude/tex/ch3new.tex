@@ -9,9 +9,9 @@ architectural modifications required to enable evidential learning.
 
 \subsubsection{FNO Output as Spatially-Extended Regression}
 
-The key insight enabling the integration of Evidential Deep Learning with Fourier Neural Operators lies in 
-recognizing the nature of FNO's output. Consider the standard FNO that learns a solution operator 
-$\mathcal{G}_\theta: \mathcal{A} \rightarrow \mathcal{U}$ mapping input functions to solution functions. For a 
+The key insight enabling the integration of Evidential Deep Learning with Fourier Neural Operators lies in
+recognizing the nature of FNO's output. Consider the standard FNO \cite{li2020fourier} that learns a solution
+operator $\mathcal{G}_\theta: \mathcal{A} \rightarrow \mathcal{U}$ mapping input functions to solution functions. For a 
 discretized input $a \in \mathbb{R}^{H \times W \times d_{in}}$ on a spatial grid, the vanilla FNO produces:
 \begin{equation}
     u = \mathcal{G}_\theta(a) \in \mathbb{R}^{H \times W \times 1}
@@ -27,9 +27,10 @@ where $f_\theta$ represents the learned mapping and $\epsilon_{i,j}$ captures pr
 spatially.
 
 The crucial observation is that while the FNO operates on 2D spatial grids, each output value remains a 
-continuous scalar---precisely the setting where Evidential Deep Learning excels. Standard regression 
-neural networks predict point estimates; Evidential Deep Learning extends this by predicting distributions 
-over possible outputs. This same extension applies naturally to the spatially-extended regression performed by FNOs.
+continuous scalar---precisely the setting where Evidential Deep Learning excels. Standard regression
+neural networks predict point estimates; Evidential Deep Learning \cite{amini2020deep} extends this by predicting
+distributions over possible outputs. This same extension applies naturally to the spatially-extended regression
+performed by FNOs.
 
 \subsection{From Point Estimates to Evidential Outputs}
 
@@ -105,7 +106,7 @@ where $\epsilon = 10^{-6}$ ensures numerical stability.
 \node[font=\bfseries] at (7, 5.5) {Evidential FNO Architecture};
 
 % Input
-\node[box, fill=blue!20] (input) at (0, 3) {
+\node[box, fill=white] (input) at (0, 3) {
     \textbf{Input}\\
     $u(x)$\\
     \footnotesize$(H \times W)$
@@ -113,11 +114,11 @@ where $\epsilon = 10^{-6}$ ensures numerical stability.
 
 % ==================== Detailed FNO Backbone ====================
 % Outer box for FNO
-\node[draw, fill=blue!5, minimum width=7cm, minimum height=4cm, rounded corners=5pt] (fno_outer) at (4.8, 3) {};
+\node[draw, fill=white, minimum width=7cm, minimum height=4cm, rounded corners=5pt] (fno_outer) at (4.8, 3) {};
 \node[font=\small\bfseries, anchor=north] at (4.8, 5.1) {FNO Backbone};
 
 % Lifting layer
-\node[fnobox, fill=green!25] (lift) at (2, 3) {
+\node[fnobox, fill=white] (lift) at (2, 3) {
     \textbf{Lift}\\
     \footnotesize$P$
 };
@@ -126,25 +127,25 @@ where $\epsilon = 10^{-6}$ ensures numerical stability.
 \coordinate (branch) at (3, 3);
 
 % FFT (upper spectral path)
-\node[fnobox, fill=blue!30] (fft) at (4, 4) {
+\node[fnobox, fill=white] (fft) at (4, 4) {
     \textbf{FFT}\\
     \footnotesize$\mathcal{F}$
 };
 
 % Fourier weights (spectral conv)
-\node[fnobox, fill=orange!40] (weights) at (5.5, 4) {
+\node[fnobox, fill=white] (weights) at (5.5, 4) {
     \textbf{$R \odot$}\\
     \footnotesize modes
 };
 
 % IFFT
-\node[fnobox, fill=purple!30] (ifft) at (7, 4) {
+\node[fnobox, fill=white] (ifft) at (7, 4) {
     \textbf{IFFT}\\
     \footnotesize$\mathcal{F}^{-1}$
 };
 
 % Local path (W) - lower spatial path
-\node[fnobox, fill=yellow!30, minimum width=2.5cm] (local) at (5.5, 2) {
+\node[fnobox, fill=white, minimum width=2.5cm] (local) at (5.5, 2) {
     \textbf{$W$} \footnotesize(spatial conv)
 };
 
@@ -173,7 +174,7 @@ where $\epsilon = 10^{-6}$ ensures numerical stability.
 \draw[arrow, line width=1pt, rounded corners=3pt] (local.east) -| (plus.south);
 
 % ==================== Four Output Heads (Equal Size) ====================
-\node[smallbox, fill=cyan!35] (gamma) at (10.5, 4.5) {$\gamma$ \footnotesize(mean)};
+\node[smallbox, fill=white] (gamma) at (10.5, 4.5) {$\gamma$ \footnotesize(mean)};
 \node[smallbox, fill=lime!35] (nu) at (10.5, 3.5) {$\nu$ \footnotesize(evidence)};
 \node[smallbox, fill=yellow!45] (alpha) at (10.5, 2.5) {$\alpha$ \footnotesize(shape)};
 \node[smallbox, fill=pink!45] (beta) at (10.5, 1.5) {$\beta$ \footnotesize(scale)};
@@ -331,8 +332,8 @@ with $\Omega_{i,j} = 2\beta_{i,j}(1 + \nu_{i,j})$.
 
 \subsection{Regularization Schemes}
 
-A known challenge in evidential deep learning is preventing the model from ``explaining away'' prediction errors 
-by inflating uncertainty estimates rather than improving predictions. This occurs when the model increases $\beta$ 
+A known challenge in evidential deep learning \cite{amini2020deep,oh2022improving} is preventing the model from
+``explaining away'' prediction errors by inflating uncertainty estimates rather than improving predictions. This occurs when the model increases $\beta$ 
 (aleatoric uncertainty) to reduce the NIG loss without actually learning better predictions. Regularization is 
 essential to encourage meaningful uncertainty estimates.
 
@@ -479,8 +480,8 @@ methods adapted for neural operators.
 
 \subsubsection{MC Dropout}
 
-Monte Carlo Dropout approximates Bayesian inference by using dropout at test time. We apply Dropout2d 
-(spatial dropout) after each Fourier layer with dropout rate $p$. At inference, $T$ stochastic forward passes yield:
+Monte Carlo Dropout \cite{gal2016dropout} approximates Bayesian inference by using dropout at test time. We apply
+Dropout2d (spatial dropout) \cite{tompson2015efficient} after each Fourier layer with dropout rate $p$. At inference, $T$ stochastic forward passes yield:
 \begin{align}
     \hat{u}_{i,j} &= \frac{1}{T}\sum_{t=1}^{T} u^{(t)}_{i,j} \\
     \hat{\sigma}^2_{i,j} &= \frac{1}{T}\sum_{t=1}^{T} (u^{(t)}_{i,j} - \hat{u}_{i,j})^2

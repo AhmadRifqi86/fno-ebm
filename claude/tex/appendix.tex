@@ -1,0 +1,77 @@
+\appendices
+
+\section{Notation Reference}
+\label{app:notation}
+
+Table~\ref{tab:notation} summarizes the mathematical symbols used throughout this paper.
+
+\begin{table*}[htbp]
+\centering
+\caption{Summary of mathematical notation.}
+\label{tab:notation}
+\begin{tabular}{lll}
+\toprule
+\textbf{Symbol} & \textbf{Description} & \textbf{Section} \\
+\midrule
+\multicolumn{3}{l}{\textit{PDE and Neural Operator}} \\
+$a(x)$ & Input function (e.g., initial condition, permeability field) & Prelim. \\
+$u(x)$ & Output/solution function & Prelim. \\
+$\mathcal{G}_\theta$ & Neural operator parameterized by $\theta$ & Prelim. \\
+$\mathcal{L}$ & PDE operator & Prelim. \\
+$\omega$ & Vorticity (Navier-Stokes) & Experiments \\
+$\nu_{\text{visc}}$ & Viscosity coefficient & Experiments \\
+$k(x)$ & Permeability field (Darcy flow) & Experiments \\
+\midrule
+\multicolumn{3}{l}{\textit{FNO Architecture}} \\
+$\mathcal{F}, \mathcal{F}^{-1}$ & Fourier transform and inverse Fourier transform & Prelim. \\
+$\mathcal{K}$ & Spectral convolution operator & Prelim. \\
+$\mathbf{w}, R$ & Learnable weights in Fourier space & Prelim. \\
+$v_l(x)$ & Latent representation at Fourier layer $l$ & Prelim. \\
+$W_l$ & Skip connection (local linear) weights at layer $l$ & Prelim. \\
+$P$ & Lifting layer (input $\rightarrow$ latent space) & Prelim. \\
+$Q, Q^{\text{evid}}$ & Projection layer (vanilla / evidential) & Method. \\
+$\sigma(\cdot)$ & Activation function (GELU) & Prelim. \\
+$L$ & Number of Fourier layers & Prelim. \\
+$w$ & FNO width (latent channel dimension) & Method. \\
+$H, W$ & Spatial grid dimensions & Method. \\
+$d_{in}$ & Number of input channels & Method. \\
+\midrule
+\multicolumn{3}{l}{\textit{Uncertainty Quantification Methods}} \\
+$T$ & Number of MC Dropout forward passes & Prelim. \\
+$M$ & Number of ensemble members & Prelim. \\
+$p$ & Dropout rate & Method. \\
+$\mu$ & Predictive mean & Prelim. \\
+$\sigma^2$ & Predictive variance & Prelim. \\
+$\hat{y}_t$ & Prediction at MC Dropout pass $t$ & Prelim. \\
+$\hat{y}_m$ & Prediction of ensemble member $m$ & Prelim. \\
+\midrule
+\multicolumn{3}{l}{\textit{Normal-Inverse-Gamma (NIG) Distribution}} \\
+$\gamma$ & Predicted mean (location parameter) & Prelim. \\
+$\nu$ & Evidence parameter (precision of mean estimate) & Prelim. \\
+$\alpha$ & Shape parameter ($> 1$) & Prelim. \\
+$\beta$ & Scale parameter ($> 0$) & Prelim. \\
+$\sigma^2_{\text{ale}}$ & Aleatoric uncertainty $= \beta / (\alpha - 1)$ & Prelim. \\
+$\sigma^2_{\text{epi}}$ & Epistemic uncertainty $= \beta / [\nu(\alpha - 1)]$ & Prelim. \\
+$\Omega$ & NIG loss auxiliary term $= 2\beta(1 + \nu)$ & Method. \\
+$\Gamma(\cdot)$ & Gamma function & Prelim. \\
+$\psi(\cdot)$ & Digamma function & Method. \\
+\midrule
+\multicolumn{3}{l}{\textit{Training and Regularization}} \\
+$\mathcal{L}_{\text{NIG}}$ & NIG negative log-likelihood loss & Method. \\
+$\mathcal{L}_{\text{reg}}$ & Regularization loss term & Method. \\
+$\lambda$ & Regularization strength & Method. \\
+$\lambda_\nu$ & Evidence regularization strength (Improved, L2) & Method. \\
+$\lambda_{\text{KL}}$ & KL divergence regularization strength & Method. \\
+$D_{\text{KL}}$ & KL divergence & Method. \\
+$\eta$ & Learning rate & Experiments \\
+$\epsilon$ & Numerical stability constant ($10^{-6}$) & Method. \\
+\midrule
+\multicolumn{3}{l}{\textit{Evaluation Metrics}} \\
+$N$ & Number of test samples & Prelim. \\
+$y_i, \hat{y}_i$ & Ground truth and predicted values & Prelim. \\
+$\hat{\sigma}_i$ & Predicted uncertainty for sample $i$ & Prelim. \\
+$\rho$ & Uncertainty-error Pearson correlation & Prelim. \\
+$z_\alpha$ & Confidence level critical value & Prelim. \\
+\bottomrule
+\end{tabular}
+\end{table*}

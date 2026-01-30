@@ -19,7 +19,7 @@ epistemic-aleatoric decomposition. However, recent studies have revealed fundame
 uncertainty decomposition fails in practice \cite{jurgens2024epistemic,ulmer2024prior}, and 
 out-of-distribution (OOD) detection achieves near-random performance \cite{meinke2024uncertaintyquantification}. 
 Despite extensive work on UQ for standard neural networks, its application to neural operators remains understudied, 
-and it is unclear whether these known limitations extend to the unique context of PDE solving—characterized by 
+and it is unclear whether these known limitations extend to the unique context of PDE solving, characterized by 
 continuous function approximation, physics-informed structure, and availability of unlimited synthetic training data.
 
 This work presents a comprehensive empirical comparison of UQ methods for Fourier Neural Operators, 
@@ -30,21 +30,16 @@ We implement six evidential regularization schemes and evaluate all methods on t
 neural operators. The contributions of this study are summarized as follows:
 
 \begin{enumerate}
-    \item We establish a comprehensive evaluation framework for comparing UQ methods on neural operators, 
-    encompassing eight metrics across calibration (ECE, coverage, interval width), accuracy (MSE, MAE, relative $L^2$), and 
-    uncertainty quality (correlation, NLL, AUROC). Our experiments demonstrate that evidential methods achieve 
-    state-of-the-art calibration (ECE $\sim$ 0.004) with single-pass inference, outperforming both MC 
-    Dropout (ECE = 0.019) and Deep Ensembles (ECE = 0.011) while being 5-30$\times$ faster.
+    \item We establish a comprehensive evaluation framework for comparing UQ methods on neural operators,
+    encompassing metrics across calibration (ECE, coverage, interval width), accuracy (MSE, MAE, relative $L^2$), and
+    uncertainty quality (correlation, NLL, AUROC), and systematically evaluate MC Dropout, Deep Ensembles, and Evidential Deep Learning on two benchmark PDEs.
 
-    \item We confirm that evidential uncertainty decomposition fails for neural operators—both epistemic and 
-    aleatoric uncertainties decrease with training data, violating theoretical expectations. However, we discover 
-    that the spatially correlated uncertainty estimates correspond to regions where FNO's spectral truncation 
-    discards high-frequency modes, providing physically interpretable uncertainty that flags architectural 
+    \item We investigate the validity of evidential uncertainty decomposition for neural operators and discover
+    that spatially correlated uncertainty estimates correspond to regions where FNO's spectral truncation
+    discards high-frequency modes, providing physically interpretable uncertainty that flags architectural
     limitations.
 
-    \item We reveal a critical distinction in OOD detection: evidential methods achieve near-random 
-    performance (AUROC $\sim$ 0.55) for parameter-level extrapolation (Reynolds number) but perfect 
-    detection (AUROC = 1.0) for operator-level shift (cross-PDE transfer). This suggests neural operators 
-    learn physics-informed representations that respond appropriately only to true distributional shifts at 
-    the operator level.
+    \item We characterize OOD detection behavior of evidential neural operators across different types of
+    distributional shift, distinguishing between parameter-level extrapolation and operator-level shift to
+    understand when uncertainty-based detection is effective.
 \end{enumerate}

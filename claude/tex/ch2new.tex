@@ -1,9 +1,9 @@
-\section{Background}
+\section{Related Works}
 
 \subsection{Neural Operators}
 
-Neural operators extend traditional neural networks from learning mappings between finite-dimensional vectors to 
-learning mappings between infinite-dimensional function spaces \cite{lu2021deeponet,chen1995universal}. Unlike 
+Neural operators extend traditional neural networks from learning mappings between finite-dimensional vectors to
+learning mappings between infinite-dimensional function spaces \cite{lu2021deeponet,chen1995universal,kovachki2023neural}. Unlike 
 standard neural networks that approximate functions $f: \mathbb{R}^n \rightarrow \mathbb{R}^m$, neural operators 
 learn solution operators $\mathcal{G}: \mathcal{A} \rightarrow \mathcal{U}$ that map input functions to output 
 functions, enabling mesh-independent PDE solving with discretization-invariant generalization.
@@ -19,26 +19,21 @@ prediction accuracy.
 
 \subsection{Uncertainty Quantification in Deep Learning}
 
-Uncertainty quantification aims to not only predict outputs but also quantify prediction confidence. In the 
-Bayesian framework \cite{bishop2006pattern}, we seek the posterior predictive distribution by marginalizing over 
-model parameters. However, exact Bayesian inference is intractable for neural networks, leading to various 
-approximation methods.
+Uncertainty quantification aims to not only predict outputs but also quantify prediction confidence
+\cite{abdar2021review}. In the Bayesian framework \cite{bishop2006pattern}, we seek the posterior predictive
+distribution by marginalizing over model parameters. However, exact Bayesian inference is intractable for neural
+networks, leading to various approximation methods.
 
-\textbf{Monte Carlo Dropout} \cite{gal2016dropout} provides a theoretical foundation linking dropout regularization to approximate Bayesian inference. The key insight is that a neural network trained with dropout can be interpreted as an approximation to a deep Gaussian process \cite{damianou2013deep}. At test time, instead of disabling dropout, it remains active across $T$ stochastic forward passes, each producing a different prediction $\hat{y}_t$ due to the random zeroing of neurons. The predictive mean and variance are then computed as:
-\begin{equation}
-    \mu = \frac{1}{T}\sum_{t=1}^{T} \hat{y}_t, \quad \sigma^2 = \frac{1}{T}\sum_{t=1}^{T} (\hat{y}_t - \mu)^2
-\end{equation}
-
-This variance captures model uncertainty arising from the stochastic nature of the dropout masks. However, MC Dropout has notable limitations: it generally yields poorly calibrated uncertainties \cite{ovadia2019can}, the quality depends heavily on dropout rate tuning, and it requires $T$ forward passes at inference time---negating the computational advantages of neural operators designed for fast PDE solving.
+\textbf{Monte Carlo Dropout} \cite{gal2016dropout} provides a theoretical foundation linking dropout regularization to approximate Bayesian inference. The key insight is that a neural network trained with dropout can be interpreted as an approximation to a deep Gaussian process \cite{damianou2013deep}. At test time, instead of disabling dropout, it remains active across $T$ stochastic forward passes, each producing a different prediction due to the random zeroing of neurons, capturing model uncertainty from the stochastic dropout masks. However, MC Dropout has notable limitations: it generally yields poorly calibrated uncertainties \cite{ovadia2019can}, the quality depends heavily on dropout rate tuning, and it requires $T$ forward passes at inference time---negating the computational advantages of neural operators designed for fast PDE solving.
 
 \begin{figure}[htbp]
 \centering
 \resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
     node distance=0.8cm and 1cm,
-    model/.style={rectangle, draw, minimum width=1.5cm, minimum height=1.2cm, align=center, fill=blue!20, font=\scriptsize},
-    pass/.style={rectangle, draw, minimum width=1cm, minimum height=0.8cm, align=center, fill=orange!20, font=\scriptsize},
-    result/.style={rectangle, draw, minimum width=1.8cm, minimum height=0.8cm, align=center, fill=green!20, font=\scriptsize}
+    model/.style={rectangle, draw, minimum width=1.5cm, minimum height=1.2cm, align=center, fill=white, font=\scriptsize},
+    pass/.style={rectangle, draw, minimum width=1cm, minimum height=0.8cm, align=center, fill=white, font=\scriptsize},
+    result/.style={rectangle, draw, minimum width=1.8cm, minimum height=0.8cm, align=center, fill=white, font=\scriptsize}
 ]
 \node[model] (model) {Trained\\FNO Model\\(with Dropout)};
 \node[above=0.4cm of model, font=\scriptsize] (input) {$u(x)$};
@@ -69,12 +64,7 @@ This variance captures model uncertainty arising from the stochastic nature of t
 \label{fig:mc_dropout}
 \end{figure}
 
-\textbf{Deep Ensembles} \cite{lakshminarayanan2017simple} take a frequentist approach to uncertainty quantification by training $M$ independent networks, each with different random weight initializations. The non-convex loss landscape of neural networks means that different initializations converge to different local minima, creating an implicit sampling over the function space. Given an input, each ensemble member $m$ produces a prediction $\hat{y}_m$, and uncertainty is estimated from their disagreement:
-\begin{equation}
-    \mu = \frac{1}{M}\sum_{m=1}^{M} \hat{y}_m, \quad \sigma^2 = \frac{1}{M}\sum_{m=1}^{M} (\hat{y}_m - \mu)^2
-\end{equation}
-
-The variance directly measures epistemic uncertainty: regions where all models agree yield low variance, while regions outside the training distribution cause models to diverge. This approach is widely regarded as the gold standard for uncertainty quantification \cite{ovadia2019can}, consistently outperforming other methods in calibration benchmarks. However, ensembles incur $M$-fold computational overhead in both training and inference, making them impractical for real-time applications where neural operators are most valuable.
+\textbf{Deep Ensembles} \cite{lakshminarayanan2017simple} take a frequentist approach to uncertainty quantification by training $M$ independent networks, each with different random weight initializations. The non-convex loss landscape of neural networks means that different initializations converge to different local minima \cite{fort2019deep}, creating an implicit sampling over the function space. Given an input, each ensemble member produces a prediction, and uncertainty is estimated from their disagreement. The variance directly measures epistemic uncertainty: regions where all models agree yield low variance, while regions outside the training distribution cause models to diverge. This approach is widely regarded as the gold standard for uncertainty quantification \cite{ovadia2019can,fort2019deep}, consistently outperforming other methods in calibration benchmarks. However, ensembles incur $M$-fold computational overhead in both training and inference, making them impractical for real-time applications where neural operators are most valuable.
 
 \begin{figure}[htbp]
 \centering
@@ -82,14 +72,14 @@ The variance directly measures epistemic uncertainty: regions where all models a
 \begin{tikzpicture}[
     node distance=1cm and 0.3cm,
     model/.style={rectangle, draw, minimum width=1.2cm, minimum height=1.5cm, align=center, rounded corners, font=\scriptsize},
-    result/.style={rectangle, draw, minimum width=2cm, minimum height=0.6cm, align=center, fill=green!20, font=\scriptsize}
+    result/.style={rectangle, draw, minimum width=2cm, minimum height=0.6cm, align=center, fill=white, font=\scriptsize}
 ]
 \node[font=\scriptsize] (input) {$u(x)$};
-\node[model, fill=blue!20, below right=0.3cm and -0.5cm of input] (m1) {\textbf{M1}\\$\hat{y}_1$};
-\node[model, fill=red!20, right=0.2cm of m1] (m2) {\textbf{M2}\\$\hat{y}_2$};
-\node[model, fill=yellow!20, right=0.2cm of m2] (m3) {\textbf{M3}\\$\hat{y}_3$};
-\node[model, fill=purple!20, right=0.2cm of m3] (m4) {\textbf{M4}\\$\hat{y}_4$};
-\node[model, fill=cyan!20, right=0.2cm of m4] (m5) {\textbf{M5}\\$\hat{y}_5$};
+\node[model, fill=white, below right=0.3cm and -0.5cm of input] (m1) {\textbf{M1}\\$\hat{y}_1$};
+\node[model, fill=white, right=0.2cm of m1] (m2) {\textbf{M2}\\$\hat{y}_2$};
+\node[model, fill=white, right=0.2cm of m2] (m3) {\textbf{M3}\\$\hat{y}_3$};
+\node[model, fill=white, right=0.2cm of m3] (m4) {\textbf{M4}\\$\hat{y}_4$};
+\node[model, fill=white, right=0.2cm of m4] (m5) {\textbf{M5}\\$\hat{y}_5$};
 \draw[->, thick] (input) -| (m1.north);
 \draw[->, thick] (input) -| (m2.north);
 \draw[->, thick] (input) -| (m3.north);
@@ -121,13 +111,13 @@ out-of-distribution detection, limiting their utility for safe deployment.
 
 \subsection{Gap in Literature}
 
-Despite extensive work on UQ for standard neural networks, only a few papers address UQ for neural operators. 
-Geneva and Zabaras \cite{geneva2022modeling} propose variational inference for FNOs requiring expensive MCMC 
-sampling. Psaros et al. \cite{psaros2023uncertainty} develop Bayesian DeepONet using Hamiltonian Monte Carlo at 
-prohibitive computational cost. No prior work systematically compares MC Dropout, Deep Ensembles, and 
-Evidential Deep Learning for neural operators, nor investigates whether known evidential limitations extend to PDE 
-solving---characterized by continuous function approximation, physics-informed structure, and unlimited synthetic 
-training data.
+Despite extensive work on UQ for standard neural networks \cite{abdar2021review}, only a few papers address UQ
+for neural operators. Geneva and Zabaras \cite{geneva2022modeling} propose variational inference for FNOs requiring
+expensive MCMC sampling. Psaros et al. \cite{psaros2023uncertainty} develop Bayesian DeepONet using Hamiltonian
+Monte Carlo at prohibitive computational cost. No prior work systematically compares MC Dropout, Deep Ensembles,
+and Evidential Deep Learning for neural operators, nor investigates whether known evidential limitations extend to
+PDE solving \cite{karniadakis2021physics}---characterized by continuous function approximation, physics-informed
+structure, and unlimited synthetic training data.
 
 
 \section{Preliminaries}
@@ -159,7 +149,7 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 ]
 
 % ===== Input u(x) in spatial domain =====
-\node[box, fill=blue!15] (input) {
+\node[box, fill=white] (input) {
     \textbf{Input}\\[2pt]
     $u(x)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
@@ -175,7 +165,7 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 \node[label, below=0.1cm of input] {Spatial\\$s \times s$};
 
 % ===== Fourier Space (full) =====
-\node[box, fill=purple!15, right=1.5cm of input] (fourier) {
+\node[box, fill=white, right=1.5cm of input] (fourier) {
     \textbf{Fourier}\\[2pt]
     $\hat{u}(k)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
@@ -188,7 +178,7 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 \node[label, below=0.1cm of fourier] {Spectral\\$k_{\max}$ modes};
 
 % ===== Learnable Weights R =====
-\node[box, fill=orange!20, right=1.5cm of fourier] (weights) {
+\node[box, fill=white, right=1.5cm of fourier] (weights) {
     \textbf{Filtered}\\[2pt]
     $R \odot \hat{u}$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
@@ -201,7 +191,7 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 \node[label, below=0.1cm of weights] {Learnable\\$R$};
 
 % ===== Output v(x) =====
-\node[box, fill=green!15, right=1.5cm of weights] (output) {
+\node[box, fill=white, right=1.5cm of weights] (output) {
     \textbf{Output}\\[2pt]
     $v(x)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
@@ -252,22 +242,22 @@ The FNO architecture consists of three stages:
 ]
 
 % Input
-\node[layer, fill=blue!20] (input) {\textbf{Input}\\$a(x)$};
+\node[layer, fill=white] (input) {\textbf{Input}\\$a(x)$};
 
 % Lifting layer
-\node[layer, fill=green!20, right=0.6cm of input] (lift) {\textbf{P}\\Lift};
+\node[layer, fill=white, right=0.6cm of input] (lift) {\textbf{P}\\Lift};
 
 % Fourier layers
-\node[layer, fill=orange!20, right=0.5cm of lift] (f1) {\textbf{F1}};
-\node[layer, fill=orange!20, right=0.4cm of f1] (f2) {\textbf{F2}};
-\node[layer, fill=orange!20, right=0.4cm of f2] (f3) {\textbf{F3}};
-\node[layer, fill=orange!20, right=0.4cm of f3] (f4) {\textbf{F4}};
+\node[layer, fill=white, right=0.5cm of lift] (f1) {\textbf{F1}};
+\node[layer, fill=white, right=0.4cm of f1] (f2) {\textbf{F2}};
+\node[layer, fill=white, right=0.4cm of f2] (f3) {\textbf{F3}};
+\node[layer, fill=white, right=0.4cm of f3] (f4) {\textbf{F4}};
 
 % Projection layer
-\node[layer, fill=green!20, right=0.5cm of f4] (proj) {\textbf{Q}\\Proj};
+\node[layer, fill=white, right=0.5cm of f4] (proj) {\textbf{Q}\\Proj};
 
 % Output
-\node[layer, fill=blue!20, right=0.6cm of proj] (output) {\textbf{Output}\\$u(x)$};
+\node[layer, fill=white, right=0.6cm of proj] (output) {\textbf{Output}\\$u(x)$};
 
 % Main arrows
 \draw[arrow] (input) -- (lift);
@@ -291,6 +281,18 @@ The FNO architecture consists of three stages:
 \caption{FNO architecture: lifting (P), four Fourier layers with skip connections (W), and projection (Q).}
 \label{fig:fno_architecture}
 \end{figure}
+
+\subsection{Monte Carlo Dropout and Deep Ensembles}
+
+MC Dropout \cite{gal2016dropout} estimates uncertainty through $T$ stochastic forward passes with dropout active at test time. The predictive mean and variance are:
+\begin{equation}
+    \mu = \frac{1}{T}\sum_{t=1}^{T} \hat{y}_t, \quad \sigma^2 = \frac{1}{T}\sum_{t=1}^{T} (\hat{y}_t - \mu)^2
+\end{equation}
+
+Deep Ensembles \cite{lakshminarayanan2017simple} train $M$ independent networks and estimate uncertainty from their disagreement:
+\begin{equation}
+    \mu = \frac{1}{M}\sum_{m=1}^{M} \hat{y}_m, \quad \sigma^2 = \frac{1}{M}\sum_{m=1}^{M} (\hat{y}_m - \mu)^2
+\end{equation}
 
 \subsection{Evidential Deep Learning for Regression}
 
@@ -341,20 +343,20 @@ spectral mappings.
 \node[title] at (2.5, 5) {(a) Standard Regression};
 
 % Input
-\node[box, fill=blue!20] (std_input) at (0, 3.5) {
+\node[box, fill=white] (std_input) at (0, 3.5) {
     \textbf{Input}\\
     $x$
 };
 
 % Neural Network
-\node[box, fill=orange!30, minimum height=2cm, minimum width=2.5cm] (std_net) at (2.5, 3.5) {
+\node[box, fill=white, minimum height=2cm, minimum width=2.5cm] (std_net) at (2.5, 3.5) {
     \textbf{Neural}\\
     \textbf{Network}\\
-    $f_\theta(x)$
+    \footnotesize(FNO $\mathcal{G}_\theta$)
 };
 
 % Single Output
-\node[box, fill=green!30] (std_output) at (5, 3.5) {
+\node[box, fill=white] (std_output) at (5, 3.5) {
     \textbf{Output}\\
     $\hat{y}$
 };
@@ -364,7 +366,7 @@ spectral mappings.
 \draw[arrow, line width=1.5pt] (std_net) -- (std_output);
 
 % Loss function box
-\node[draw, fill=red!15, rounded corners, text width=4cm, align=center] (std_loss) at (2.5, 0.8) {
+\node[draw, fill=white, rounded corners, text width=4cm, align=center] (std_loss) at (2.5, 0.8) {
     \textbf{MSE Loss}\\[3pt]
     $\mathcal{L} = (y - \hat{y})^2$
 };
@@ -389,20 +391,20 @@ spectral mappings.
 \node[title] at (10.5, 5) {(b) Evidential Regression};
 
 % Input
-\node[box, fill=blue!20] (evd_input) at (8, 3.5) {
+\node[box, fill=white] (evd_input) at (8, 3.5) {
     \textbf{Input}\\
     $x$
 };
 
 % Neural Network
-\node[box, fill=orange!30, minimum height=2cm, minimum width=2.5cm] (evd_net) at (10.5, 3.5) {
+\node[box, fill=white, minimum height=2cm, minimum width=2.5cm] (evd_net) at (10.5, 3.5) {
     \textbf{Neural}\\
     \textbf{Network}\\
-    $f_\theta(x)$
+    \footnotesize(FNO $\mathcal{G}_\theta$)
 };
 
 % Four output heads
-\node[smallbox, fill=cyan!30] (gamma) at (13.5, 4.5) {$\gamma$};
+\node[smallbox, fill=white] (gamma) at (13.5, 4.5) {$\gamma$};
 \node[smallbox, fill=lime!30] (nu) at (13.5, 3.8) {$\nu$};
 \node[smallbox, fill=yellow!40] (alpha) at (13.5, 3.1) {$\alpha$};
 \node[smallbox, fill=pink!40] (beta) at (13.5, 2.4) {$\beta$};
@@ -466,7 +468,7 @@ spectral mappings.
 
 \end{tikzpicture}%
 }
-\caption{Comparison of standard regression and evidential regression. (a) Standard regression outputs a single point estimate with MSE loss, providing no uncertainty information. (b) Evidential regression outputs four parameters of the Normal-Inverse-Gamma distribution, enabling decomposition of uncertainty into aleatoric (data noise) and epistemic (model uncertainty) components from a single forward pass.}
+\caption{Comparison of standard regression and evidential regression. (a) Standard regression outputs a single point estimate with MSE loss, providing no uncertainty information. (b) Evidential regression outputs four parameters of the Normal-Inverse-Gamma distribution, enabling decomposition of uncertainty into aleatoric (data noise) and epistemic (model uncertainty) components from a single forward pass. The neural network block corresponds to the FNO backbone detailed in Fig.~\ref{fig:evidential_framework}.}
 \label{fig:standard_vs_evidential}
 \end{figure*}
 
