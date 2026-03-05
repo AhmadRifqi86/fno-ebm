@@ -5,19 +5,19 @@
 
 \subsubsection{Datasets}
 
-We evaluate on two benchmark PDEs from PDEBench \cite{takamoto2022pdebench} with distinct characteristics:
+We evaluate on two benchmark PDEs with distinct characteristics:
 
 \textbf{Navier-Stokes equations} describe incompressible fluid dynamics:
 \begin{equation}
     \frac{\partial \omega}{\partial t} + u \cdot \nabla \omega = \nu \nabla^2 \omega + f
 \end{equation}
-where $\omega$ is vorticity, $u$ is velocity, and $\nu$ is viscosity. We use viscosity $\nu = 10^{-3}$ with Reynolds numbers Re $\in \{1000, 2000, 3000\}$ for training and Re = 5000 for OOD testing. Dataset: 7000 training, 1500 validation, 1500 test samples on $64 \times 64$ grids.
+where $\omega$ is vorticity, $u$ is velocity, and $\nu$ is viscosity. We use viscosity $\nu = 10^{-3}$ with Reynolds numbers Re $\in \{1000, 2000, 3000\}$ for training and Re = 5000 for OOD testing. Dataset: 7000 training, 1500 validation, 1500 test samples on $64 \times 64$ grids \cite{ns_dataset_zenodo}.
 
 \textbf{Darcy Flow} models steady-state flow through porous media:
 \begin{equation}
     -\nabla \cdot (k(x) \nabla u) = f
 \end{equation}
-where $k(x)$ is the spatially-varying permeability field. Dataset: 5000 training, 1000 test samples on $64 \times 64$ grids.
+where $k(x)$ is the spatially-varying permeability field. Dataset: 5000 training, 1000 test samples on $64 \times 64$ grids \cite{darcy_dataset_zenodo}.
 
 \subsubsection{Architecture and Training}
 
