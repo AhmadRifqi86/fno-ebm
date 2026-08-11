@@ -36,7 +36,7 @@ networks, leading to various approximation methods.
     result/.style={rectangle, draw, minimum width=1.8cm, minimum height=0.8cm, align=center, fill=white, font=\scriptsize}
 ]
 \node[model] (model) {Trained\\FNO Model\\(with Dropout)};
-\node[above=0.4cm of model, font=\scriptsize] (input) {$u(x)$};
+\node[above=0.4cm of model, font=\scriptsize] (input) {$a(x)$};
 \draw[->, thick] (input) -- (model);
 \node[pass, below right=0.4cm and 0.3cm of model] (p1) {Pass 1};
 \node[pass, right=0.2cm of p1] (p2) {Pass 2};
@@ -74,7 +74,7 @@ networks, leading to various approximation methods.
     model/.style={rectangle, draw, minimum width=1.2cm, minimum height=1.5cm, align=center, rounded corners, font=\scriptsize},
     result/.style={rectangle, draw, minimum width=2cm, minimum height=0.6cm, align=center, fill=white, font=\scriptsize}
 ]
-\node[font=\scriptsize] (input) {$u(x)$};
+\node[font=\scriptsize] (input) {$a(x)$};
 \node[model, fill=white, below right=0.3cm and -0.5cm of input] (m1) {\textbf{M1}\\$\hat{y}_1$};
 \node[model, fill=white, right=0.2cm of m1] (m2) {\textbf{M2}\\$\hat{y}_2$};
 \node[model, fill=white, right=0.2cm of m2] (m3) {\textbf{M3}\\$\hat{y}_3$};
@@ -131,11 +131,12 @@ operator $\mathcal{G}_\theta$ learns to approximate the solution operator:
     \mathcal{G}_\theta: a \mapsto u \quad \text{such that} \quad \mathcal{L}(u; a) = 0
 \end{equation}
 
-The FNO parameterizes this mapping using spectral convolutions. The key component is the spectral convolution layer:
+The FNO parameterizes this mapping using spectral convolutions. Writing $v_l$ for the feature function entering
+layer $l$, the key component is the spectral convolution layer:
 \begin{equation}
-    (\mathcal{K}(\mathbf{w}) \cdot v)(x) = \mathcal{F}^{-1}\left( \mathbf{w} \cdot \mathcal{F}(v) \right)(x)
+    (\mathcal{K}(R) \cdot v_l)(x) = \mathcal{F}^{-1}\left( R \cdot \mathcal{F}(v_l) \right)(x)
 \end{equation}
-where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the inverse transform, and $\mathbf{w}$ are learnable weights truncated to low Fourier modes.
+where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the inverse transform, and $R$ are learnable weights truncated to low Fourier modes. Throughout, $a$ denotes an input function of the operator, $u$ the PDE solution, and $v_l$ an intermediate feature; this convention is used consistently in Fig.~\ref{fig:spectral_convolution} and Fig.~\ref{fig:fno_architecture}.
 
 \begin{figure}[htbp]
 \centering
@@ -148,10 +149,10 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
     label/.style={font=\footnotesize, align=center}
 ]
 
-% ===== Input u(x) in spatial domain =====
+% ===== Input v_l(x) in spatial domain =====
 \node[box, fill=white] (input) {
     \textbf{Input}\\[2pt]
-    $u(x)$\\[4pt]
+    $v_l(x)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
         \foreach \x in {0,0.3,...,1.5} {
             \foreach \y in {0,0.3,...,1.5} {
@@ -167,7 +168,7 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 % ===== Fourier Space (full) =====
 \node[box, fill=white, right=1.5cm of input] (fourier) {
     \textbf{Fourier}\\[2pt]
-    $\hat{u}(k)$\\[4pt]
+    $\hat{v}_l(k)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
         \fill[purple!40] (0,0) rectangle (1.8,1.8);
         \fill[yellow!60] (0.5,0.5) rectangle (1.3,1.3);
@@ -180,7 +181,7 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 % ===== Learnable Weights R =====
 \node[box, fill=white, right=1.5cm of fourier] (weights) {
     \textbf{Filtered}\\[2pt]
-    $R \odot \hat{u}$\\[4pt]
+    $R \odot \hat{v}_l$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
         \fill[gray!20] (0,0) rectangle (1.8,1.8);
         \fill[orange!50] (0.5,0.5) rectangle (1.3,1.3);
@@ -190,10 +191,10 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 };
 \node[label, below=0.1cm of weights] {Learnable\\$R$};
 
-% ===== Output v(x) =====
+% ===== Output v_{l+1}(x) =====
 \node[box, fill=white, right=1.5cm of weights] (output) {
     \textbf{Output}\\[2pt]
-    $v(x)$\\[4pt]
+    $v_{l+1}(x)$\\[4pt]
     \begin{tikzpicture}[scale=0.4]
         \foreach \x in {0,0.3,...,1.5} {
             \foreach \y in {0,0.3,...,1.5} {
@@ -213,12 +214,12 @@ where $\mathcal{F}$ denotes the Fourier transform, $\mathcal{F}^{-1}$ the invers
 
 % ===== Bottom equation =====
 \node[below=0.8cm of fourier, font=\small, xshift=1cm] {
-    $\mathcal{K}(u)(x) = \mathcal{F}^{-1}\big( R \cdot \mathcal{F}(u) \big)(x)$
+    $\mathcal{K}(v_l)(x) = \mathcal{F}^{-1}\big( R \cdot \mathcal{F}(v_l) \big)(x)$
 };
 
 \end{tikzpicture}%
 }
-\caption{Spectral convolution in FNO. Input $u(x)$ is transformed via FFT, low-frequency modes are filtered by learnable weights $R$, then IFFT returns to spatial domain.}
+\caption{Spectral convolution in FNO. The layer input $v_l(x)$ is transformed via FFT, low-frequency modes are filtered by learnable weights $R$, then IFFT returns to the spatial domain, giving $v_{l+1}(x)$. Symbols match Eq.~(2).}
 \label{fig:spectral_convolution}
 \end{figure}
 

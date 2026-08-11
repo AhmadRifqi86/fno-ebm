@@ -1,0 +1,80 @@
+%% Evidential Fourier Neural Operators --- CMAME (Elsevier) manuscript source.
+%% Reuses the shared chapter files (ch1new..ch5new, abstract_new, appendix_new,
+%% references.bib) unchanged; only the class-specific frontmatter/back matter
+%% differs from the IEEEtran version in main_new.tex.
+%%
+%% Submission format for review: single column, double spaced, line numbers.
+\documentclass[review,12pt]{elsarticle}
+
+% *** PACKAGES ***
+% NOTE: elsarticle loads natbib itself, so do NOT load the `cite` package here.
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes,arrows,calc,fit}
+\usepackage{subcaption}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{url}
+\usepackage{array}
+\usepackage{adjustbox}
+\usepackage[hidelinks]{hyperref}
+\usepackage{orcidlink}
+
+% The shared appendix file opens with the IEEE macro \appendices; alias it to the
+% standard \appendix so appendix_new.tex can be reused verbatim.
+\providecommand{\appendices}{\appendix}
+
+\journal{Computer Methods in Applied Mechanics and Engineering}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{Evidential Fourier Neural Operators for Uncertainty Quantification in Learning Partial Differential Equations}
+
+\author[ntust]{Ahmad Rifqi\,\orcidlink{0009-0000-2681-1950}}
+\ead{arifadh2003@gmail.com}
+
+\author[ntust]{Jenq-Shiou Leu\,\orcidlink{0000-0001-7197-9912}}
+\ead{jsleu@mail.ntust.edu.tw}
+
+\affiliation[ntust]{organization={Department of Electrical and Computer Engineering, National Taiwan University of Science and Technology},
+  city={Taipei},
+  country={Taiwan}}
+
+% ==================== ABSTRACT ====================
+\input{abstract_new}
+
+\begin{keyword}
+Uncertainty quantification \sep neural operators \sep Fourier Neural Operator \sep evidential deep learning \sep partial differential equations
+\end{keyword}
+
+\end{frontmatter}
+
+% ==================== CHAPTERS ====================
+\input{ch1new}  % Introduction
+\input{ch2new}  % Background and Preliminaries
+\input{ch3new}  % Methodology
+\input{ch4new}  % Experiments
+\input{ch5new}  % Discussion and Conclusion
+
+% ==================== ACKNOWLEDGMENT ====================
+\section*{Acknowledgment}
+The authors would like to express their sincere gratitude to National Taiwan University of Science and Technology for
+their valuable support in conducting this research. Their collaboration, academic resources, and institutional
+encouragement have been instrumental in the successful completion of this study.
+
+The authors used Anthropic Claude for language polishing (grammar, readability, and style). These tools were not
+used to generate data, conduct analyses, or produce the study's results. The authors reviewed and approved all
+revisions and assume full responsibility for the submitted work.
+
+% ==================== APPENDIX ====================
+\input{appendix_new}
+
+% ==================== REFERENCES ====================
+\bibliographystyle{elsarticle-num}
+\bibliography{references}
+
+\end{document}

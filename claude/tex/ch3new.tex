@@ -340,80 +340,120 @@ essential to encourage meaningful uncertainty estimates.
 We investigate six regularization schemes, each with different inductive biases for controlling the evidence 
 parameters:
 
-\subsubsection{Standard Regularization}
-
-The original evidential regularization from \cite{amini2020deep} penalizes evidence on incorrect predictions:
+All six schemes share the common form
 \begin{equation}
-    \mathcal{L}_{\text{standard}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha)
+    \mathcal{L} = \mathcal{L}_{\text{NIG}} + \lambda \cdot \mathcal{R}(u^*, \gamma, \nu, \alpha, \beta),
+    \label{eq:reg_general}
+\end{equation}
+where $\mathcal{R}$ is the scheme-specific regularizer and $\lambda$ is a single scalar weight. We emphasize
+that each scheme replaces $\mathcal{R}$ entirely rather than augmenting a shared base term; the schemes are
+therefore mutually exclusive and directly comparable. Throughout, $e = u^* - \gamma$ denotes the signed
+prediction error at a grid point, and all expressions are averaged over grid points and batch.
+
+The schemes differ along two axes at once: how the error enters, and which function of the evidence parameters
+is penalized. Equations~\eqref{eq:reg_linear} and~\eqref{eq:reg_exp} multiply the error weight by $2\nu + \alpha$,
+the total-evidence measure defined for the NIG distribution by \cite{amini2020deep};
+Equations~\eqref{eq:reg_logbarrier}, \eqref{eq:reg_l2} and~\eqref{eq:reg_kl} use the unweighted sum
+$\nu + \alpha$; and Equation~\eqref{eq:reg_invvar} carries no explicit evidence factor at all, penalizing
+instead the ratio of squared error to predicted variance. We retain each scheme in the form in which it is
+proposed and implemented rather than rewriting them onto a common evidence factor, so that what is compared in
+Section~\ref{sec:results} is a set of complete published regularizers rather than a controlled sweep over
+error-weighting functions $f(e)$. The consequence for interpretation is that no two schemes here are separated
+by the error weighting alone, and we therefore do not attribute performance differences to $f(e)$ in isolation.
+The evidence factor is in any case largely a matter of scale: replacing $\nu + \alpha$ by $2\nu + \alpha$
+changes the regularizer by less than a factor of two, well within the range spanned by $\lambda$ itself. An
+orthogonal design---holding $h(\nu, \alpha)$ fixed while varying $f(e)$---would isolate the two axes cleanly and
+is a natural extension of this study.
+
+\subsubsection{Linear Evidence Penalty}
+
+The original evidential regularizer of \cite{amini2020deep} penalizes evidence on incorrect predictions:
+\begin{equation}
+    \mathcal{R}_{\text{lin}} = |e| \cdot (2\nu + \alpha)
+    \label{eq:reg_linear}
 \end{equation}
 
-\textbf{Explanation}: When prediction error $|u^* - \gamma|$ is high, the model is penalized for having high evidence ($\nu$) and concentration ($\alpha$). This encourages the model to express high confidence only when predictions are accurate.
+\textbf{Explanation}: When prediction error $|e|$ is high, the model is penalized for having high evidence ($\nu$) and concentration ($\alpha$). This encourages the model to express high confidence only when predictions are accurate.
 
-\subsubsection{Improved Regularization}
+\subsubsection{Log-Barrier Evidence Penalty}
 
-We propose an improved scheme that directly regularizes the evidence parameter toward a baseline value:
+Following \cite{meinert2021multivariate}, this scheme replaces the linear error factor with a logarithmic
+barrier and drops the factor of two on $\nu$:
 \begin{equation}
-    \mathcal{L}_{\text{improved}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha) + \lambda_{\nu} \cdot |\nu - 1|
+    \mathcal{R}_{\text{log}} = \log\!\left(1 + e^2\right) \cdot (\nu + \alpha)
+    \label{eq:reg_logbarrier}
 \end{equation}
 
-\textbf{Explanation}: The additional term $|\nu - 1|$ prevents $\nu$ from growing unboundedly large or collapsing to 
-near-zero. By anchoring $\nu$ toward 1, we maintain a balance between over-confident and under-confident 
-predictions. The evidence can still deviate from 1 when the data supports it, but extreme values are discouraged.
+\textbf{Explanation}: The logarithm saturates for large errors, so a small number of severely mispredicted grid
+points cannot dominate the regularization signal---a failure mode of Eq.~\eqref{eq:reg_linear} on fields with
+localized sharp features. For small errors $\log(1 + e^2) \approx e^2$, giving a gentler quadratic penalty than
+the linear form.
 
-\subsubsection{Uncertainty-Aware Regularization}
+\subsubsection{Inverse-Variance Penalty}
 
-This scheme adaptively scales regularization based on prediction error magnitude:
+This scheme, adapted from the uncertainty-scaled variant discussed in \cite{amini2020deep}, normalizes the
+squared error by the model's own predictive variance:
 \begin{equation}
-    \mathcal{L}_{\text{UA}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot (u^* - \gamma)^2 \cdot \nu
+    \mathcal{R}_{\text{inv}} = \frac{e^2}{\sigma^2_{\text{tot}} + \epsilon},
+    \qquad
+    \sigma^2_{\text{tot}} = \frac{\beta}{\alpha - 1} + \frac{\beta}{\nu(\alpha - 1)}
+    \label{eq:reg_invvar}
+\end{equation}
+with $\epsilon = 10^{-6}$ for numerical stability and $\alpha$ clamped below at $1.01$. Note that
+$\sigma^2_{\text{tot}}$ is exactly the predictive variance of Eq.~\eqref{eq:pred_var}, since
+$\frac{\beta}{\alpha-1} + \frac{\beta}{\nu(\alpha-1)} = \frac{\beta}{\alpha-1}\cdot\frac{\nu+1}{\nu}$.
+
+\textbf{Explanation}: This is a $\chi^2$-style penalty: it is large exactly when a large error is accompanied by
+small predicted uncertainty, i.e.\ under overconfidence. Unlike Eqs.~\eqref{eq:reg_linear}--\eqref{eq:reg_logbarrier},
+which penalize evidence directly, this form penalizes the \emph{mismatch} between error and claimed uncertainty,
+and so does not push evidence downward when the model is accurate.
+
+\subsubsection{Exponential Error Weighting}
+
+This scheme uses an error-magnitude-dependent weight that grows exponentially:
+\begin{equation}
+    \mathcal{R}_{\text{exp}} = \left(e^{|e|} - 1\right) \cdot (2\nu + \alpha)
+    \label{eq:reg_exp}
 \end{equation}
 
-\textbf{Explanation}: The quadratic error term $(u^* - \gamma)^2$ creates stronger penalties for large errors. 
-Multiplying by $\nu$ means that high-evidence predictions are especially penalized when wrong. This creates a 
-self-correcting mechanism: the model learns to reduce evidence in regions where it makes large errors.
+\textbf{Explanation}: The factor $(e^{|e|} - 1)$ creates an adaptive weight. For small errors
+$e^{|e|} - 1 \approx |e|$, recovering Eq.~\eqref{eq:reg_linear}; for large errors the exponential amplifies the
+penalty, strongly discouraging high evidence on incorrect predictions.
 
-\subsubsection{Adaptive Regularization}
+\subsubsection{L2-Evidence Penalty}
 
-This scheme uses error-magnitude-dependent weighting that automatically scales regularization:
+This scheme adds a squared penalty on both evidence parameters:
 \begin{equation}
-    \mathcal{L}_{\text{adaptive}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot \left(e^{|u^* - \gamma|} - 1\right) \cdot (2\nu + \alpha)
+    \mathcal{R}_{\text{L2}} = e^2 \cdot (\nu + \alpha) + \lambda_{\text{L2}} \cdot \left(\nu^2 + \alpha^2\right)
+    \label{eq:reg_l2}
 \end{equation}
+with $\lambda_{\text{L2}} = 0.01$ fixed to balance the magnitudes of the two terms.
 
-\textbf{Explanation}: The exponential term $(e^{|u^* - \gamma|} - 1)$ creates an adaptive weight that grows
-exponentially with prediction error. For small errors, $e^{\epsilon} - 1 \approx \epsilon$, providing gentle
-regularization. For large errors, the exponential amplifies the penalty, strongly discouraging high evidence
-on incorrect predictions. This creates automatic error-dependent scaling without requiring manual tuning.
+\textbf{Explanation}: The quadratic penalty on $\nu$ and $\alpha$ bounds evidence growth independently of the
+prediction error, analogous to weight decay. This prevents any single grid point from acquiring
+disproportionately high evidence, encouraging smooth, distributed confidence across the field.
 
-\subsubsection{L2-Evidence Regularization}
+\subsubsection{KL-Divergence Penalty}
 
-This scheme applies L2 (squared) penalty directly on the evidence parameter:
+This scheme penalizes deviation of the evidence parameters from a weakly informative prior:
 \begin{equation}
-    \mathcal{L}_{\text{L2}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha) + \lambda_{\nu} \cdot \nu^2
+    \mathcal{R}_{\text{KL}} = e^2 \cdot (\nu + \alpha)
+    + \frac{1}{2}\left[\frac{\nu}{\nu_0} - \log\frac{\nu}{\nu_0} - 1\right]
+    + \left(\alpha - \alpha_0\right)^2
+    \label{eq:reg_kl}
 \end{equation}
+with prior hyperparameters $\nu_0 = 1$ and $\alpha_0 = 1$.
 
-\textbf{Explanation}: Unlike L1 regularization which encourages sparsity, L2 regularization on $\nu^2$ creates 
-smooth, distributed evidence values. Large $\nu$ values are penalized quadratically, strongly discouraging 
-overconfident predictions. This is analogous to weight decay in standard neural network training---it prevents 
-any single prediction from having disproportionately high evidence.
-
-\subsubsection{KL-Divergence Regularization}
-
-This scheme penalizes deviation from a prior NIG distribution:
-\begin{multline}
-    \mathcal{L}_{\text{KL}} = \mathcal{L}_{\text{NIG}} + \lambda \cdot |u^* - \gamma| \cdot (2\nu + \alpha) \\
-    + \lambda_{\text{KL}} \cdot D_{\text{KL}}\left(\text{NIG}(\gamma, \nu, \alpha, \beta) \| \text{NIG}_0\right)
-\end{multline}
-
-The KL divergence between NIG distributions has closed form:
-\begin{multline}
-    D_{\text{KL}} = \frac{1}{2}\left[\frac{\nu_0}{\nu} - \log\frac{\nu_0}{\nu} - 1\right] + \alpha_0\log\frac{\beta}{\beta_0} \\
-    - \log\frac{\Gamma(\alpha)}{\Gamma(\alpha_0)} + (\alpha - \alpha_0)\psi(\alpha) + \frac{\beta_0 - \beta}{\beta}\alpha
-\end{multline}
-where $\psi(\cdot)$ is the digamma function and $(\gamma_0, \nu_0, \alpha_0, \beta_0)$ are prior hyperparameters.
-
-\textbf{Explanation}: This is the most principled Bayesian approach. The KL term acts as a prior, pulling the 
-predicted distribution toward a ``default'' uncertainty level. Predictions can deviate from the prior when 
-evidence supports it, but the model must ``pay'' an information-theoretic cost. This naturally implements 
-Occam's razor for uncertainty estimation.
+\textbf{Explanation}: We stress that Eq.~\eqref{eq:reg_kl} is a \emph{tractable surrogate} for the KL divergence
+between Normal-Inverse-Gamma distributions, not the exact closed form. The first bracketed term is the exact
+Gamma-family KL contribution in the precision parameter $\nu$, which is minimized at $\nu = \nu_0$ and grows
+without bound as $\nu \to 0$ or $\nu \to \infty$. The term in $\alpha$ replaces the exact expression
+$(\alpha - \alpha_0)\psi(\alpha) - \log\Gamma(\alpha)/\Gamma(\alpha_0)$ with a quadratic penalty of the same
+minimizer, avoiding digamma evaluations in the training loop. Because the surrogate omits the terms coupling
+$\beta$, the prior parameters $\gamma_0$ and $\beta_0$ do not appear; the scale of the predictive distribution is
+constrained only through $\mathcal{L}_{\text{NIG}}$. Choosing $\nu_0 = \alpha_0 = 1$ corresponds to a single
+pseudo-observation, the weakest prior for which the NIG mean remains defined. Alternative principled choices for
+the full four-parameter prior are discussed in \cite{tan2025evidential}.
 
 \subsubsection{Summary of Regularization Schemes}
 
@@ -424,27 +464,25 @@ Table~\ref{tab:reg_summary} summarizes the key characteristics of each regulariz
 \caption{Comparison of regularization schemes for Evidential-FNO.}
 \label{tab:reg_summary}
 \resizebox{\columnwidth}{!}{%
-\begin{tabular}{lll}
+\begin{tabular}{llll}
 \toprule
-\textbf{Scheme} & \textbf{Key Mechanism} & \textbf{Target Behavior} \\
+\textbf{Scheme} & \textbf{Eq.} & \textbf{Key Mechanism} & \textbf{Target Behavior} \\
 \midrule
-Standard & Error-weighted evidence penalty & Reduce confidence on errors \\
-Improved & Evidence anchoring to baseline & Prevent extreme $\nu$ values \\
-Uncertainty-Aware & Quadratic error scaling & Strong penalty for large errors \\
-Adaptive & Epoch-dependent strength & Learn predictions before uncertainty \\
-L2-Evidence & Squared evidence penalty & Smooth, distributed confidence \\
-KL-Divergence & Prior distribution matching & Bayesian uncertainty regularization \\
+Linear-Evidence & \eqref{eq:reg_linear} & Error-weighted evidence penalty & Reduce confidence on errors \\
+Log-Barrier & \eqref{eq:reg_logbarrier} & Saturating error weight & Limit influence of outlier points \\
+Inverse-Variance & \eqref{eq:reg_invvar} & Error normalized by variance & Penalize overconfidence only \\
+Exp-Error & \eqref{eq:reg_exp} & Exponential error weight & Strong penalty for large errors \\
+L2-Evidence & \eqref{eq:reg_l2} & Squared evidence penalty & Smooth, distributed confidence \\
+KL-Divergence & \eqref{eq:reg_kl} & Surrogate prior matching & Anchor evidence to weak prior \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-The total loss for all schemes follows the general form:
-\begin{equation}
-    \mathcal{L} = \mathcal{L}_{\text{NIG}} + \mathcal{L}_{\text{reg}}
-\end{equation}
-where $\mathcal{L}_{\text{reg}}$ varies according to the chosen scheme. All schemes share the same network 
-architecture; only the training objective differs.
+All schemes share the same network architecture and the same objective template
+(Eq.~\eqref{eq:reg_general}); only the regularizer $\mathcal{R}$ differs. We use $\lambda = 0.01$ throughout,
+except for the KL-Divergence scheme where $\lambda = 0.001$ compensates for the larger magnitude of the prior
+term.
 
 \subsection{Computational Efficiency}
 
@@ -498,17 +536,17 @@ aggregated as:
 
 \subsection{Summary}
 
-This chapter presented Evidential-FNO, which extends Fourier Neural Operators with uncertainty 
-quantification through Evidential Deep Learning. The key contributions are:
+This section presented Evidential-FNO, which extends Fourier Neural Operators with uncertainty
+quantification through Evidential Deep Learning. The main elements are:
 
 \begin{enumerate}
-    \item \textbf{Theoretical connection}: We established that FNO's continuous 2D output is equivalent to spatially-extended regression, enabling direct application of evidential learning.
+    \item \textbf{Formulation}: Treating the FNO's discretized output field as spatially-extended pointwise regression permits direct application of the NIG evidential parameterization at every grid point. We note that this treatment assumes conditional independence across grid points, an assumption we revisit in Section~\ref{sec:limitations}.
 
     \item \textbf{Architectural modification}: The modification is minimal---only the output projection changes from 1 to 4 channels, with appropriate activation functions ensuring valid NIG parameters.
 
-    \item \textbf{Uncertainty decomposition}: The evidential formulation provides principled decomposition into epistemic and aleatoric uncertainty at each spatial location.
+    \item \textbf{Uncertainty decomposition}: The evidential formulation yields closed-form epistemic and aleatoric components at each spatial location.
 
-    \item \textbf{Regularization schemes}: We investigate six regularization strategies---Standard, Improved, Uncertainty-Aware, Adaptive, L2-Evidence, and KL-Divergence---each with different inductive biases for controlling evidence estimation.
+    \item \textbf{Regularization schemes}: We investigate six regularization strategies---Linear-Evidence, Log-Barrier, Inverse-Variance, Exp-Error, L2-Evidence, and KL-Divergence---each with different inductive biases for controlling evidence estimation.
 
     \item \textbf{Computational efficiency}: Unlike ensemble or dropout methods, Evidential-FNO requires only a single forward pass for uncertainty estimation.
 \end{enumerate}

@@ -34,12 +34,16 @@ neural operators. The contributions of this study are summarized as follows:
     encompassing metrics across calibration (ECE, coverage, interval width), accuracy (MSE, MAE, relative $L^2$), and
     uncertainty quality (correlation, NLL, AUROC), and systematically evaluate MC Dropout, Deep Ensembles, and Evidential Deep Learning on two benchmark PDEs.
 
-    \item We investigate the validity of evidential uncertainty decomposition for neural operators and discover
-    that spatially correlated uncertainty estimates correspond to regions where FNO's spectral truncation
-    discards high-frequency modes, providing physically interpretable uncertainty that flags architectural
-    limitations.
+    \item We assess whether evidential uncertainty is \emph{physically} meaningful for PDE surrogates, by
+    measuring the spatial alignment between predicted uncertainty and the pointwise residual of the governing
+    equation---a criterion that determines whether the uncertainty is actionable for scientific and engineering
+    decision-making, and which aggregate error-correlation metrics do not capture.
 
     \item We characterize OOD detection behavior of evidential neural operators across different types of
     distributional shift, distinguishing between parameter-level extrapolation and operator-level shift to
     understand when uncertainty-based detection is effective.
+
+    \item We identify the conditional-independence assumption implicit in per-grid-point evidential
+    parameterization as a structural limitation for operator learning, and analyze its consequences for
+    domain-integrated functionals, motivating spatially correlated evidence models as the next step.
 \end{enumerate}

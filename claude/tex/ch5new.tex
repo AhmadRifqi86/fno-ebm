@@ -20,17 +20,28 @@ evidential uncertainty better reflects prediction quality.
 (6$\times$ worse MSE, lowest correlation), confirming it should be avoided for neural operators. 
 The spatial coherence of PDE solutions may be incompatible with dropout's stochastic regularization.
 
-\subsection{The Calibration-Decomposition Trade-off}
+\subsection{Physical Consistency of Predicted Uncertainty}
 
-A fundamental limitation emerges from our decomposition analysis: methods achieving tight calibration 
-(ECE $\sim$ 0.004) exhibit invalid decomposition (aleatoric variation $>$ 89\%), while valid decomposition 
-(KL-Divergence) yields poor calibration (ECE = 0.030).
+For a surrogate deployed in scientific computing, the operationally relevant question is not whether
+uncertainty correlates with error in aggregate, but whether it localizes where the prediction violates the
+governing equations. Experiment 3 measures this directly through the alignment between predicted uncertainty
+and the pointwise PDE residual, and the answer is conditional rather than uniform. On the transient
+Navier-Stokes problem the alignment is real: rank correlations of $0.43$--$0.63$ and concentration ratios of
+$1.5$--$1.6$ mean the model's most uncertain regions are also, by a clear margin, the ones that most violate
+the discrete vorticity balance. On the smooth steady Darcy problem the same measurement returns essentially
+zero, because the model solves that problem almost exactly and near-homoscedastically, leaving no
+heterogeneous residual field for the uncertainty to track. The lesson for practitioners is that physical
+consistency of the predicted uncertainty is an \emph{emergent} property of hard, spatially heterogeneous
+problems, not a guarantee of the evidential parameterization---it should be verified per problem, not
+assumed. We also note a methodological caveat: on Navier-Stokes the Pearson correlation is much weaker than
+the Spearman value ($0.06$--$0.20$ vs.\ $0.43$--$0.63$), because the strong-form residual on time-resolved
+turbulence carries a large irreducible floor; rank-based and concentration measures are the more reliable
+diagnostics of physical consistency in that regime.
 
-This trade-off appears intrinsic to the NIG parameterization \cite{amini2020deep}. During training, the network increases evidence ($\nu, \alpha$) for correct predictions, directly reducing epistemic uncertainty ($\propto 1/\nu$). However, aleatoric uncertainty ($= \beta/(\alpha-1)$) also decreases because the loss function optimizes $\beta$ to match observed prediction variance. As the model improves with more data, prediction errors decrease, so the optimal $\beta$ decreases. Since $\alpha$ increases while $\beta$ decreases, the ratio $\beta/(\alpha-1)$ drops substantially---even though it theoretically should remain constant as irreducible data noise. The NIG parameterization lacks separate constraints to preserve aleatoric stability.
-
-\textbf{Practical implication}: Practitioners should treat evidential outputs as \emph{total uncertainty} 
-rather than interpreting the decomposition. For applications requiring true epistemic-aleatoric separation, 
-Deep Ensembles remain preferable despite computational cost.
+\textbf{Practical implication}: Practitioners should treat evidential outputs as \emph{total uncertainty}
+rather than interpreting the epistemic-aleatoric decomposition, which the NIG parameterization does not
+constrain independently. For applications requiring true epistemic-aleatoric separation, Deep Ensembles
+remain preferable despite computational cost.
 
 \subsection{Reinterpreting OOD Detection}
 
@@ -43,8 +54,43 @@ generalizes across Reynolds numbers despite different flow characteristics. This
 represents genuine operator-level shift where the governing equations differ fundamentally, yielding appropriate 
 massive uncertainty increases (36--378$\times$).
 
-This finding has deployment implications: evidential uncertainty reliably monitors operator-level distributional 
+This finding has deployment implications: evidential uncertainty reliably monitors operator-level distributional
 shift but should not be solely relied upon for parameter extrapolation validation.
+
+\subsection{Uncertainty Under Harder Regimes: Shocks and Rollout}
+
+Experiments 5 and 6 subject the predicted uncertainty to two regimes beyond the smooth benchmarks, and together
+they expose a single governing mechanism. On shock-capturing compressible Euler flow (Experiment 5), uncertainty
+succeeds emphatically: it concentrates $3.9\times$ on the steepest density gradients and correlates with
+$|\nabla\rho|$ at $0.62$--$0.66$ across schemes, because discontinuities are exactly where the solution map is
+hardest and the model most error-prone---local difficulty and local error coincide. Under long-horizon
+autoregressive rollout (Experiment 6), uncertainty fails just as emphatically: it collapses to under a fifth of
+its initial value while error grows, anti-correlated at $-0.94$.
+
+The two outcomes are not in tension; they are the same property viewed from two sides. The evidential head emits
+uncertainty as a deterministic, pointwise function of the \emph{current input's local structure}, and that
+function is calibrated only on the training distribution. Where hardness is legible in the local input---a sharp
+gradient---the uncertainty is correct. But autoregressive rollout drives the state through the FNO's spectral
+low-pass repeatedly, producing progressively smoother fields that are increasingly wrong; the model reads these
+blurred inputs as easy and grows confident precisely as it drifts off the training manifold. This is not a
+conjecture: the predicted uncertainty tracks the field roughness at a mean correlation of $0.99$ across all six
+schemes (Fig.~\ref{fig:rollout}), so it is effectively a readout of local input smoothness, blind to the
+accumulated error. This is the same
+over-confidence-under-shift seen for parameter extrapolation in Experiment~4, now resolved temporally. The
+practical implication is sharp: evidential uncertainty is trustworthy as a within-distribution difficulty
+detector but must not be used as a rollout stopping criterion or an out-of-distribution alarm, because it moves
+the wrong way exactly when a practitioner would rely on it most.
+
+Crucially, neither face of this behavior is an artifact of the evidential parameterization. Running MC Dropout and
+Deep Ensemble through the identical protocol reproduces both signs: the sampling-based methods concentrate
+uncertainty on shocks ($3.6$--$3.7\times$, versus $3.9\times$ for evidential) and collapse identically under
+rollout (uncertainty shrinks to $9$--$17\%$ of its initial value with step correlation $\approx -0.91$, versus
+$-0.94$ for evidential), with their uncertainty tracking input roughness at correlation $0.98$. This is the more
+consequential observation: the pathology is not that evidence is a poor uncertainty surrogate, but that
+\emph{pointwise, in-distribution-calibrated} uncertainty---whether parameterized as evidence or estimated from
+model disagreement---cannot by construction sense global drift off the training manifold. Deep Ensembles, often
+recommended precisely for epistemic robustness, fail here for the same structural reason, because each member
+reads the same smoothed rollout state as easy.
 
 \subsection{Architectural Insights}
 
@@ -65,30 +111,47 @@ spectral branch; rather, it underscores that the spectral-spatial duality is ess
 parameterization of the Normal-Inverse-Gamma distribution in evidential frameworks.
 
 \subsection{Limitations}
+\label{sec:limitations}
 
-This study has several limitations: (1) evaluation on two PDEs (Navier-Stokes, Darcy Flow) may not generalize to 
-other PDE families; (2) single architecture (FNO) tested---other operators may behave differently; (3) 
-synthetic training data may not capture real-world measurement noise; (4) limited OOD scenarios tested. 
-Future work should validate findings across broader PDE classes, architectures, and real-world applications.
+\textbf{Pointwise independence assumption}: The most consequential limitation is structural. Applying the NIG
+parameterization independently at each grid point assumes that predictive uncertainties are conditionally
+independent across space. This is physically implausible for PDE solutions, whose errors exhibit strong spatial
+correlation inherited from the continuity of the underlying field and from the FNO's spectral truncation, which
+discards high-frequency modes globally rather than locally. Consequently, the per-point marginals we report are
+well-defined, but the implied joint distribution over the field is not: functionals that integrate over the
+domain---total mass, kinetic energy, flux through a boundary---will have their uncertainty systematically
+underestimated, since independent errors average out at a rate that correlated errors do not. Addressing this
+requires modeling spatial covariance directly, for instance by placing evidence on spectral coefficients rather
+than grid points, or by fusing evidence across scales. We regard this as the principal direction for future work.
+
+Further limitations: (1) the core calibration and physical-consistency results are established on two PDEs
+(Navier-Stokes, Darcy Flow); although we additionally probe shock-dominated flow (Experiment~5) and long
+autoregressive rollouts (Experiment~6), behavior on non-uniform grids, complex geometries, and 3D problems
+remains untested; (2) single architecture (FNO) tested---other operators may behave differently; (3) synthetic
+training data may not capture real-world measurement noise; (4) limited OOD scenarios tested; (5) Experiment~6
+characterizes uncertainty drift over rollout and finds it anti-correlated with error, but we do not yet propose
+a remedy---a rollout-aware or distribution-shift-sensitive evidence mechanism is left to future work.
 
 \section{Conclusion}
 
 This paper presents a comprehensive comparison of uncertainty quantification methods for Fourier Neural Operators, 
-evaluating Monte Carlo Dropout, Deep Ensembles, and Evidential Deep Learning across calibration quality, 
-computational efficiency, decomposition validity, and out-of-distribution detection. Our experiments demonstrate 
-that evidential methods achieve state-of-the-art calibration with Expected Calibration Error around 0.004 using 
-single-pass inference, outperforming both Monte Carlo Dropout and Deep Ensembles by significant margins while 
-providing 5--30 times faster inference. However, our analysis reveals fundamental limitations: the theoretical 
-decomposition of uncertainty into epistemic and aleatoric components fails for well-calibrated methods, 
-with both components decreasing as training data increases, exposing a calibration-decomposition trade-off inherent 
-to the Normal-Inverse-Gamma parameterization. Furthermore, out-of-distribution detection capability depends 
-critically on the type of distributional shift---parameter extrapolation yields near-random detection while 
-operator-level shifts achieve perfect separation, suggesting that neural operators learn physics-informed 
-representations that generalize within equation families.
+evaluating Monte Carlo Dropout, Deep Ensembles, and Evidential Deep Learning across calibration quality,
+computational efficiency, physical consistency, and out-of-distribution detection. Our experiments demonstrate
+that evidential methods achieve state-of-the-art calibration with Expected Calibration Error around 0.004 using
+single-pass inference, outperforming both Monte Carlo Dropout and Deep Ensembles by significant margins while
+providing 5--30 times faster inference. We further find that out-of-distribution detection capability depends
+critically on the type of distributional shift---parameter extrapolation yields near-random detection while
+operator-level shifts achieve perfect separation, suggesting that neural operators learn physics-informed
+representations that generalize within equation families. Stress-testing on harder regimes sharpens the picture:
+the predicted uncertainty concentrates strongly on shocks yet collapses under long autoregressive rollout, two
+faces of one mechanism---a pointwise, locally-calibrated evidence that detects hard inputs but not global
+departure from the training distribution.
 
-Based on these findings, we recommend using evidential FNO with Uncertainty-Aware or Improved regularization for 
-production deployment, reporting total uncertainty rather than relying on the decomposition, and reserving 
-Deep Ensembles for applications requiring robust epistemic uncertainty quantification. Monte Carlo Dropout 
-should be avoided for neural operators due to consistently poor performance. Future work should investigate 
-alternative parameterizations that overcome the calibration-decomposition trade-off and extend evaluation to 
-broader partial differential equation families and neural operator architectures.
+Based on these findings, we recommend using evidential FNO with Inverse-Variance or Log-Barrier regularization for 
+production deployment, reporting total uncertainty rather than relying on the epistemic-aleatoric decomposition,
+and reserving Deep Ensembles for applications requiring robust epistemic uncertainty quantification. Monte Carlo
+Dropout should be avoided for neural operators due to consistently poor performance. The central open problem is
+the pointwise independence assumption underlying per-grid-point evidential parameterization: future work should
+investigate spatially correlated evidence---for instance evidence placed on spectral coefficients, or
+multi-scale evidence fusion---and extend evaluation to broader partial differential equation families,
+non-uniform discretizations, and neural operator architectures.

@@ -1,0 +1,99 @@
+%% Evidential Fourier Neural Operators --- manuscript source
+%% NOTE: still on IEEEtran. Switch \documentclass to elsarticle once the
+%% target venue (JCP / CMAME) is chosen; the \markboth and \IEEEbiography
+%% blocks below are IEEE-specific and must be removed at that point.
+%%
+\documentclass[journal]{IEEEtran}
+
+% *** PACKAGES ***
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{positioning,shapes,arrows,calc,fit}
+\usepackage{subcaption}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{array}
+\usepackage{adjustbox}
+\usepackage[hidelinks]{hyperref}
+\usepackage{orcidlink}
+
+\hyphenation{op-tical net-works semi-conduc-tor}
+
+\begin{document}
+
+\title{Evidential Fourier Neural Operators for Uncertainty Quantification in Learning Partial Differential Equations}
+
+\author{Ahmad Rifqi~\orcidlink{0009-0000-2681-1950},~Leu Jenq-Shiou~\orcidlink{0000-0001-7197-9912},~\IEEEmembership{Senior Member,~IEEE}
+\thanks{Manuscript received XX, 2026.}
+\thanks{The authors are with the Department of Electrical and Computer Engineering, National Taiwan University of Science and Technology, Taipei, Taiwan.}}
+
+% TODO(venue): \markboth names TNNLS. Update once the target journal is chosen.
+\markboth{IEEE Transactions on Neural Networks and Learning Systems}%
+{Rifqi and Leu: Uncertainty Quantification for Fourier Neural Operators}
+
+\maketitle
+
+% ==================== ABSTRACT ====================
+\input{abstract_new}
+
+\begin{IEEEkeywords}
+Uncertainty quantification, neural operators, Fourier Neural Operator, evidential deep learning, partial differential equations.
+\end{IEEEkeywords}
+
+\IEEEpeerreviewmaketitle
+
+% ==================== CHAPTERS ====================
+\input{ch1new}  % Introduction
+\input{ch2new}  % Background and Preliminaries
+\input{ch3new}  % Methodology
+\input{ch4new}  % Experiments
+\input{ch5new}  % Discussion and Conclusion
+
+% ==================== ACKNOWLEDGMENT ====================
+\section*{Acknowledgment}
+The authors would like to express their sincere gratitude to National Taiwan University of Science and Technology for
+their valuable support in conducting this research. Their collaboration, academic resources, and institutional
+encouragement have been instrumental in the successful completion of this study.
+
+The authors used Anthropic Claude for language polishing (grammar, readability, and style). These tools were not
+used to generate data, conduct analyses, or produce the study's results. The authors reviewed and approved all
+revisions and assume full responsibility for the submitted work.
+
+% ==================== REFERENCES ====================
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+% ==================== APPENDIX ====================
+\clearpage
+\onecolumn
+\input{appendix_new}
+
+% ==================== BIOGRAPHIES ====================
+\twocolumn
+\vfill
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{self-photo.jpeg}}]{Ahmad Rifqi}
+received the B.S. degree in computer engineering from Universitas Indonesia, Depok, Indonesia, in 2025. He is
+currently pursuing the M.S. degree with the Department of Electrical and Computer Engineering,
+National Taiwan University of Science and Technology (NTUST), Taipei, Taiwan. His research interests include
+deep learning, uncertainty quantification, and scientific machine learning.
+\end{IEEEbiography}
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{profleu.jpeg}}]{Jenq-Shiou Leu}
+(Senior Member, IEEE) received the B.S. degree in mathematics and the M.S. degree in computer science and
+information engineering from National Taiwan University, Taipei, Taiwan, in 1991 and 1993, respectively, and
+the Ph.D. degree on a part-time basis in computer science from National Tsing Hua University, Hsinchu, Taiwan,
+in 2006. He was with Rising Star Technology, Taiwan, as an R\&D Engineer from 1995 to 1997, and was with
+telecommunication industry (Mobitai Communications and Taiwan Mobile) from 1997 to 2007 as an Assistant Manager.
+In 2007, he joined the Department of Electronic and Computer Engineering, National Taiwan University of Science
+and Technology, Taiwan, as an Assistant Professor. From 2011 to 2014, he was an Associate Professor. Since 2014,
+he has been a Professor. His research interests include heterogeneous network integration, mobile service and
+platform design, distributed computing (P2P, cloud computing), green and orange technology integration. He has
+authored or coauthored extensively in these areas, with 114 SCI-indexed papers and 76 conference papers.
+\end{IEEEbiography}
+
+\end{document}
